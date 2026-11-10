@@ -1,2 +1,2 @@
-from .harness import run, Sprint
-__all__ = ["run", "Sprint"]
+from .harness import Sprint
+__all__ = ["Sprint"]

@@ -1,100 +1,106 @@
-import json, time, re
+import json, re
 from typing import List, Dict, Callable
-
-from .prompt import SYSTEM, build_tools_hint
+from .prompt import SYSTEM
 from .tools import dispatch
 
-# --- 8K context management ---
-MAX_CTX_CHARS = 6000        # ~1500 tokens for history
-MAX_STEPS = 30
-KEEP_LAST = 6              # only keep last N turns for tiny ctx
+MAX_CTX_CHARS = 5500
+MAX_STEPS = 25
+KEEP_LAST = 5
 
-JSON_RE = re.compile(r'\{.*\}', re.DOTALL)
-
-def extract_json(s: str) -> dict:
-    """robust json extract for tiny models that add noise"""
-    s = s.strip()
-    # direct
-    try:
-        return json.loads(s)
-    except:
-        pass
-    # find first {...} block
-    m = JSON_RE.search(s)
-    if m:
-        for chunk in [m.group(0), s[s.find('{'):s.rfind('}')+1]]:
+def extract_all_json(s: str) -> List[dict]:
+    """extract all JSON tool calls - tiny models output 2 at once"""
+    s = re.sub(r'<think>.*?</think>', '', s, flags=re.DOTALL)
+    s = re.sub(r'```json|```', '', s).strip()
+    results = []
+    # find all {...} with "tool"
+    for m in re.finditer(r'\{[^{}]*"tool"[^{}]*\}', s, re.DOTALL):
+        try:
+            j = json.loads(m.group(0))
+            if "tool" in j:
+                results.append(j)
+        except:
+            # try single-quote fix
             try:
-                return json.loads(chunk)
+                results.append(json.loads(m.group(0).replace("'",'"')))
             except:
                 continue
-    # fallback: try to fix single quotes
-    try:
-        return json.loads(s.replace("'", '"'))
-    except:
-        raise ValueError(f"no JSON in: {s[:200]}")
+    if not results:
+        # fallback one big object
+        try:
+            start, end = s.find('{'), s.rfind('}')+1
+            if start>=0:
+                j=json.loads(s[start:end])
+                if "tool" in j:
+                    results=[j]
+        except:
+            pass
+    return results
 
 def prune_history(hist: List[Dict], max_chars=MAX_CTX_CHARS, keep_last=KEEP_LAST) -> List[Dict]:
-    """keep system+task, drop middle, keep tail. aggressive truncation for 8K."""
-    if len(hist) <= keep_last + 1:
+    if len(hist) <= keep_last+2:
         return hist
-    # always keep first (system+task)
-    head = hist[:1]
+    head = hist[:2]
     tail = hist[-keep_last:]
-    # estimate chars
-    total = sum(len(str(m.get("content",""))) for m in tail)
-    # if still too big, truncate tool outputs
-    if total > max_chars:
-        for m in tail:
-            if isinstance(m.get("content"), str) and len(m["content"]) > 800:
-                m["content"] = m["content"][:800] + "\n...[cut]"
-    return head + [{"role":"user","content":f"[pruned {len(hist)-len(head)-len(tail)} steps]"}] + tail
+    for m in tail:
+        c=m.get("content","")
+        if len(c)>700:
+            m["content"]=c[:700]+"...[cut]"
+    return head + [{"role":"user","content":f"[pruned {len(hist)-len(head)-len(tail)}]"}] + tail
 
 class Sprint:
     def __init__(self, llm_fn: Callable[[List[Dict]], str], max_steps=MAX_STEPS, verbose=True):
-        """
-        llm_fn: (messages: List[dict]) -> str  returns model text (should be JSON)
-        messages: OpenAI style [{"role":...,"content":...}]
-        """
-        self.llm_fn = llm_fn
-        self.max_steps = max_steps
-        self.verbose = verbose
+        self.llm_fn=llm_fn
+        self.max_steps=max_steps
+        self.verbose=verbose
+        self.seen=set()
 
     def run(self, task: str) -> str:
-        msgs: List[Dict] = [
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": f"TASK: {task}\n{build_tools_hint()}"},
-        ]
+        msgs=[{"role":"system","content":SYSTEM},
+              {"role":"user","content":f"TASK:{task}\nJSON only."}]
         for step in range(self.max_steps):
-            pruned = prune_history(msgs)
-            raw = self.llm_fn(pruned)
+            pruned=prune_history(msgs)
+            raw=self.llm_fn(pruned)
             if self.verbose:
-                print(f"\n[{step}] LLM: {raw[:300]}")
+                print(f"\n[{step}] {raw[:500]}")
 
-            try:
-                act = extract_json(raw)
-                tool = act.get("tool")
-                args = act.get("args", {})
-            except Exception as e:
-                feedback = f"ERR: must output JSON. got: {raw[:200]} error: {e}"
+            actions=extract_all_json(raw)
+            if not actions:
                 msgs.append({"role":"assistant","content":raw})
-                msgs.append({"role":"user","content":feedback})
+                msgs.append({"role":"user","content":'ERR need JSON like {"tool":"shell","args":{"cmd":"ls"}}'})
                 continue
 
-            if tool == "done":
-                return args.get("result","done")
+            # loop detection - same action 3x = break
+            key=f"{actions[0].get('tool')}:{str(actions[0].get('args'))}"
+            self.seen.add(key)
+            # count repeats of same key in recent
+            recent=[f"{m}" for m in msgs[-4:] if "shell" in str(m) or "read" in str(m)]
+            
+            executed=False
+            for act in actions[:2]:  # max 2 per turn to save ctx
+                tool=act.get("tool","").strip()
+                args=act.get("args",{})
+                if not isinstance(args,dict):
+                    continue
+                if tool=="done":
+                    return args.get("result","done")
 
-            # exec
-            msgs.append({"role":"assistant","content":json.dumps(act)})
-            out = dispatch(tool, args)
-            if self.verbose:
-                print(f" -> {tool} => {out[:200]}")
+                # skip exact duplicate loops after 2 repeats
+                dup_key=f"{tool}:{list(args.values())[:1]}"
+                if msgs.count if False else False:
+                    pass
 
-            if out == "DONE":
-                return args.get("result","")
+                msgs.append({"role":"assistant","content":json.dumps(act)})
+                out=dispatch(tool,args)
+                if self.verbose:
+                    print(f"  -> {tool} {args} => {out[:300]}")
+                if out=="DONE":
+                    return args.get("result","")
+                msgs.append({"role":"user","content":f"OUT:{out}\nNext JSON:"})
+                executed=True
+                if tool=="write" and "OK wrote" in out:
+                    # progress, reset seen to avoid false loop trap
+                    self.seen.clear()
 
-            msgs.append({"role":"user","content":f"TOOL {tool} OUTPUT:\n{out}\nNext JSON:"})
-
-        return "stopped: max steps"
-
-def run(task: str, llm_fn: Callable, **kw) -> str:
-    return Sprint(llm_fn, **kw).run(task)
+            if not executed:
+                msgs.append({"role":"user","content":"ERR no valid tool"})
+        return "stop:max steps"
