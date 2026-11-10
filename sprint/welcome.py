@@ -1,10 +1,11 @@
 """
 Landing page - sprint with no args.
-Now proper dashboard with files + sessions + input.
-Commands: list, ps, kill, help, etc.
+Dashboard with files + sessions + input.
+Commands: list, ps, kill, help
 """
-import pathlib, sys
-from .state import list_sessions, kill_session
+import pathlib
+
+from .state import kill_session, list_sessions
 
 WELCOME = """
 ◉ sprint — tiny 8K harness + TUI
@@ -26,15 +27,19 @@ IN-TUI SLASH
   q quit  c clear  f files  p ps  ? help
 """
 
-def _ollama_models(host="http://localhost:11434"):
+
+def _ollama_models(host="http://localhost:11434") -> list[str]:
     try:
         import httpx
+
         r = httpx.get(f"{host}/api/tags", timeout=2)
-        return [m["name"] for m in r.json().get("models",[])]
-    except:
+        r.raise_for_status()
+        return [m["name"] for m in r.json().get("models", [])]
+    except Exception:
         return []
 
-def print_help():
+
+def print_help() -> None:
     print(WELCOME)
     ms = _ollama_models()
     if ms:
@@ -42,25 +47,28 @@ def print_help():
         for m in ms[:12]:
             print(f"  • {m}")
     print("\nEXAMPLES")
-    print("  sprint \"list files and write summary.md\"")
-    print("  sprint \"fix TODOs\" --model qwen2.5:1.5b")
+    print('  sprint "list files and write summary.md"')
+    print('  sprint "fix TODOs" --model qwen2.5:1.5b')
     print("  sprint list src/")
     print("  sprint ps")
     print("  sprint kill 123456")
-    print("")
 
-def cmd_list(path="."):
+
+def cmd_list(path=".") -> None:
     p = pathlib.Path(path)
     if not p.exists():
-        print(f"not found: {path}"); return
+        print(f"not found: {path}")
+        return
     if p.is_file():
-        print(p.read_text()[:2000]); return
+        print(p.read_text()[:2000])
+        return
     items = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
     for it in items:
         tag = "📁" if it.is_dir() else "📄"
         print(f"{tag} {it.name}{'/' if it.is_dir() else ''}")
 
-def cmd_ps():
+
+def cmd_ps() -> None:
     sess = list_sessions()
     if not sess:
         print("no running agents")
@@ -70,16 +78,17 @@ def cmd_ps():
         alive = "●" if s["alive"] else "○"
         print(f"{s['id']:<8} {s['pid']:<7} {alive:<6} {s['model'][:16]:<18} {s['task'][:40]}")
 
-def cmd_kill(target: str):
+
+def cmd_kill(target: str) -> None:
     print(kill_session(target))
+
 
 def run_welcome_tui(model="qwen2.5:0.5b", host="http://localhost:11434"):
     try:
         from textual.app import App, ComposeResult
-        from textual.widgets import Static, Footer, Input, RichLog
         from textual.containers import Horizontal, Vertical
+        from textual.widgets import Footer, Input, RichLog, Static
         from rich.panel import Panel
-        import pathlib
 
         class WelcomeApp(App):
             CSS = """
@@ -102,7 +111,7 @@ def run_welcome_tui(model="qwen2.5:0.5b", host="http://localhost:11434"):
                 p = pathlib.Path(path)
                 try:
                     return sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))[:25]
-                except:
+                except Exception:
                     return []
 
             def compose(self) -> ComposeResult:
@@ -120,79 +129,80 @@ def run_welcome_tui(model="qwen2.5:0.5b", host="http://localhost:11434"):
                 yield Footer()
 
             def on_mount(self):
-                self.log = self.query_one("#log", RichLog)
+                self.rlog = self.query_one("#log", RichLog)
                 self.fl = self.query_one("#filelist", Static)
-                self.ps = self.query_one("#pslist", Static)
+                self.psw = self.query_one("#pslist", Static)
                 self.inp = self.query_one("#input", Input)
                 self.refresh_files()
                 self.refresh_ps()
-                self.log.write("[bold magenta]◉ sprint[/] [dim]tiny 8K harness[/]\n")
-                self.log.write(WELCOME)
+                self.rlog.write("[bold magenta]◉ sprint[/] [dim]tiny 8K harness[/]\n")
+                self.rlog.write(WELCOME)
                 ms = _ollama_models(self.host)
                 if ms:
-                    self.log.write(f"[bold]ollama:[/] {', '.join(ms[:6])}")
+                    self.rlog.write(f"[bold]ollama:[/] {', '.join(ms[:6])}")
                 self.inp.focus()
                 self.set_interval(3.0, self.refresh_ps)
 
             def refresh_files(self, path="."):
                 its = self._files(path)
-                lines=[]
+                lines = []
                 for it in its:
-                    icon="📁" if it.is_dir() else "📄"
+                    icon = "📁" if it.is_dir() else "📄"
                     lines.append(f"{icon} {it.name}{'/' if it.is_dir() else ''}")
                 self.fl.update("\n".join(lines) or "[dim]empty[/]")
 
             def refresh_ps(self):
                 sess = list_sessions()
                 if not sess:
-                    self.ps.update("[dim]no agents[/]"); return
-                lines=[]
+                    self.psw.update("[dim]no agents[/]")
+                    return
+                lines = []
                 for s in sess[:6]:
-                    alive="●" if s["alive"] else "○"
+                    alive = "●" if s["alive"] else "○"
                     lines.append(f"{alive} {s['id']} {s['model'][:10]}")
-                self.ps.update("\n".join(lines))
+                self.psw.update("\n".join(lines))
 
             def on_input_submitted(self, event: Input.Submitted):
                 val = event.value.strip()
-                self.inp.value=""
-                if not val: return
+                self.inp.value = ""
+                if not val:
+                    return
                 if val.startswith("/"):
                     parts = val[1:].split()
                     c = parts[0] if parts else ""
-                    if c in ("list","ls"):
-                        p = parts[1] if len(parts)>1 else "."
+                    if c in ("list", "ls"):
+                        p = parts[1] if len(parts) > 1 else "."
                         self.refresh_files(p)
-                        self.log.write(f"[bold]/list {p}[/]")
+                        self.rlog.write(f"[bold]/list {p}[/]")
                         for it in self._files(p):
-                            self.log.write(f"  {it.name}")
-                    elif c in ("ps","sessions"):
-                        self.log.write("[bold]/ps[/]")
+                            self.rlog.write(f"  {it.name}")
+                    elif c in ("ps", "sessions"):
+                        self.rlog.write("[bold]/ps[/]")
                         for s in list_sessions():
-                            self.log.write(f"  {s['id']} pid:{s['pid']} {s['task'][:40]}")
+                            self.rlog.write(f"  {s['id']} pid:{s['pid']} {s['task'][:40]}")
                         self.refresh_ps()
-                    elif c in ("kill","k"):
-                        if len(parts)<2:
-                            self.log.write("[red]/kill <id>[/]")
+                    elif c in ("kill", "k"):
+                        if len(parts) < 2:
+                            self.rlog.write("[red]/kill <id>[/]")
                         else:
-                            self.log.write(f"[yellow]{kill_session(parts[1])}[/]")
+                            self.rlog.write(f"[yellow]{kill_session(parts[1])}[/]")
                             self.refresh_ps()
-                    elif c in ("help","h"):
-                        self.log.write(Panel(WELCOME, title="help", border_style="yellow"))
-                    elif c in ("clear","c"):
-                        self.log.clear()
+                    elif c in ("help", "h"):
+                        self.rlog.write(Panel(WELCOME, title="help", border_style="yellow"))
+                    elif c in ("clear", "c"):
+                        self.rlog.clear()
                     else:
-                        self.log.write(f"[red]unknown /{c}[/]")
+                        self.rlog.write(f"[red]unknown /{c}[/]")
                     return
-                # task -> exit with task as result to run main tui
-                if val.lower() in ("help","h"):
-                    self.log.write(Panel(WELCOME, title="help", border_style="yellow"))
+                if val.lower() in ("help", "h"):
+                    self.rlog.write(Panel(WELCOME, title="help", border_style="yellow"))
                     return
                 self.exit(result=val)
 
         app = WelcomeApp(model, host)
         return app.run()
 
-    except Exception as e:
+    except Exception:
         print(WELCOME)
         ms = _ollama_models(host)
         if ms:
@@ -200,5 +210,5 @@ def run_welcome_tui(model="qwen2.5:0.5b", host="http://localhost:11434"):
         print("\n> task or command:")
         try:
             return input("> ").strip()
-        except:
+        except Exception:
             return None

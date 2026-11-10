@@ -1,14 +1,16 @@
-import subprocess, os, textwrap, pathlib, sys
+import pathlib
+import subprocess
+
 import httpx
 
-MAX_OUT = 1200  # chars per tool output - critical for 8K ctx
+MAX_OUT = 1200
+
 
 def _trunc(s: str) -> str:
-    s = s[:MAX_OUT]
-    # avoid huge single lines
     if len(s) > MAX_OUT:
-        return s[:MAX_OUT-50] + "\n...[truncated]"
+        return s[: MAX_OUT - 50] + "\n...[truncated]"
     return s
+
 
 def tool_read(path: str) -> str:
     try:
@@ -20,6 +22,7 @@ def tool_read(path: str) -> str:
     except Exception as e:
         return f"ERR: {e}"
 
+
 def tool_write(path: str, content: str) -> str:
     try:
         p = pathlib.Path(path)
@@ -29,9 +32,10 @@ def tool_write(path: str, content: str) -> str:
     except Exception as e:
         return f"ERR: {e}"
 
+
 def tool_shell(cmd: str, timeout: int = 15) -> str:
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, check=False)
         out = (r.stdout + "\n" + r.stderr).strip()
         if r.returncode != 0:
             out = f"[exit {r.returncode}]\n" + out
@@ -40,6 +44,7 @@ def tool_shell(cmd: str, timeout: int = 15) -> str:
         return "ERR: timeout"
     except Exception as e:
         return f"ERR: {e}"
+
 
 def tool_fetch(url: str) -> str:
     try:
@@ -50,13 +55,15 @@ def tool_fetch(url: str) -> str:
     except Exception as e:
         return f"ERR fetch: {e}"
 
+
 TOOLS = {
-    "read":  {"fn": tool_read,  "desc": "read file/ls dir: {path}"},
+    "read": {"fn": tool_read, "desc": "read file/ls dir: {path}"},
     "write": {"fn": tool_write, "desc": "write file: {path, content}"},
     "shell": {"fn": tool_shell, "desc": "bash cmd: {cmd}"},
     "fetch": {"fn": tool_fetch, "desc": "http get: {url}"},
-    "done":  {"fn": None,       "desc": "finish task: {result}"},
+    "done": {"fn": None, "desc": "finish task: {result}"},
 }
+
 
 def dispatch(tool: str, args: dict) -> str:
     if tool not in TOOLS:

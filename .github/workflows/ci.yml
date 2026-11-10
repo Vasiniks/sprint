@@ -1,0 +1,45 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -e . pytest ruff mypy
+      - name: imports
+        run: python -c "import sprint, sprint.tools, sprint.harness, sprint.tui, sprint.state"
+      - name: unit tests all modules
+        run: |
+          python - << 'PY'
+          from sprint.harness import extract_all_json
+          assert extract_all_json('{"tool":"shell","args":{"cmd":"ls"}}')
+          assert extract_all_json("{'tool':'shell','args':{'cmd':'ls'}}")
+          from sprint.tools import tool_read, tool_write, tool_shell, dispatch
+          assert "sprint" in tool_read(".")
+          print("tools ok")
+          from sprint.state import register_session, unregister_session, list_sessions
+          sid=register_session("ci","model")
+          assert any(s["id"]==sid for s in list_sessions())
+          unregister_session(sid)
+          print("state ok")
+          PY
+      - name: cli paths
+        run: |
+          python -m sprint.cli help
+          python -m sprint.cli list .
+          python -m sprint.cli ps
+          python -m sprint.cli "test" --backend fake --no-tui
+      - name: lint
+        run: ruff check sprint/ --output-format=grouped || true
+      - name: tui no log collision
+        run: python -c "import inspect; from sprint.tui import run_textual_tui; assert 'self.log =' not in inspect.getsource(run_textual_tui)"
+  ollama:
+    runs-on: ubuntu-latest
+    if: false # manual only - needs ollama
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -fsSL https://ollama.com/install.sh | sh
+      - run: ollama serve & sleep 5 && ollama pull qwen2.5:0.5b && python -m sprint.cli "ls and write ok.txt" --model qwen2.5:0.5b --steps 8 --no-tui
