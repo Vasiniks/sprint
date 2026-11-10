@@ -1,65 +1,63 @@
-# sprint — tiny agentic harness (8K ctx)
+# sprint — tiny agentic harness (8K ctx) + TUI
 
-Works on **135M-3B** models, Ollama-first.
+Ollama-first harness for 135M-3B models with Claude Code / OpenCode inspired full-screen TUI.
 
-`read / write / shell / fetch / done` — 89 token system prompt, JSON-only, aggressive pruning.
+`read / write / shell / fetch / done` — 89 token prompt, JSON-only, 5.5K ctx pruning.
 
 ## install
-
 ```bash
-pip install -e .
-ollama serve &
-# recommended tiny but capable models:
-ollama pull qwen2.5:0.5b        # 397MB, best minimal
-ollama pull qwen2.5:1.5b        # 986MB, reliable
-ollama pull smollm2:135m        # 92MB, extreme tiny (fragile)
+pip install -e .   # needs httpx, rich, textual
+# minimal without TUI: pip install -e . --no-deps + httpx only
+ollama pull qwen2.5:0.5b
+ollama pull qwen2.5:1.5b  # best tiny
 ```
 
-## use with Ollama (primary)
+## TUI (new)
+
+Full-screen, like Claude Code / OpenCode:
+
+- header: `◉ sprint | model | steps | ctx usage`
+- main log: agent JSON -> `● tool(args)` -> `└─ output`
+- status bar: live ctx
+- q=quit, c=clear
 
 ```bash
-# 0.5B model - fastest reliable
-sprint "find csv files and print first 3 lines" --model qwen2.5:0.5b
+# auto-enables when TTY
+sprint "explore repo and write report" --model qwen2.5:1.5b
 
-# 1.5B - your best tiny agent (tested)
-sprint "ls, then write hello.txt with hi" --model qwen2.5:1.5b --steps 12
+# force TUI
+sprint --tui "task" --model qwen2.5:0.5b --steps 20
 
-# via python
-from sprint.llms import make_ollama
-from sprint.harness import Sprint
-
-llm = make_ollama(model="qwen2.5:1.5b")  # chat API, 8192 ctx, 150tok temp
-bot = Sprint(llm, max_steps=15, verbose=True)
-bot.run("read README and summarize into SUMMARY.md")
+# plain logs (CI)
+sprint --no-tui "task" --backend fake
 ```
 
-## use with any OpenAI-compatible (vLLM, llama.cpp server)
+Implementation: `sprint/tui.py`
+- `TuiSprint` emits events: `task, step, llm_start, llm_done, tool_start, tool_done, done`
+- `run_rich_tui` fallback (rich.live, threading, 8fps, screen=True)
+- `run_textual_tui` (textual 0.60+): Header + RichLog + status + Footer, async poll of event queue
 
+## Ollama
 ```bash
-sprint "task" --backend openai --base-url http://localhost:8000/v1 --model Qwen2.5-0.5B
+sprint "ls, then write ok.txt" --model qwen2.5:1.5b --steps 12
 ```
+`make_ollama` uses `/api/chat`, 8192 ctx, temp 0.15, num_predict 350.
+`make_ollama_generate` for base GGUFs (MNN-Pocket 0.3B).
 
-## how it works for 8K ctx
+## Tiny models tested
+| model | size | ok? |
+|-------|------|-----|
+| smollm2:135m | 92MB | fragile loops |
+| Pocket 0.3B | 191MB | partial |
+| qwen2.5:0.5b | 397MB | yes, rec min |
+| qwen2.5:1.5b | 986MB | yes, best |
 
-- System prompt: 89 tokens
-- Tools: 5 only, max 700 chars output trimmed (`tools.py:MAX_OUT`)
-- History: keep system + task + last 5 turns, pruned to 5500 chars (`harness.py:prune_history`)
-- Parser: handles `<think>`, markdown fences, single quotes, multi-JSON per turn (`harness.py:extract_all_json`)
-- No function-calling required — pure JSON text
-
-## models tested
-
-| model | size | works? | notes |
-|-------|------|--------|-------|
-| smollm2:135m | 92MB | fragile | loops, needs temp 0.15 |
-| MNN-Pocket 0.3B | 191MB | partial | base model, use generate API |
-| qwen2.5:0.5b | 397MB | yes | recommended minimum |
-| qwen2.5:1.5b abl. | 986MB | yes | **best for tiny agents**, reliable |
-
-## structure
-
-- `sprint/prompt.py` - minimal prompt (89 tok)
-- `sprint/tools.py` - 5 tools
-- `sprint/harness.py` - loop + pruning
-- `sprint/llms.py` - ollama chat/generate + openai-compat
-- `examples/minimal_loop.py` - 40 line zero-dep copy-paste
+## files
+- `prompt.py` 89 tok prompt
+- `tools.py` 5 tools truncated
+- `harness.py` JSON extract + pruning
+- `llms.py` ollama chat/generate
+- `tui.py` Claude/opencode TUI (new)
+- `cli.py` --tui / --no-tui
+- `examples/ollama_tiny.py` python example
+- `examples/minimal_loop.py` 40-line zero-dep
