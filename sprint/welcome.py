@@ -1,140 +1,204 @@
 """
-Initial/landing page TUI - shown when `sprint` with no args.
-Claude Code / OpenCode inspired: model picker, recent, help.
+Landing page - sprint with no args.
+Now proper dashboard with files + sessions + input.
+Commands: list, ps, kill, help, etc.
 """
-import sys, shutil, os, json, pathlib
+import pathlib, sys
+from .state import list_sessions, kill_session
 
-WELCOME_TEXT = """
-◉ sprint — tiny agentic harness (8K ctx)
+WELCOME = """
+◉ sprint — tiny 8K harness + TUI
 
-  Tiny models, tiny prompt (89 tok), 5 tools.
-  Ollama-first. Works on 135M-3B.
+  89tok prompt, 5 tools, Ollama-first, 135M-3B
 
-QUICKSTART
-  sprint "list files and write report"          # run task (auto TUI if TTY)
-  sprint --tui "your task" --model qwen2.5:1.5b # force TUI
-  sprint help                                   # this page + examples
-  sprint models                                 # list ollama models
-  sprint init                                   # create example task
+COMMANDS
+  sprint                -> this dashboard
+  sprint help           -> help
+  sprint list [path]    -> ls files
+  sprint ps             -> running agents
+  sprint kill <id|pid>  -> stop agent
+  sprint init           -> scaffold TASK.md
+  sprint "task"         -> run agent
+  sprint --tui "task"   -> force TUI
 
-TOOLS
-  read(path)  write(path,content)  shell(cmd)  fetch(url)  done(result)
-
-MODELS (tested)
-  smollm2:135m         92MB  fragile
-  qwen2.5:0.5b        397MB  rec. minimum ← default
-  qwen2.5:1.5b        986MB  best tiny agent
-
-EXAMPLES
-  sprint "explore repo and make SUMMARY.md"
-  sprint "find TODOs and fix them" --model qwen2.5:1.5b
-  sprint "fetch https://example.com and summarize"
+IN-TUI SLASH
+  /list [path]  /ps  /kill <id>  /clear  /model <name>  /help  /quit
+  q quit  c clear  f files  p ps  ? help
 """
 
 def _ollama_models(host="http://localhost:11434"):
     try:
         import httpx
-        r = httpx.get(f"{host}/api/tags", timeout=3)
-        r.raise_for_status()
+        r = httpx.get(f"{host}/api/tags", timeout=2)
         return [m["name"] for m in r.json().get("models",[])]
     except:
         return []
 
+def print_help():
+    print(WELCOME)
+    ms = _ollama_models()
+    if ms:
+        print("OLLAMA MODELS")
+        for m in ms[:12]:
+            print(f"  • {m}")
+    print("\nEXAMPLES")
+    print("  sprint \"list files and write summary.md\"")
+    print("  sprint \"fix TODOs\" --model qwen2.5:1.5b")
+    print("  sprint list src/")
+    print("  sprint ps")
+    print("  sprint kill 123456")
+    print("")
+
+def cmd_list(path="."):
+    p = pathlib.Path(path)
+    if not p.exists():
+        print(f"not found: {path}"); return
+    if p.is_file():
+        print(p.read_text()[:2000]); return
+    items = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+    for it in items:
+        tag = "📁" if it.is_dir() else "📄"
+        print(f"{tag} {it.name}{'/' if it.is_dir() else ''}")
+
+def cmd_ps():
+    sess = list_sessions()
+    if not sess:
+        print("no running agents")
+        return
+    print(f"{'ID':<8} {'PID':<7} {'ALIVE':<6} {'MODEL':<18} TASK")
+    for s in sess:
+        alive = "●" if s["alive"] else "○"
+        print(f"{s['id']:<8} {s['pid']:<7} {alive:<6} {s['model'][:16]:<18} {s['task'][:40]}")
+
+def cmd_kill(target: str):
+    print(kill_session(target))
+
 def run_welcome_tui(model="qwen2.5:0.5b", host="http://localhost:11434"):
-    # Try textual landing page, fallback to plain
     try:
         from textual.app import App, ComposeResult
-        from textual.widgets import Static, Footer, Input, RichLog, Button
-        from textual.containers import Vertical, Horizontal
+        from textual.widgets import Static, Footer, Input, RichLog
+        from textual.containers import Horizontal, Vertical
         from rich.panel import Panel
-        import threading, queue
+        import pathlib
 
         class WelcomeApp(App):
             CSS = """
-            Screen { background: #0f0f10; }
-            #header { height: 4; background: #17171a; color: #fafafa; padding: 1 2; }
-            #body { height: 1fr; background: #0f0f10; padding: 1 2; }
-            #input { dock: bottom; height: 3; background: #1a1a1e; margin: 0 1; }
-            #models { height: 6; background: #121214; border: solid #27272a; margin: 1 0; }
-            Input { background: #1e1e22; }
-            #hint { height: 3; color: #71717a; padding: 0 2; }
+            Screen { background: #0a0a0b; }
+            #header { height: 3; background: #121214; color: #e4e4e7; padding: 0 1; border-bottom: solid #27272a; }
+            #body { height: 1fr; }
+            #sidebar { width: 36; background: #0f0f10; border-right: solid #1f1f23; padding: 1 1; }
+            #main { width: 1fr; background: #0a0a0b; }
+            #log { height: 1fr; }
+            #input { dock: bottom; height: 3; background: #121214; border-top: solid #27272a; }
+            Input { background: #1a1a1e; }
             """
 
-            def __init__(self, default_model, host):
+            def __init__(self, model, host):
                 super().__init__()
-                self.default_model = default_model
+                self.model = model
                 self.host = host
-                self.models = _ollama_models(host)
+
+            def _files(self, path="."):
+                p = pathlib.Path(path)
+                try:
+                    return sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))[:25]
+                except:
+                    return []
 
             def compose(self) -> ComposeResult:
-                yield Static(f" ◉ sprint [dim]v0.1.0  —  tiny 8K harness  —  {self.default_model}[/] \n [dim]q quit • enter run • tab model • help docs[/]", id="header")
-                yield RichLog(id="body", wrap=True, markup=True)
-                yield Input(placeholder='Describe task... e.g. "list files and write hello.txt"  (or type "help", "models")', id="input")
-                yield Static(" [dim]↵ to sprint  •  sprint <task> --model qwen2.5:1.5b  •  sprint help[/]", id="hint")
+                yield Static(f" ◉ sprint  [dim]{self.model}  •  welcome  •  q quit  •  /help[/]", id="header")
+                with Horizontal(id="body"):
+                    with Vertical(id="sidebar"):
+                        yield Static("[bold]FILES[/] [dim]/list[/]", id="slabel")
+                        yield Static("", id="filelist")
+                        yield Static("\n[bold]SESSIONS[/] [dim]/ps[/]", id="pslabel")
+                        yield Static("", id="pslist")
+                        yield Static("\n[dim]Commands:\n/list [path]\n/ps\n/kill <id>\n/help\ninit[/]", id="cmdhelp")
+                    with Vertical(id="main"):
+                        yield RichLog(id="log", markup=True, wrap=True)
+                        yield Input(placeholder='> task or /command  (e.g. "summarize repo"  /list  /ps  /help)', id="input")
                 yield Footer()
 
             def on_mount(self):
-                self.body = self.query_one("#body", RichLog)
-                self.input = self.query_one("#input", Input)
-                self.body.write("[bold magenta]◉ sprint[/] [dim]— tiny agent, Ollama-first[/]\n")
-                self.body.write(WELCOME_TEXT)
-                if self.models:
-                    self.body.write(f"\n[bold]local models:[/] {', '.join(self.models[:8])}")
-                else:
-                    self.body.write("\n[dim]no ollama models found — run `ollama pull qwen2.5:0.5b`[/]")
-                self.body.write("\n[dim]Type task below and press Enter...[/]")
-                self.input.focus()
+                self.log = self.query_one("#log", RichLog)
+                self.fl = self.query_one("#filelist", Static)
+                self.ps = self.query_one("#pslist", Static)
+                self.inp = self.query_one("#input", Input)
+                self.refresh_files()
+                self.refresh_ps()
+                self.log.write("[bold magenta]◉ sprint[/] [dim]tiny 8K harness[/]\n")
+                self.log.write(WELCOME)
+                ms = _ollama_models(self.host)
+                if ms:
+                    self.log.write(f"[bold]ollama:[/] {', '.join(ms[:6])}")
+                self.inp.focus()
+                self.set_interval(3.0, self.refresh_ps)
+
+            def refresh_files(self, path="."):
+                its = self._files(path)
+                lines=[]
+                for it in its:
+                    icon="📁" if it.is_dir() else "📄"
+                    lines.append(f"{icon} {it.name}{'/' if it.is_dir() else ''}")
+                self.fl.update("\n".join(lines) or "[dim]empty[/]")
+
+            def refresh_ps(self):
+                sess = list_sessions()
+                if not sess:
+                    self.ps.update("[dim]no agents[/]"); return
+                lines=[]
+                for s in sess[:6]:
+                    alive="●" if s["alive"] else "○"
+                    lines.append(f"{alive} {s['id']} {s['model'][:10]}")
+                self.ps.update("\n".join(lines))
 
             def on_input_submitted(self, event: Input.Submitted):
                 val = event.value.strip()
-                if not val:
+                self.inp.value=""
+                if not val: return
+                if val.startswith("/"):
+                    parts = val[1:].split()
+                    c = parts[0] if parts else ""
+                    if c in ("list","ls"):
+                        p = parts[1] if len(parts)>1 else "."
+                        self.refresh_files(p)
+                        self.log.write(f"[bold]/list {p}[/]")
+                        for it in self._files(p):
+                            self.log.write(f"  {it.name}")
+                    elif c in ("ps","sessions"):
+                        self.log.write("[bold]/ps[/]")
+                        for s in list_sessions():
+                            self.log.write(f"  {s['id']} pid:{s['pid']} {s['task'][:40]}")
+                        self.refresh_ps()
+                    elif c in ("kill","k"):
+                        if len(parts)<2:
+                            self.log.write("[red]/kill <id>[/]")
+                        else:
+                            self.log.write(f"[yellow]{kill_session(parts[1])}[/]")
+                            self.refresh_ps()
+                    elif c in ("help","h"):
+                        self.log.write(Panel(WELCOME, title="help", border_style="yellow"))
+                    elif c in ("clear","c"):
+                        self.log.clear()
+                    else:
+                        self.log.write(f"[red]unknown /{c}[/]")
                     return
-                if val in ("help","h","--help","-h"):
-                    self.body.write(Panel(WELCOME_TEXT, title="help", border_style="yellow"))
-                    self.input.value=""
+                # task -> exit with task as result to run main tui
+                if val.lower() in ("help","h"):
+                    self.log.write(Panel(WELCOME, title="help", border_style="yellow"))
                     return
-                if val in ("models","model","m"):
-                    ms = _ollama_models(self.host)
-                    txt = "\n".join(f"  • {m}" for m in ms) if ms else "  (none)"
-                    self.body.write(Panel(txt, title="ollama models", border_style="blue"))
-                    self.input.value=""
-                    return
-                # launch main TUI with task
                 self.exit(result=val)
 
         app = WelcomeApp(model, host)
-        result = app.run()
-        return result
+        return app.run()
 
     except Exception as e:
-        # plain fallback
-        print(WELCOME_TEXT)
+        print(WELCOME)
         ms = _ollama_models(host)
         if ms:
-            print("\nlocal ollama models:")
-            for m in ms[:10]:
-                print(f"  • {m}")
-        print("\n> type task (or 'help'):")
+            print("models:", ", ".join(ms[:5]))
+        print("\n> task or command:")
         try:
-            task = input("> ").strip()
-            return task if task else None
-        except KeyboardInterrupt:
+            return input("> ").strip()
+        except:
             return None
-
-def print_help():
-    print(WELCOME_TEXT)
-    print("\nCLI\n  sprint [task...] [options]\n")
-    print("OPTIONS")
-    print("  --model MODEL        ollama model (default qwen2.5:0.5b)")
-    print("  --steps N            max steps (default 20)")
-    print("  --tui                force full-screen TUI")
-    print("  --no-tui             force plain log output")
-    print("  --backend ollama|openai|fake")
-    print("  --host URL           ollama host")
-    print("\nCOMMANDS")
-    print("  sprint               -> landing page (initial page)")
-    print("  sprint help          -> help")
-    print("  sprint models        -> list ollama models")
-    print("  sprint init          -> create example files")
-    print("  sprint <task>        -> run agent")
-    print("")

@@ -1,71 +1,63 @@
-# sprint — tiny agentic harness (8K ctx) + TUI
+# sprint — tiny 8K harness + Claude/OpenCode TUI
 
-Ollama-first harness for 135M-3B models with Claude Code / OpenCode inspired full-screen TUI.
+Tiny agent harness for 135M-3B models (89 tok prompt, 5 tools) with full-screen TUI.
 
-`read / write / shell / fetch / done` — 89 token prompt, JSON-only, 5.5K ctx pruning.
+## commands
+```bash
+sprint                # welcome dashboard TUI (files + sessions + task input)
+sprint help           # help
+sprint list [path]    # ls files (like opencode: list)
+sprint ls src/        # alias
+sprint ps             # running agents (pid + task)
+sprint kill <id|pid>  # kill agent
+sprint init           # scaffold TASK.md
+sprint "your task"    # run agent (auto TUI)
+sprint --no-tui "task" --backend fake  # plain logs for CI
+```
+
+## TUI v2 (fixed)
+**Welcome (`sprint`):**
+- header: `◉ sprint | model | cwd | branch`
+- left sidebar (32 cols):
+  - FILES `📁 📄` live list (refresh on /list or after write)
+  - SESSIONS live `ps` (● alive / ○ dead) with id/model/pid
+  - help hints: `q quit c clear f files p ps ? help`
+- main: log + task input
+  - input supports `/list [path] /ps /kill <id> /clear /model <name> /help`
+
+**Agent TUI (`sprint "task"`):**
+- header: cwd + git branch + model + steps + ctx usage
+- sidebar: files + sessions (auto-refresh every 2s on write)
+- main: transcript `● tool(args)` → `└─ output`, panels for DONE
+- bottom input: new task or `/command`
+- status bar: `step x/y | ctx n/5500 | sid`
+
+Slash commands in both TUIs mimic opencode/claude:
+- `/list [path]` — refresh file tree + list in log
+- `/ps` — show sessions + refresh sidebar
+- `/kill <id>` — kills session (uses ~/.sprint/sessions pid files)
+- `/clear`, `/model <name>`, `/help`, `/quit`
+
+Sessions tracked in `~/.sprint/sessions/*.json` with pid, task, model, started. `ps` checks alive via `kill -0`, `kill` SIGTERM→SIGKILL.
 
 ## install
 ```bash
-pip install -e .   # needs httpx, rich, textual
-# minimal without TUI: pip install -e . --no-deps + httpx only
+pip install -e .   # httpx, rich, textual, psutil
 ollama pull qwen2.5:0.5b
 ollama pull qwen2.5:1.5b  # best tiny
 ```
 
-## commands
-
+## Ollama (tested)
 ```bash
-sprint                # landing page / initial page (TUI with task input + model list)
-sprint help           # help + quickstart
-sprint models         # list local ollama models
-sprint init           # scaffold TASK.md example
-sprint "your task"    # run agent (auto TUI if TTY)
-sprint --no-tui "task" --backend fake  # plain logs
+sprint "ls and write ok.txt" --model qwen2.5:1.5b --steps 12
 ```
+`make_ollama` uses `/api/chat`, 8192 ctx, 0.15 temp. `make_ollama_generate` for base GGUFs.
 
-## TUI (claude/opencode inspired)
-
-- `sprint` no args -> full-screen welcome: task input, local models, examples, q=quit
-- `sprint <task>` -> full-screen agent TUI:
-  - header: `◉ sprint | model | steps | ctx`
-  - log: `● tool(args)` -> `└─ output`
-  - status bar live ctx usage
-
-```bash
-# auto-enables when TTY
-sprint "explore repo and write report" --model qwen2.5:1.5b
-
-# force TUI / plain
-sprint --tui "task" --model qwen2.5:0.5b --steps 20
-sprint --no-tui "task" --backend fake
-```
-
-Implementation: `sprint/tui.py`
-- `TuiSprint` emits events: `task, step, llm_start, llm_done, tool_start, tool_done, done`
-- `run_rich_tui` fallback (rich.live, threading, 8fps, screen=True)
-- `run_textual_tui` (textual 0.60+): Header + RichLog + status + Footer, async poll of event queue
-
-## Ollama
-```bash
-sprint "ls, then write ok.txt" --model qwen2.5:1.5b --steps 12
-```
-`make_ollama` uses `/api/chat`, 8192 ctx, temp 0.15, num_predict 350.
-`make_ollama_generate` for base GGUFs (MNN-Pocket 0.3B).
-
-## Tiny models tested
-| model | size | ok? |
-|-------|------|-----|
-| smollm2:135m | 92MB | fragile loops |
-| Pocket 0.3B | 191MB | partial |
-| qwen2.5:0.5b | 397MB | yes, rec min |
-| qwen2.5:1.5b | 986MB | yes, best |
-
-## files
-- `prompt.py` 89 tok prompt
-- `tools.py` 5 tools truncated
-- `harness.py` JSON extract + pruning
-- `llms.py` ollama chat/generate
-- `tui.py` Claude/opencode TUI (new)
-- `cli.py` --tui / --no-tui
-- `examples/ollama_tiny.py` python example
-- `examples/minimal_loop.py` 40-line zero-dep
+## structure
+- `prompt.py` 89 tok
+- `tools.py` 5 tools
+- `harness.py` JSON multi-extract + pruning
+- `state.py` NEW session register/ps/kill
+- `tui.py` NEW v2 full-screen with sidebar + slash
+- `welcome.py` NEW dashboard + CLI list/ps/kill
+- `cli.py` aliases: sprint -> dashboard, sprint help/list/ps/kill/init
