@@ -12,23 +12,31 @@ ollama pull qwen2.5:0.5b
 ollama pull qwen2.5:1.5b  # best tiny
 ```
 
-## TUI (new)
+## commands
 
-Full-screen, like Claude Code / OpenCode:
+```bash
+sprint                # landing page / initial page (TUI with task input + model list)
+sprint help           # help + quickstart
+sprint models         # list local ollama models
+sprint init           # scaffold TASK.md example
+sprint "your task"    # run agent (auto TUI if TTY)
+sprint --no-tui "task" --backend fake  # plain logs
+```
 
-- header: `◉ sprint | model | steps | ctx usage`
-- main log: agent JSON -> `● tool(args)` -> `└─ output`
-- status bar: live ctx
-- q=quit, c=clear
+## TUI (claude/opencode inspired)
+
+- `sprint` no args -> full-screen welcome: task input, local models, examples, q=quit
+- `sprint <task>` -> full-screen agent TUI:
+  - header: `◉ sprint | model | steps | ctx`
+  - log: `● tool(args)` -> `└─ output`
+  - status bar live ctx usage
 
 ```bash
 # auto-enables when TTY
 sprint "explore repo and write report" --model qwen2.5:1.5b
 
-# force TUI
+# force TUI / plain
 sprint --tui "task" --model qwen2.5:0.5b --steps 20
-
-# plain logs (CI)
 sprint --no-tui "task" --backend fake
 ```
 
