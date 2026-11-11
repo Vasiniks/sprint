@@ -1,0 +1,6 @@
+// The website in site/ is served by Cloudflare as static files. Publish with: npx wrangler deploy
+{
+  "name": "sprint",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "./site" }
+}
