@@ -52,37 +52,47 @@ Copy and paste
 Mouse
   drag the line beside either panel to resize it · click a message or an activity line to jump to it"""
 
-# the wordmark: "sprint" in a 5-row pixel font, shaded from light to solid, one colour per shade, leaning forward
+# the wordmark: "sprint" in a 5-row pixel font, shaded from light to solid, leaning forward
 WORD = "sprint"
 PIX = {"s": ["XXXX", "X   ", "XXXX", "   X", "XXXX"], "p": ["XXXX", "X  X", "XXXX", "X   ", "X   "],
        "r": ["XXXX", "X  X", "XXX ", "X X ", "X  X"], "i": ["X", "X", "X", "X", "X"],
        "n": ["X  X", "XX X", "X XX", "X  X", "X  X"], "t": ["XXXXX", "  X  ", "  X  ", "  X  ", "  X  "],
        "e": ["XXXX", "X   ", "XXX ", "X   ", "XXXX"]}
 STILL = (1, 1, 2, 3, 3, 4)  # shade of each letter when nothing moves: ░ ░ ▒ ▓ ▓ █
-SHADE = {"░": "yellow", "▒": "cyan", "▓": "magenta", "█": "bold"}  # each shade in its own colour, like the four bars of the logo
-LOGO_W = 60        # columns: two per pixel, two between letters, four of lean
-WAVE_SECONDS = 11  # how long the crest takes to cross the word and come round again
-
-
-def wave(x, t):
-    """shade (1-4) of column x at time t: a solid crest with a long fading tail, one soft step at a time"""
-    d = (t * LOGO_W / WAVE_SECONDS - x) % LOGO_W
-    return 4 if d < 6 else 3 if d < 14 else 2 if d < 25 else 1 if d < LOGO_W - 6 else 2 if d < LOGO_W - 3 else 3
+LOGO_W = 60          # columns: two per pixel, two between letters, four of lean
+HUES = ("yellow", "cyan", "magenta")  # the colours that take turns: one per sweep of the logo, one per lap of the dash
+SWEEP_EVERY = 6      # seconds from one coloured crest to the next; the word is plain in between
+SWEEP_SECONDS = 1.2  # how long a crest takes to cross the word
+CREST = 14           # columns of crest, front to tail: about three letters, stepping ▓ █ █ ▓ ▓ ▒ ▒ two columns at a time
+RUN = 16             # cells of track the working animation sprints along
+LAP = 1.0            # seconds one lap of it takes
 
 
 def logo_rows(t=None):
-    """the wordmark as 5 rows of spans; t in seconds runs the wave through it, None holds it still"""
-    rows = []
+    """the wordmark as 5 rows of spans, plain at rest; t in seconds sends a narrow crest through it every few
+    seconds, each in the next colour, that brightens what it passes. None holds the word still"""
+    sweep, into = divmod(t, SWEEP_EVERY) if t is not None else (0, SWEEP_EVERY)
+    front, rows = int(into / SWEEP_SECONDS * (LOGO_W - 4 + CREST)), []  # the column the crest has reached
     for r in range(5):
-        text, x = "", 0
+        row, x = [(" " * (4 - r), "")], 0
         for i, ch in enumerate(WORD):
             for px in PIX[ch][r] + " ":
                 for _ in range(2):
-                    text += " ░▒▓█"[0 if px != "X" else STILL[i] if t is None else wave(x, t)]
-                    x += 1
-        text = (" " * (4 - r) + text).ljust(LOGO_W)
-        rows.append([(m.group(), SHADE.get(m.group()[0], "")) for m in re.finditer(r"(.)\1*", text)])
+                    back, x = front - x, x + 1  # how far behind the front this column is
+                    wet = px == "X" and 0 <= back < CREST
+                    shade = " ░▒▓█"[0 if px != "X" else max(STILL[i], (3, 4, 4, 3, 3, 2, 2)[back // 2]) if wet else STILL[i]]
+                    row.append((shade, HUES[int(sweep) % 3] if wet else {"░": "dim", "█": "bold"}.get(shade, "")))
+        rows.append(wrap(row + [(" " * r, "")], LOGO_W)[0])  # one span per run of the same role
     return rows
+
+
+def dash(t=None):
+    """the working animation as spans: a comet with a shaded tail sprints along a slanted track, gathering speed,
+    and comes round again in the next colour. t in seconds; None holds it still on its mark"""
+    lap, into = divmod((t or 0) / LAP, 1)
+    head = 3 + int(into * into * RUN)  # the square of the time: slow off the line, then fast
+    track = "".join("█▓▒░"[head - x] if 0 <= head - x < 4 else " " for x in range(RUN))
+    return [(ENDS[0] + track + ENDS[1], HUES[int(lap) % 3])]
 
 
 # what each kind of text looks like: (colour 0-7, attribute). 0 = terminal default
@@ -105,6 +115,7 @@ PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 # what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
 SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline"}
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
+ENDS = "◢◤" if VT else "//"  # the slanted ends of the working animation; Windows console fonts lack the triangles
 
 CODE = re.compile(
     r"(?P<comment>#.*|//.*)|(?P<string>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|(?P<number>\b\d+(?:\.\d+)?\b)"
@@ -1297,7 +1308,7 @@ class Screen:
         art = []
         if home:  # the wordmark, with its wave unless motion is off or there is no room for it
             art = logo_rows(time.time() if self.motion else None) if w >= LOGO_W + 6 and h >= 20 else \
-                [[(c, SHADE[c]) for c in "░▒▓█"] + [(" sprint", "bold")]]
+                [[("░", "dim"), ("▒▓", ""), ("█", "bold"), (" sprint", "bold")]]
         logo_h = len(art) + 2 if home else 0
         top = max(1, (h - logo_h - len(rows) - 3) // 2) + logo_h if home else h - 1 - len(rows)
         for i, r in enumerate(rows):
