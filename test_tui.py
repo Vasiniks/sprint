@@ -1,6 +1,9 @@
 import curses
 import io
 
+import pytest
+
+import sprint
 import sprint_tui as tui
 from sprint import Agent
 from sprint_tui import Screen, code, prose, wrap
@@ -256,6 +259,24 @@ def test_logo_is_five_equal_rows_of_shade_characters():
     assert set("".join(still)) <= set(" ░▒▓█")
 
 
+def cells(row):
+    """one (character, role) per column of a row of spans"""
+    return [(ch, role) for text, role in row for ch in text]
+
+
+def lit(t, r=0):
+    """the columns of logo row r that the glint of colour covers at time t"""
+    return [x for x, (_, role) in enumerate(cells(tui.logo_rows(t)[r])) if role in tui.HUES]
+
+
+MONO = {"░": "dim", "▒": "", "▓": "", "█": "bold", " ": ""}  # what each shade looks like with no colour on it
+
+
+def test_logo_held_still_has_no_colour():
+    seen = {ch: role for row in tui.logo_rows() for ch, role in cells(row) if ch != " "}
+    assert seen == {"░": "dim", "▒": "", "▓": "", "█": "bold"}
+
+
 def test_logo_held_still_goes_from_light_shade_to_solid():
     top = letters(tui.logo_rows())[0].replace(" ", "")
     assert "".join(dict.fromkeys(top)) == "░▒▓█" and top[0] == "░" and top[-1] == "█"
@@ -275,6 +296,30 @@ def test_wave_is_slow():
     assert tui.WAVE_SECONDS >= 10
     start = letters(tui.logo_rows(0.0))
     assert letters(tui.logo_rows(tui.WAVE_SECONDS)) == start and letters(tui.logo_rows(tui.WAVE_SECONDS / 2)) != start
+
+
+def test_a_glint_is_narrow_and_crosses_the_logo_quickly_from_left_to_right():
+    assert tui.GLINT <= 16 and tui.GLINT_SECONDS <= 1.2
+    frames = [lit(i * 0.08) for i in range(1, 12)]  # the first glint, at the screen's redraw rate
+    assert all(frames) and all(f[-1] - f[0] < tui.GLINT for f in frames)
+    assert all(a[0] <= b[0] and a[-1] <= b[-1] for a, b in zip(frames, frames[1:]))  # it only ever moves right
+    assert frames[0][0] < 10 and frames[-1][-1] > tui.LOGO_W - 10
+    assert not lit(tui.GLINT_SECONDS + 0.1)  # and then it is gone
+    assert tui.logo_rows(0.5) == tui.logo_rows(0.5)  # nothing but the time decides the picture
+
+
+def test_glints_come_seconds_apart_in_yellow_then_cyan_then_magenta():
+    assert 3 <= tui.GLINT_EVERY <= 6 and tui.HUES == ("yellow", "cyan", "magenta")
+    hues = [{role for row in tui.logo_rows(n * tui.GLINT_EVERY + 0.5) for _, role in row if role in tui.HUES} for n in range(4)]
+    assert hues == [{"yellow"}, {"cyan"}, {"magenta"}, {"yellow"}]
+
+
+def test_between_glints_every_cell_is_plain_and_a_glint_only_colours_the_wave():
+    quiet = [n * tui.GLINT_EVERY + tui.GLINT_SECONDS + t / 4 for n in range(3) for t in range(1, 4 * (tui.GLINT_EVERY - 1))]
+    assert all(role == MONO[ch] for t in quiet for row in tui.logo_rows(t) for ch, role in cells(row))
+    for t in (0.3, 0.6, tui.GLINT_EVERY + 0.5):  # under a glint the shades are the wave's own; around it, plain
+        assert all(role in tui.HUES or role == MONO[ch] for row in tui.logo_rows(t) for ch, role in cells(row))
+        assert [" ░▒▓█".index(ch) for ch in letters(tui.logo_rows(t))[4][:8]] == [tui.wave(x, t) for x in range(8)]
 
 
 def test_motion_can_be_switched_off_in_settings():
@@ -337,6 +382,9 @@ def test_thinking_shows_up_as_its_own_window_before_the_answer():
     assert [i["t"] for i in s.items][-2:] == ["tool", "text"]
     thought = s.items[-2]
     assert thought["call"].tool == "think" and "weigh it up" in thought["result"]
+    folded = s.window(thought, 60)  # one line until it is opened, or /showthink shows them all
+    assert len(folded) == 1 and "thought" in flat(folded[0][1]) and "5 words" in flat(folded[0][1])
+    thought["open"] = True
     head = flat(s.window(thought, 60)[0][1])
     assert "think" in head and "5 words" in head
 
@@ -476,9 +524,9 @@ def test_input_area_is_a_titled_rule_and_a_trail_prompt_not_a_box():
     s.buf = "make it so"
     rows, typed = s.input_rows(60, used=7)
     text = [flat(r) for r in rows]
-    assert len(rows) == 2 and len(text[0]) == 60
-    assert "ask" in text[0] and "Qwen3.5-0.8B" in text[0] and "7%" in text[0]
-    assert text[1].startswith("░▒▓█ make it so") and "┃" not in "".join(text)
+    assert len(rows) == 3 and len(text[0]) == len(text[2]) == 60  # a rule above and a rule below
+    assert "Qwen3.5-0.8B" in text[0] and "7%" in text[0] and "ask" in text[2]
+    assert text[1].startswith("░▒▓█ > make it so") and "┃" not in "".join(text)
 
 
 def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
@@ -487,7 +535,7 @@ def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
     assert "Ask anything" in flat(rows[1])
     s.buf = "x" * 50
     rows, typed = s.input_rows(40)
-    assert len(typed) == 2 and flat(rows[2]).startswith("     x")
+    assert len(typed) == 2 and flat(rows[2]).startswith("       x")
 
 
 def test_permission_prompt_names_the_call_and_the_keys(tmp_path, monkeypatch):
@@ -1143,3 +1191,100 @@ def test_a_huge_paste_is_trimmed_to_what_the_window_can_take():
     finish(s)
     sent = chat.seen[0][1]["content"]
     assert len(sent) < 10_000 and "row 0 " in sent and "row 1999 " in sent and "cut" in sent
+
+
+# ---------- pastes the terminal does not mark (Windows), and pictures from the clipboard ----------
+
+def test_keys_that_arrive_together_are_a_paste_and_its_line_breaks_do_not_send(monkeypatch):
+    monkeypatch.setattr(tui, "VT", False)  # as on Windows, where the terminal does not mark a paste
+    s = screen()
+    s.burst(list("first line\rsecond line\r"))
+    assert s.worker is None and "first line second line" in s.buf  # nothing was sent; the text is on the prompt
+
+
+def test_a_big_unmarked_paste_becomes_one_chip(monkeypatch):
+    monkeypatch.setattr(tui, "VT", False)  # as on Windows, where the terminal does not mark a paste
+    s = screen()
+    s.burst(list("\r".join(f"line {i}" for i in range(40))))
+    assert s.buf == "[Pasted #1 +40 lines] " and s.pastes["[Pasted #1 +40 lines]"].count("\n") == 39
+
+
+def test_a_few_typed_keys_are_still_keys_so_enter_sends():
+    s = screen("ok")
+    s.burst(list("hi") + ["\n"])
+    finish(s)
+    assert s.items[0] == {"t": "user", "text": "hi"}
+
+
+def test_an_unmarked_paste_cannot_answer_an_approval(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tui, "VT", False)
+    s = screen("```shell\necho 1\n```", "ok", mode="ask")
+    s.submit("go")
+    for _ in range(200):
+        if s.pending:
+            break
+        s.worker.join(0.02)
+    s.burst(list("yes always\ry\r"))
+    assert s.pending and not s.gate.is_set()
+    s.key("n")
+    finish(s)
+
+
+def test_a_marked_paste_arriving_in_one_go_is_still_read_by_its_marks():
+    s = screen()
+    s.burst(list("\x1b[200~one\ntwo\x1b[201~"))
+    assert s.buf == "one two" and s.worker is None
+
+
+class Keys:
+    """a stand-in for the curses window: hands out the keys it was given, then says there are none"""
+    def __init__(self, *keys):
+        self.keys, self.waits = list(keys), []
+
+    def timeout(self, ms):
+        self.waits.append(ms)
+
+    def get_wch(self):
+        if not self.keys:
+            raise tui.curses.error("no input")
+        return self.keys.pop(0)
+
+
+def test_reading_keys_takes_everything_that_is_already_waiting():
+    s = screen()
+    assert s.read_keys(Keys("a", "b", "\r", "c")) == ["a", "b", "\r", "c"]
+    assert s.read_keys(Keys("x")) == ["x"]
+    with pytest.raises(tui.curses.error):
+        s.read_keys(Keys())
+
+
+def test_ctrl_v_puts_the_clipboard_picture_on_the_prompt_as_a_chip(tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG....")
+    monkeypatch.setattr(sprint, "clipboard_image", lambda: str(shot))
+    s = screen()
+    s.key("\x16")
+    assert s.buf == "[Image #1] " and s.chips == {"[Image #1]": str(shot)}
+
+
+def test_alt_v_and_the_paste_command_do_the_same_and_say_so_when_there_is_no_picture(tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG....")
+    monkeypatch.setattr(sprint, "clipboard_image", lambda: str(shot))
+    s = screen()
+    s.take("\x1b")
+    s.take("v")
+    s.submit("/paste")
+    assert s.buf == "[Image #1] [Image #2] " and s.worker is None
+    monkeypatch.setattr(sprint, "clipboard_image", lambda: "")
+    s.key("\x16")
+    assert "no picture" in s.note_text() and s.buf == "[Image #1] [Image #2] "
+
+
+def test_where_the_terminal_marks_pastes_a_run_of_keys_is_just_keys(monkeypatch):
+    monkeypatch.setattr(tui, "VT", True)
+    s = screen("ok")
+    s.burst(list("say hello") + ["\n"])  # typed ahead while the screen was busy, or sent by a script
+    finish(s)
+    assert s.items[0] == {"t": "user", "text": "say hello"}

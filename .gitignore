@@ -12,3 +12,4 @@ sprint-*.md
 .wrangler/
 node_modules/
 .playwright-mcp/
+.claude/worktrees/

@@ -970,7 +970,7 @@ def config_dir(env=os.environ, windows=WINDOWS):
 CONFIG = config_dir() / "config.json"
 SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "think": bool, "effort": str,
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
-            "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list}
+            "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool}
 SHADE = {"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
          "tool results": "yellow", "reserved for the reply": "dim", "free": "dim"}
 ANSI = {"": "", "dim": "2", "bold": "1", "blue": "34", "magenta": "35", "cyan": "36", "green": "32", "yellow": "33", "red": "31"}
@@ -1029,6 +1029,44 @@ def clipboard(text):
             except (OSError, subprocess.SubprocessError):
                 pass
     return False
+
+
+def clipboard_image():
+    """the picture on the clipboard, saved as a file -> its path, or "" when there is none. A file copied in the
+    file manager comes back as itself. A terminal cannot paste a picture, so sprint asks the system for it."""
+    out = os.path.join(tempfile.gettempdir(), f"sprint-paste-{int(time.time() * 1000)}.png")
+    if WINDOWS:
+        quoted = out.replace("'", "''")  # PowerShell's way to put an apostrophe inside '...'
+        tries = [["powershell", "-NoProfile", "-STA", "-Command",
+                  "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $i = [Windows.Forms.Clipboard]::GetImage(); "
+                  f"if ($i) {{ $i.Save('{quoted}', [Drawing.Imaging.ImageFormat]::Png) }} "
+                  "else { $f = [Windows.Forms.Clipboard]::GetFileDropList(); if ($f.Count) { $f[0] } }"]]
+    elif sys.platform == "darwin":
+        save = ['-e', f'set f to open for access POSIX file "{out}" with write permission', "-e", "write d to f", "-e", "close access f"]
+        tries = [["osascript", "-e", "POSIX path of (the clipboard as «class furl»)"],
+                 ["osascript", "-e", "set d to the clipboard as «class PNGf»"] + save,
+                 ["osascript", "-e", "set d to the clipboard as «class TIFF»"] + save]
+    else:
+        tries = [["wl-paste", "--type", "image/png"], ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"]]
+    for argv in tries:
+        if not shutil.which(argv[0]):
+            continue
+        try:
+            got = subprocess.run(argv, capture_output=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        named = got.decode(errors="replace").strip()
+        if got.startswith(b"\x89PNG"):  # the tool printed the picture itself
+            Path(out).write_bytes(got)
+        if os.path.isfile(out) and os.path.getsize(out):
+            if "TIFF" in " ".join(argv) and shutil.which("sips"):  # macOS kept it as TIFF: make it the PNG its name says
+                subprocess.run(["sips", "-s", "format", "png", out, "--out", out], capture_output=True, timeout=10)
+            return out
+        if os.path.isfile(out):
+            os.remove(out)  # opened but nothing written
+        if named and "\n" not in named and os.path.isfile(named):
+            return named
+    return ""
 
 
 def prompt_file():
