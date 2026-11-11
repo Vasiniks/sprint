@@ -434,6 +434,7 @@ class Screen:
         text, 10-19 the same on the panel shade, 230-237 on the band behind your own messages. With fewer than 256
         colours the screen stays the terminal's own"""
         self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
+        self.stale = True  # what is on the screen is in the old colours: the next frame sends every cell again (see draw)
         try:
             if not curses.has_colors():
                 return
@@ -1673,8 +1674,12 @@ class Screen:
 
     def draw(self, scr):
         h, w = scr.getmaxyx()
-        scr.bkgdset(" ", self.attr(""))  # the whole screen takes the theme's background
+        if self.stale:  # the pairs were just given new colours. The curses macOS ships then sends the first thing drawn
+            self.stale = False  # in the pair it used last with no colour at all (a previewed theme kept the terminal's
+            scr.clearok(True)  # own background up top); clearing first puts it back in step, and every cell is resent
         scr.erase()
+        for y in range(h):  # the whole screen takes the theme's background, a written cell at a time: the curses macOS
+            self.put(scr, y, 0, " " * w)  # ships loses the colour of cells cleared to a window background (bkgdset)
         self.hits, self.screen, self.jump_to = {}, {}, None
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")

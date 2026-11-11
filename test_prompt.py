@@ -191,7 +191,7 @@ class Canvas:
     def chgat(self, *a):
         pass
 
-    def bkgdset(self, *a):
+    def clearok(self, yes):
         pass
 
     def move(self, y, x):

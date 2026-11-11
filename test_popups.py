@@ -41,7 +41,7 @@ class Scr:
     """a stand-in for the curses window: remembers what was written where, and every restyle"""
 
     def __init__(self, h=30, w=120):
-        self.h, self.w, self.cells, self.marks, self.bkgd = h, w, {}, [], None
+        self.h, self.w, self.cells, self.marks, self.bkgd, self.redrawn = h, w, {}, [], None, 0
 
     def getmaxyx(self):
         return self.h, self.w
@@ -58,6 +58,9 @@ class Scr:
 
     def chgat(self, y, x, n, attr):
         self.marks.append((y, x, n, attr))
+
+    def clearok(self, yes):
+        self.redrawn += bool(yes)
 
     def text(self, y):
         return "".join(self.cells.get((y, x), (" ", 0))[0] for x in range(self.w))
@@ -506,8 +509,35 @@ def test_a_highlight_sits_on_the_theme_and_the_screen_is_cleared_to_it(scr, tmp_
     s.mark(scr, 2, 3, 4, curses.A_REVERSE)
     s.mark(scr, 2, 3, 4, 5 << 8)
     assert scr.marks == [(2, 3, 4, curses.A_REVERSE | 8 << 8), (2, 3, 4, 5 << 8)]
+
+
+@pytest.mark.parametrize("talk", [False, True])
+def test_every_cell_is_written_in_the_theme_not_left_to_the_background(scr, tmp_path, monkeypatch, talk):
+    """the curses macOS ships drops the colour of cells it clears to a window's background, so empty rows came out in
+    the terminal's own colour: nothing may rely on that background, every cell is written"""
+    s = talked(tmp_path, monkeypatch) if talk else screen()
+    s.colors = s.rich = True
+    s.base = 8
     s.draw(scr)
-    assert scr.bkgd == 8 << 8
+    assert not scr.bkgd  # the window's own background stays the terminal's
+    bare = [(y, x) for y in range(scr.h) for x in range(scr.w) if (y, x) not in scr.cells]
+    assert not bare
+    assert 0 not in {pair(attr) for _, attr in scr.cells.values()}  # and none in the terminal's own colours
+    assert pair(scr.cells[(0, scr.w - 1)][1]) == 8  # an empty corner: the theme's plain pair
+
+
+def test_a_repainted_theme_redraws_the_whole_window_once(scr):
+    """the same curses does not notice a colour pair being given new colours: what was already on the screen in that
+    pair kept the old ones (a previewed theme left the top of the window in the last theme's background)"""
+    s = screen()
+    s.draw(scr)
+    scr.redrawn = 0
+    s.draw(scr)
+    assert scr.redrawn == 0  # an ordinary frame sends only what changed
+    s.paint()
+    s.draw(scr)
+    s.draw(scr)
+    assert scr.redrawn == 1
 
 
 def test_the_theme_popup_shows_each_theme_in_its_own_colours(scr):
