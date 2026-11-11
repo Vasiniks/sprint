@@ -83,7 +83,7 @@ def test_read_pages_long_files_and_says_how_to_continue(tmp_path):
     f.write_text("".join(f"line {i}\n" for i in range(1, 501)))
     out = read(str(f), cap=200)
     assert out.startswith("line 1\nline 2\n")
-    assert len(out) < 400
+    assert len(out) < 300 + len(str(f))  # the page, and a last line that names the file (however long its path is)
     last = int(out.split("[lines 1-")[1].split(" ")[0])
     assert f"of 500; next: read {f} {last + 1}]" in out
     assert read(f"{f} {last + 1}", cap=200).startswith(f"line {last + 1}\n")

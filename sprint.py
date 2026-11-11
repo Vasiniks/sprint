@@ -329,6 +329,8 @@ def deletion(cmd, cwd=None):
     -delete, a script). Anything but "" is always put to you, whatever the mode"""
     if not deletes(cmd):
         return ""
+    if WINDOWS and "\\" in cmd:
+        return "unknown"  # a path written the Windows way: the backslash is an escape to the reader below, and the name it left would look harmless
     cwd, home = os.path.realpath(cwd or folder()), str(Path.home())
     try:
         lex = shlex.shlex(cmd.replace("\n", " ; "), posix=True, punctuation_chars=True)
@@ -372,6 +374,7 @@ def target_kind(arg, cwd, home):
     at = os.path.realpath(os.path.join(cwd, "/".join(parts) or ("/" if arg.startswith("/") and not pattern else ".")))
     if arg.startswith("/") and not parts[1:] and pattern:
         at = "/"
+    at, cwd = os.path.normcase(at), os.path.normcase(cwd)  # (Windows does not tell capitals apart, nor / from \)
     if at == cwd:
         return "own" if pattern is None or pattern in EVERYTHING else ""
     if cwd.startswith(at.rstrip(os.sep) + os.sep):

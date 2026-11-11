@@ -99,7 +99,7 @@ def test_deleting_what_is_inside_the_folder_is_an_ordinary_command(proj, cmd):
                                  "rm -rf /", "rmdir .", "rm -rf build . ", "rm -rf .* *", "rm -rf ${PWD}"])
 def test_deleting_the_folder_sprint_works_in_is_told_apart(proj, cmd):
     assert sprint.deletion(cmd) == "own"
-    assert sprint.deletion(f"rm -rf {proj}") == "own" and sprint.deletion(f"rm -rf {proj.parent}") == "own"  # it, or what holds it
+    assert sprint.deletion(f"rm -rf {proj.as_posix()}") == "own" and sprint.deletion(f"rm -rf {proj.parent.as_posix()}") == "own"  # it, or what holds it
 
 
 @pytest.mark.parametrize("cmd", ["rm ../gone.txt", "rm -rf ../other", "rm /etc/hosts", "rm ~/notes.txt", "rm -rf $HOME/x", "rm -rf /tmp/zzz-not-here",
@@ -113,6 +113,14 @@ def test_deleting_anything_outside_the_folder_is_told_apart(proj, cmd):
                                  "rm 'unfinished"])
 def test_a_deletion_that_cannot_be_read_is_treated_as_one_to_ask_about(proj, cmd):
     assert sprint.deletion(cmd) == "unknown"
+
+
+def test_on_windows_a_path_written_the_windows_way_is_never_taken_for_one_inside_the_folder(proj, monkeypatch):
+    """a backslash is an escape to the reader of commands, so C:\\Users\\me\\proj came out as a harmless-looking name"""
+    monkeypatch.setattr(sprint, "WINDOWS", True)
+    for cmd in ("rm -rf C:\\Users\\me\\proj", "rm -rf ..\\other", "Remove-Item -Recurse C:\\Users\\me", "rm -rf .\\build"):
+        assert sprint.deletion(cmd) == "unknown", cmd
+    assert sprint.deletion("rm -rf build") == "" and sprint.deletion("rm -rf .") == "own"  # the plain forms read as anywhere
 
 
 def test_a_command_that_deletes_nothing_is_no_deletion(proj):
