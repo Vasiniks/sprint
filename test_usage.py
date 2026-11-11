@@ -97,3 +97,36 @@ def test_usage_opens_in_the_popup_and_can_be_scrolled():
     assert len(can) > 10  # every line can be moved to, so a long report scrolls
     s.popup_key("\n")
     assert s.popup  # Enter chooses nothing here
+
+
+# ---------- after each answer: what it cost ----------
+
+def test_the_agent_can_say_what_one_message_cost():
+    a = agent([{"prompt": 1200}, "Hello.", {"out": 40, "secs": 0.4}])
+    before, began = dict(a.tally), time.time() - 12.6
+    a.run("hi")
+    assert a.receipt(before, began) == "↑ 1.2k ↓ 40 tokens | 12s"
+    assert a.receipt(dict(a.tally), time.time() - 3.21) == "↑ 0 ↓ 0 tokens | 3.2s"  # short times keep a decimal
+
+
+def test_every_answer_on_the_screen_ends_with_its_tokens_and_time():
+    s = Screen(agent([{"prompt": 300}, "One.", {"out": 5, "secs": 0.1}], [{"prompt": 420}, "Two.", {"out": 9, "secs": 0.1}]))
+    for message in ("first", "second"):
+        s.submit(message)
+        s.worker.join(10)
+    answers = [it for it in s.items if it["t"] == "text"]
+    assert [it["cost"].split(" | ")[0] for it in answers] == ["↑ 300 ↓ 5 tokens", "↑ 420 ↓ 9 tokens"]
+    assert [it["t"] for it in s.items] == ["user", "text", "user", "text"]  # it rides on the answer, not as a line of its own
+    rows = [(flat(spans), spans) for kind, spans, item in s.lines(60)]
+    cost = [spans for text, spans in rows if "tokens | " in text]
+    assert len(cost) == 2 and cost[0][-1][1] == "ghost" and flat(cost[0]).startswith("  ↑ 300 ↓ 5 tokens | ")
+    at = [text for text, _ in rows]
+    assert at.index("  One.") + 1 == at.index(flat(cost[0]))  # directly under its answer
+
+
+def test_a_command_you_ran_yourself_has_no_cost_line(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    s = Screen(agent())
+    s.submit("!echo hi")
+    s.worker.join(10)
+    assert not any("cost" in it for it in s.items)
