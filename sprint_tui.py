@@ -35,27 +35,31 @@ COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the 
             ("/history", "show or hide the message list, or set its width"),
             ("/tools", "expand or collapse all tool windows"), ("/mouse", "mouse on or off, for selecting text"),
             ("/help", "keys and commands"), ("/exit", "quit")]
-HELP = """In a message
-  @path attaches that file (tab completes) · a line starting with ! runs the rest as a command yourself
-  paste or drag a file in and it becomes a chip like [Image #1] or [PDF #1] that travels with the message
-  a large paste becomes a chip too, like [Pasted #1 +42 lines]; the model gets the full text
-  ctrl+v, alt+v or /paste attaches the picture on the clipboard (a screenshot, or a copied file)
-Keys
-  enter send · shift+enter, ctrl+j, or a \\ before enter: new line
-  while it works: enter queues your message · enter on an empty prompt runs the queue now
-  esc interrupt (queued messages come back to the prompt) · ctrl+l clear · ctrl+c twice to quit
-  tab switch mode (ask → edits → auto) · up / down recall earlier messages
-  ctrl+o expand or collapse all tool windows · click a window to toggle just that one
-  the mouse wheel scrolls, and so do pgup / pgdn
-Commands
-  /clear  /model [name]  /mode [ask|edits|auto]  /permissions  /think  /showthink  /effort [low|medium|high]
-  /context  /usage  /config [key value]  /systemprompt  /theme  /sidebar [width]  /history [width]  /tools  /mouse
-  /plan  /race [model message]  /directory [path]  /copy [code|all]  /export [file]  /log  /compact  /help  /exit
-Copy and paste
-  drag over text in the conversation to copy it · ctrl+y or /copy copies the last answer
-  paste as usual (files become chips) · /mouse hands the mouse back to the terminal
-Mouse
-  drag the line beside either panel to resize it · click a message or an activity line to jump to it"""
+# /help: what you can type and press, a thing to a line; the commands above join it as its last section
+HELP = [("In a message", [("@path", "attach that file; tab completes the name"),
+                          ("!command", "run the command yourself, without the model"),
+                          ("paste or drag a file", "becomes a chip like [Image #1] that travels with the message"),
+                          ("a large paste", "becomes a chip, [Pasted #1 +42 lines]; the model gets it all"),
+                          ("ctrl+v  alt+v", "attach the clipboard's picture (a screenshot or a copied file)")]),
+        ("Keys", [("enter", "send; while it works, your message waits in the queue"),
+                  ("shift+enter  ctrl+j", "new line (so does a \\ before enter)"),
+                  ("enter, nothing typed", "run what is queued now"),
+                  ("esc", "interrupt; queued messages come back to the prompt"),
+                  ("tab", "switch mode: ask → edits → auto"),
+                  ("up  down", "recall earlier messages"),
+                  ("pgup  pgdn  end", "scroll the conversation; end jumps to the newest"),
+                  ("ctrl+o", "expand or collapse all tool windows"),
+                  ("ctrl+y", "copy the last answer"),
+                  ("ctrl+l", "clear the conversation"),
+                  ("ctrl+c twice", "quit")]),
+        ("Mouse", [("wheel", "scroll the conversation"),
+                   ("drag over text", "copy it"),
+                   ("click a tool window", "open or close just that one"),
+                   ("click a message", "jump to it; so does a line under Activity"),
+                   ("drag a panel's edge", "resize the panel")])]
+ARGS = {"/model": "[name]", "/mode": "[name]", "/effort": "[level]", "/config": "[key value]", "/sidebar": "[width]",
+        "/history": "[width]", "/race": "[model message]", "/directory": "[path]", "/copy": "[code|all]", "/export": "[file]"}
+HELP_WIDE = 24  # the column the names and keys share, so every description starts at the same place
 
 # the wordmark: "sprint" in a 5-row pixel font, shaded from light to solid, leaning forward
 WORD = "sprint"
@@ -1539,7 +1543,23 @@ class Screen:
         self.pop("Context", [row(list(r)) for r in sprint.context_rows(self.agent)])
 
     def help_popup(self):
-        self.pop("Help", [row([(line, "bold" if line and not line.startswith(" ") else "")]) for line in HELP.split("\n")])
+        """everything you can type and press, in sections; type to narrow it, and enter on a command starts it for you"""
+        rows = []
+        for title, items in HELP + [("Commands", COMMANDS)]:
+            rows += [row("")] * bool(rows) + [row([(title, "title")])]
+            for name, about in items:
+                cmd = name.startswith("/")
+                takes = " " + ARGS[name] if name in ARGS else ""
+                rows.append(row([("  " + name, "kw" if cmd else "code"), (takes.ljust(HELP_WIDE - len(name)), "dim"), (about, "")],
+                                name if cmd else ""))
+
+        def pick(name):
+            self.popup = None
+            if name:  # a command: ready in the prompt, with room for what it takes
+                self.buf = name + " " * (name in ARGS)
+                self.cur = len(self.buf)
+
+        self.pop("Help", rows, pick=pick, field={"label": "›", "text": "", "filter": True})
 
     def config_popup(self, sel=0):
         a = self.agent
