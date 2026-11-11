@@ -222,7 +222,8 @@ LABEL = re.compile(r"(?i)\s*(?:(?P<note>note|tip|hint|info)|(?P<warn>warning|cau
                    r"|(?P<ok>done|fixed|success|passed)|(?P<label>[^\W\d][\w-]*(?: [\w-]+){0,2})):(?=\s|$)")
 ROLE.update({"strong": (3, curses.A_BOLD), "em": (2, getattr(curses, "A_ITALIC", 0)), "struck": (0, curses.A_DIM),
              "h1": (5, curses.A_BOLD), "h2": (6, curses.A_BOLD), "h3": (3, curses.A_BOLD), "ordinal": (3, 0), "bar": (4, 0),
-             "note": (4, 0), "label": (6, 0), "func": (6, 0), "deco": (4, 0), "const": (3, 0)})
+             "note": (4, 0), "label": (6, 0), "func": (6, 0), "deco": (4, 0), "const": (3, 0),
+             "thought": (0, curses.A_DIM | getattr(curses, "A_ITALIC", 0))})  # the model's reasoning: quieter than what it says
 
 
 # ---------- text: highlighting and wrapping. A line is a list of (text, role) spans ----------
@@ -977,7 +978,7 @@ class Screen:
         for y in range(ya, yb + 1):
             x0, text = self.screen.get(y, (0, ""))
             piece = text[max(0, xa - x0) if y == ya else 0:(xb - x0 + 1) if y == yb else None]
-            lines.append(re.sub(r" *│\s*$", "", re.sub(r"^\s*│ ?", "", piece)).rstrip() if y in self.screen else "")
+            lines.append(re.sub(r" *[│┆]\s*$", "", re.sub(r"^\s*[│┆] ?", "", piece)).rstrip() if y in self.screen else "")
         indent = min((len(ln) - len(ln.lstrip()) for ln in lines if ln.strip()), default=0)  # keep code's own indentation
         text = "\n".join(ln[indent:] for ln in lines).strip("\n")
         if text.strip():
@@ -1545,11 +1546,19 @@ class Screen:
     # --- conversation -> lines of (kind, spans, item)
 
     def window(self, it, w):
-        """a tool call as a bordered window, every line exactly w wide"""
+        """a tool call as a bordered window, every line exactly w wide; a thought in a dashed frame, so it never looks like one"""
         c, inner = it["call"], w - 4
         full = it["open"] or (c.tool == "think" and self.showthink)
-        if c.tool == "think" and not full:  # folded: one line saying it thought; click it, or /showthink for all
-            return [("", [("  ▸ ", "frame"), ("thought", "dim"), (f"  {len((it['result'] or '').split())} words", "dim")], it)]
+        if c.tool == "think":  # reasoning is not an action: no status and no time, only how much of it there is
+            said = it["result"] or ""
+            name = [("thought", "dim"), (f"  {len(said.split())} words ", "dim")]
+            if not full:  # folded: one line saying it thought; click it, or /showthink for all
+                return [("", clip([("  ┄ ", "frame")] + name, w), it)]
+            top = [("┌┄ ", "frame")] + name
+            rows = [r for x in said.splitlines() for r in wrap([(x.replace("\t", "    "), "thought")], inner)]  # wrapped, never cut
+            return [("", top + [("┄" * (w - len(flat(top)) - 1) + "┐", "frame")], it)] + \
+                   [("", [("┆ ", "frame")] + clip(r, inner) + [(" ┆", "frame")], it) for r in rows] + \
+                   [("", [("└" + "┄" * (w - 2) + "┘", "frame")], it)]
         body = []
         if c.tool == "shell":
             body = [[("$ " if i == 0 else "  ", "dim"), (x, "bold")] for i, x in enumerate(c.body.splitlines())]
@@ -1576,8 +1585,7 @@ class Screen:
         elif c.tool == "write":
             flag = "  replaces file" if it["old"] else "  new file"
         flag = flag if room > 24 else ""
-        target = c.body.split("\n")[0] if c.tool == "shell" else c.arg
-        target = (f"{len((it['result'] or '').split())} words" if c.tool == "think" else target)[:max(0, room - len(flag))]
+        target = (c.body.split("\n")[0] if c.tool == "shell" else c.arg)[:max(0, room - len(flag))]
         mid = [("  " + target, "url" if c.tool == "fetch" else "" if c.tool == "shell" else "path"),
                (flag, "warn" if it["old"] else "dim")]
         gap = w - len(flat(head + mid + tail))

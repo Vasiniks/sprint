@@ -386,7 +386,7 @@ def test_thinking_shows_up_as_its_own_window_before_the_answer():
     assert len(folded) == 1 and "thought" in flat(folded[0][1]) and "5 words" in flat(folded[0][1])
     thought["open"] = True
     head = flat(s.window(thought, 60)[0][1])
-    assert "think" in head and "5 words" in head
+    assert "thought" in head and "5 words" in head  # the open box is titled as the folded line is
 
 
 def test_new_commands_complete_with_their_arguments():
