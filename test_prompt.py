@@ -746,3 +746,28 @@ def test_on_the_opening_screen_the_mode_is_under_the_bar_too(monkeypatch):
     bar = next(i for i, r in enumerate(rows) if tui.MARK + " Ask anything" in r)
     assert rows[bar + 2].strip().startswith(f"{tui.MODE_ICON['ask']} ask (tab to cycle)") and "ctrl+c" in rows[bar + 2]
     assert rows[bar + 2].index(tui.MODE_ICON["ask"]) == rows[bar].index(tui.MARK)  # in line with the prompt
+
+
+# ---------- what you type is coloured as it is understood ----------
+
+def bar(s, text, w=60):
+    s.buf, s.cur = text, len(text)
+    return s.input_rows(w)[0][1:-1]
+
+
+def test_a_command_you_have_typed_in_full_lights_up_in_the_prompt():
+    s = screen()
+    row = bar(s, "/model qwen")[0]
+    assert flat(row) == f"{tui.MARK} /model qwen" and ("/model", "kw") in row and (" qwen", "") in row
+    assert ("/theme", "kw") in bar(s, "/theme")[0]
+    for text in ("/mod", "/modelx", "see /model", " /model"):  # not a command yet, not one at all, or not at the start
+        assert all(role != "kw" for _, role in bar(s, text)[0]), text
+    assert all(role != "kw" for row in bar(s, "first\n/model") for _, role in row)  # only the very start of the message
+
+
+def test_attached_files_and_chips_stand_out_in_the_prompt_too():
+    s = screen()
+    row = bar(s, "look at @src/app.py and [Image #1] please", w=80)[0]
+    assert ("@src/app.py", "path") in row and ("[Image #1]", "path") in row and (" please", "") in row
+    assert all(role == "" for _, role in bar(s, "mail me@example.com")[0][2:])  # an @ inside a word attaches nothing
+    assert all(role != "path" and role != "kw" for row in bar(s, "!echo @x /model") for _, role in row)  # a shell line is left alone

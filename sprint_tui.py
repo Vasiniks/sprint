@@ -278,6 +278,7 @@ MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSE
 # The mouse as the terminal reports it in full ("SGR"), read here because the curses macOS ships cannot: button, column, row,
 # M for a press or a move and m for a release. The older report cannot name a column past 223 and some terminals garble it
 # from 95 on, so a click in the right-hand panel landed on its divider; nor can it tell a release or the wheel for certain
+ATTACHED = re.compile(r"(?P<path>(?<!\S)@\S+|\[[A-Za-z]+ #\d+[^\]\n]*\])")  # in the prompt: a file you attach, or a chip
 SGR_MOUSE, SGR_PART = re.compile(r"\[<(\d+);(\d+);(\d+)([Mm])"), re.compile(r"\[<[\d;]*")
 FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
@@ -1685,7 +1686,10 @@ class Screen:
         first = min(at, max(0, len(typed) - 6))  # six lines at most: the last ones, or from the cursor's line down
         typed, self.caret = typed[first:first + 6], (1 + at - first, 2 + col)
         empty = "a command to run yourself" if shell else "Ask anything…  / for commands  ! for shell"
-        body = [[(t, "")] for t in typed] if text else [[(empty, "ghost")]]
+        body = [[(t, "")] if shell else marks(t, ATTACHED) for t in typed] if text else [[(empty, "ghost")]]
+        cmd = re.match(r"/\S+", text) if first == 0 and not shell else None
+        if cmd and cmd.group() in dict(COMMANDS) and typed[0].startswith(cmd.group()):  # a command, once it is one: it lights up
+            body[0] = [(cmd.group(), "kw")] + marks(typed[0][cmd.end():], ATTACHED)
         lead = [("!" if shell else MARK, tone), (" ", "")]
         return [rule] + [(lead if n == 0 else [("  ", "")]) + r for n, r in enumerate(body)] + [foot], typed
 
