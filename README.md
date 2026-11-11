@@ -89,7 +89,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | `ctrl+o` | expand or collapse all tool windows; click one to toggle just it |
 | `ctrl+y` | copy the last answer |
 | `ctrl+l` | clear the conversation |
-| mouse wheel, `pgup`, `pgdn` | scroll |
+| mouse wheel, `pgup`, `pgdn` | scroll. Scrolled up, a `↓ jump to bottom` button appears at the foot of the conversation: click it, or press `end` on an empty prompt. |
 | `up`, `down` | recall earlier messages |
 | `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit |
 

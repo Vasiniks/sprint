@@ -401,6 +401,7 @@ class Screen:
         self.newer = ""  # a newer published version, once the daily look has found one
         self.choice = 0  # which answer to an approval is highlighted: once, always, no
         self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
+        self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -749,6 +750,8 @@ class Screen:
             self.cur = max(0, min(n, self.cur + (1 if k == curses.KEY_RIGHT else -1)))
         elif k in (curses.KEY_HOME, "\x01"):  # to the start of this line, and the end of it
             self.cur = self.buf.rfind("\n", 0, self.cur) + 1
+        elif k == curses.KEY_END and not self.buf and self.scroll:
+            self.scroll = 0  # nothing typed: End is the end of the conversation
         elif k in (curses.KEY_END, "\x05"):
             self.cur = self.buf.find("\n", self.cur) % (n + 1)  # no line break ahead: -1 becomes the very end
         elif k == "\x15":  # ctrl+u
@@ -957,6 +960,9 @@ class Screen:
 
     def click(self, x, y):
         w, lw, side = self.geo
+        if self.jump_to and y == self.jump_to[0] and self.jump_to[1] <= x < self.jump_to[2]:
+            self.scroll = 0  # the button that takes you back to the newest message
+            return
         where = "left" if lw and x < lw else "side" if side and x > w - side - 1 else "main"
         item = self.hits.get((where, y))
         if item and where == "main" and item["t"] == "tool":
@@ -1664,7 +1670,7 @@ class Screen:
         h, w = scr.getmaxyx()
         scr.bkgdset(" ", self.attr(""))  # the whole screen takes the theme's background
         scr.erase()
-        self.hits, self.screen = {}, {}
+        self.hits, self.screen, self.jump_to = {}, {}, None
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")
             return scr.refresh()
@@ -1726,6 +1732,12 @@ class Screen:
                     right = min(x0 + mw - 1, xb) if y == yb else x0 + mw - 1
                     if right >= left:
                         self.mark(scr, y, left, right - left + 1, curses.A_REVERSE)
+            self.jump_to = None
+            if self.scroll:  # scrolled up: a button over the last row of the conversation takes you back down
+                button = " ↓ jump to bottom "
+                at = x0 + mw - len(button) - 1
+                self.put(scr, vh, at, [(button, "chosen")])
+                self.jump_to = (vh, at, at + len(button))
             # the status line, on the blank row above the bar; what is queued, between the two; and the footer
             keys = [("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
             for i, r in enumerate(waiting):
@@ -1738,7 +1750,7 @@ class Screen:
             if self.note_text():
                 keys = [(self.note_text(), "warn")]
             elif self.scroll:
-                keys = [("↓ newer messages below", "warn")]
+                keys = [("end", "bold"), (" or click ↓ for the newest", "dim")]
             keys = keys if len(flat(keys)) < mw - len(flat(under)) - 2 else keys[:2] if len(keys) > 2 else clip(keys, max(4, mw - len(flat(under)) - 2))
             self.put(scr, h - 1, x0, under, width=mw)
             self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)

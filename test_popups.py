@@ -617,3 +617,49 @@ def test_your_message_leads_with_a_bar_in_the_mode_colour_and_is_drawn_on_the_ba
     row, left = next((y, x) for (y, x), (ch, attr) in scr.cells.items() if ch == "▌")
     on = {pair(attr) for (y, x), (ch, attr) in scr.cells.items() if y == row and left <= x < left + 12}  # the message, not the panels beside it
     assert on and all(230 <= n <= 237 for n in on)  # every cell of it sits on the band
+
+
+# ---------- a way back down ----------
+
+def long_talk(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    s = screen("\n\n".join(f"paragraph {i}" for i in range(60)))
+    s.submit("go")
+    s.worker.join(10)
+    return s
+
+
+def test_scrolled_up_there_is_a_button_to_jump_to_the_bottom_and_a_click_takes_it(scr, tmp_path, monkeypatch):
+    s = long_talk(tmp_path, monkeypatch)
+    s.draw(scr)
+    assert not any("jump to bottom" in scr.text(y) for y in range(scr.h)) and s.jump_to is None
+    s.scroll = 30
+    s.draw(scr)
+    y, x0, x1 = s.jump_to
+    assert "↓ jump to bottom" in scr.text(y) and scr.text(y).index("↓ jump to bottom") in range(x0, x1)
+    assert "paragraph 59" not in "".join(scr.text(r) for r in range(scr.h))  # the end is out of sight
+    s.pointer(x0 + 2, y, curses.BUTTON1_PRESSED)
+    s.pointer(x0 + 2, y, curses.BUTTON1_RELEASED)
+    assert s.scroll == 0
+    s.draw(scr)
+    assert "paragraph 59" in "".join(scr.text(r) for r in range(scr.h)) and s.jump_to is None
+
+
+def test_a_click_beside_the_button_is_an_ordinary_click(scr, tmp_path, monkeypatch):
+    s = long_talk(tmp_path, monkeypatch)
+    s.scroll = 30
+    s.draw(scr)
+    y, x0, x1 = s.jump_to
+    s.pointer(x0 - 6, y, curses.BUTTON1_PRESSED)
+    s.pointer(x0 - 6, y, curses.BUTTON1_RELEASED)
+    assert s.scroll == 30
+
+
+def test_end_on_an_empty_prompt_jumps_to_the_bottom_too(tmp_path, monkeypatch):
+    s = long_talk(tmp_path, monkeypatch)
+    s.scroll = 30
+    s.key(curses.KEY_END)
+    assert s.scroll == 0
+    s.scroll, s.buf, s.cur = 30, "typing", 0
+    s.key(curses.KEY_END)  # with text on the prompt, End is still the end of the line
+    assert s.scroll == 30 and s.cur == 6
