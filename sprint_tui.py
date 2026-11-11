@@ -98,9 +98,10 @@ THEMES = {"default": {}, "mono": {i: -1 for i in range(1, 8)},
           "ocean": {1: 204, 2: 49, 3: 80, 4: 33, 5: 105, 6: 39}, "sunset": {1: 203, 2: 150, 3: 221, 4: 141, 5: 205, 6: 215}}
 THEME_ABOUT = {"default": "your terminal's own colours", "mono": "no colour, only bold and dim", "amber": "warm ambers, like an old monitor",
                "forest": "soft greens", "ocean": "blues and teals", "sunset": "orange, pink and violet"}
-WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)
-MOUSE = (curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | WHEEL_DOWN
-         | getattr(curses, "REPORT_MOUSE_POSITION", 0))
+WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0)  # 0: a curses with no fifth button; it sends wheel-down as a bare move
+MOVED = getattr(curses, "REPORT_MOUSE_POSITION", 0)
+BUTTON = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED
+MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | (WHEEL_DOWN or 0x200000) | MOVED
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 # what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
 SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline"}
@@ -206,6 +207,14 @@ def kilo(n):
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
+def wheel(state, bare):
+    """which way a mouse event turns the wheel: 1 up, -1 down, 0 not at all. Where curses has no fifth button a
+    wheel-down looks just like the mouse moving, so bare says whether a move with no button in it can be the wheel"""
+    if state & curses.BUTTON4_PRESSED:
+        return 1
+    return -1 if state & WHEEL_DOWN or (bare and not WHEEL_DOWN and state & MOVED and not state & BUTTON) else 0
+
+
 # ---------- the screen: conversation model, keys, drawing ----------
 
 class Screen:
@@ -222,6 +231,7 @@ class Screen:
         self.pastes = {}  # large pasted texts by their chip label
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
+        self.hover = False  # is the terminal reporting every move of the mouse? Only while a popup is open
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -662,9 +672,13 @@ class Screen:
         self.pointer(x, y, state)
 
     def pointer(self, x, y, state):
-        """a mouse event: drag a divider, drag over text to copy it, scroll, or click"""
+        """a mouse event: scroll, drag a divider, drag over text to copy it, or click"""
         w, lw, side = self.geo
-        if self.drag:
+        turn = wheel(state, not (self.drag or self.select or self.hover))
+        if turn:  # the wheel always scrolls, and lets go of a drag whose release never came
+            self.drag = self.select = None
+            self.scroll = max(0, self.scroll + 3 * turn)
+        elif self.drag:
             if self.drag == "right":
                 self.side_w = max(20, min(w - lw - ROOM, w - 1 - x))
             else:
@@ -672,16 +686,12 @@ class Screen:
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
                 self.drag = None
                 sprint.save_config(sidebar_w=self.side_w, history_w=self.left_w)
-        elif self.select is not None:
+        elif self.select is not None and not state & curses.BUTTON1_PRESSED:
             self.select["b"] = (y, x)
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
                 picked, self.select = self.select, None
                 self.click(x, y) if picked["a"] == picked["b"] else self.copy_range(picked["a"], picked["b"])
-        elif state & curses.BUTTON4_PRESSED:
-            self.scroll += 3
-        elif state & WHEEL_DOWN:
-            self.scroll = max(0, self.scroll - 3)
-        elif state & curses.BUTTON1_PRESSED:
+        elif state & curses.BUTTON1_PRESSED:  # (a second press with no release between starts afresh)
             if side and abs(x - (w - side - 1)) <= 1:
                 self.drag = "right"
             elif lw and abs(x - lw) <= 1:
