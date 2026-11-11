@@ -1,18 +1,8 @@
 # sprint
 
-A terminal coding agent for very small local models (0.5B–3B parameters, 8K context).
-Two Python files, no dependencies.
+A terminal coding agent for small local models. Two Python files, no dependencies.
 
-```
-    ░░░░░░░░  ░░░░░░░░  ▒▒▒▒▒▒▒▒  ▓▓  ▓▓    ▓▓  ██████████
-   ░░        ░░    ░░  ▒▒    ▒▒  ▓▓  ▓▓▓▓  ▓▓      ██
-  ░░░░░░░░  ░░░░░░░░  ▒▒▒▒▒▒    ▓▓  ▓▓  ▓▓▓▓      ██
-       ░░  ░░        ▒▒  ▒▒    ▓▓  ▓▓    ▓▓      ██
-░░░░░░░░  ░░        ▒▒    ▒▒  ▓▓  ▓▓    ▓▓      ██
-
-── ask ─────────────────────────────── Qwen3.5-0.8B:Q4_K_M · 0% ──
-░▒▓█ Ask anything…  / for commands
-```
+<p align="center"><img src="assets/logo.svg" alt="sprint: the opening screen, with the logo above the prompt" width="760"></p>
 
 Small models are fast and private, but they lose track of long conversations, garble tool calls and go in circles. sprint is built around those failings: it keeps the context small, checks every tool call, stops loops, and shows you each action before it runs.
 
@@ -41,19 +31,20 @@ Type a request and press Enter. In the default mode sprint asks before it runs a
 
 | part | what it shows |
 |---|---|
-| Messages (left) | Your messages in order, each with what it took. Click one to jump to it. |
+| Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. |
 | Conversation (middle) | Your messages on a shaded band, the model's replies, and one window per tool call. |
 | Sidebar (right) | The context window in small, the model's speed, then a log of every tool call and how it ended. |
-| Prompt (bottom) | A rule naming the mode and model, and the line you type on. Its `░▒▓█` trail ripples while the model works. |
+| Prompt (bottom) | The line you type on, between two rules: the model and context above it, the mode below it. |
+| Status (above the prompt) | While a turn runs: a small sprint animation, what is happening, for how long, tokens going up or coming down, and the effort. |
 
-Tool windows start collapsed to a few lines:
+Tool windows start collapsed to a few lines, and each says how long the call took:
 
 ```
-╭─ ▸ shell  python3 hello.py && seq 1 12 ──────────────── done ─╮
+╭─ ▸ shell  python3 hello.py && seq 1 12 ─────────── done 0.1s ─╮
 │ $ python3 hello.py && seq 1 12                                │
 │ hi                                                            │
 ╰─ … +11 lines · ctrl+o ────────────────────────────────────────╯
-╭─ ▾ edit  hello.py  +1 -1 ────────────────────────────── done ─╮
+╭─ ▾ edit  hello.py  +1 -1 ───────────────────────── done 0.0s ─╮
 │ - print('hi')                                                 │
 │ + print('hello world')                                        │
 ╰───────────────────────────────────────────────────────────────╯
@@ -69,21 +60,24 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | `!git status` | The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |
+| `ctrl+v`, `alt+v` or `/paste` | The picture on the clipboard (a screenshot, or a copied file) is attached as `[Image #1]`. Terminals paste text only, so sprint asks the system. In Windows Terminal use `alt+v` or `/paste`. |
+| a message while it works | It waits in a queue shown above the prompt and runs when the turn ends. |
 | `/` | The command list, with completion. |
 
 ## Keys
 
 | key | |
 |---|---|
-| `enter` | send |
+| `enter` | send; while a turn runs, queue the message; on an empty prompt with messages queued, stop the turn and run them now |
+| `shift+enter`, `alt+enter`, `ctrl+j`, or `\` then `enter` | a new line (shift+enter needs a terminal that reports it; the others work everywhere, and on Windows use `ctrl+j` or `\`) |
 | `tab`, `shift+tab` | switch mode: ask → edits → auto |
-| `esc` | stop the turn at once (hangs up on the model, kills a running command) |
+| `esc` | stop the turn at once (hangs up on the model, kills a running command); queued messages go back on the prompt |
 | `ctrl+o` | expand or collapse all tool windows; click one to toggle just it |
 | `ctrl+y` | copy the last answer |
 | `ctrl+l` | clear the conversation |
-| `pgup`, `pgdn`, mouse wheel | scroll |
+| mouse wheel, `pgup`, `pgdn` | scroll |
 | `up`, `down` | recall earlier messages |
-| `ctrl+c` | clear the line, else stop the turn, else quit |
+| `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit |
 
 Drag over text in the conversation to copy it. `/mouse` hands the mouse back to the terminal if you prefer its own selection.
 
@@ -99,23 +93,25 @@ When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. "Alwa
 
 ## Commands
 
-Anything a command brings up opens in the same popup: arrows move, Enter chooses, Esc closes. A command given its value (`/mode auto`, `/effort high`) applies it and says so in the footer.
+Anything a command brings up opens in the same popup, over a greyed-out screen: arrows or the mouse move, Enter or a click chooses, Esc or a click outside closes. A command given its value (`/mode auto`, `/effort high`) applies it and says so in the footer.
 
 | command | |
 |---|---|
 | `/model [name]` | Pick an installed model, pull one by name, or search Hugging Face and pick a quantization. |
 | `/race [model message]` | Send one message to two models and compare answers, time and speed. They may read files but change nothing. |
 | `/mode`, `/permissions` | Change the mode; manage the always-allowed list. |
-| `/think` | Let the model reason before answering. The reasoning shows as its own window. |
+| `/think` | Let the model reason before answering. |
+| `/showthink` | Show that reasoning in full. Otherwise it is one line saying the model thought; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
 | `/plan` | Split each message into a short list of steps first. Off by default. |
 | `/context` | What is filling the context window, as a coloured grid. |
 | `/compact` | Fold the older conversation into a short summary. sprint also does this by itself. |
 | `/copy [code\|all]` | Copy the last answer, the last code block, or everything. |
+| `/paste` | Attach the picture on the clipboard. |
 | `/export [file]` | Save the conversation as markdown. |
 | `/directory [path]` | Change the folder sprint works in, with a small folder browser. |
 | `/systemprompt` | Edit what the model is told at the start. |
-| `/theme` | default, mono, amber, forest, ocean, sunset. |
+| `/theme` | default, mono, amber, forest, ocean, sunset, midnight, cmyk, matrix, slate, grape, paper. A theme sets the whole screen, background included; the list previews each in its own colours. |
 | `/config [key value]` | Every setting in one list. |
 | `/sidebar`, `/history` | Hide, show or size the side panels. |
 | `/tools`, `/mouse` | Expand or collapse all tool windows; turn mouse capture on or off. |
@@ -180,7 +176,7 @@ Known limits:
 - **Long files.** One reply can hold a file of a few hundred lines at 8K. Beyond that, ask for parts or raise the window with `/config ctx 16384`.
 - **Plan mode** did not help the 0.8B model in testing, which is why it is off by default.
 - **PDFs** are read roughly unless `pdftotext` is installed. Pictures need a model that can see.
-- **Windows.** Install Git for Windows: models write bash, and sprint uses Git Bash when it finds it. Without it, commands run in PowerShell, where common ones (`ls`, `cat`) work but bash syntax often does not. Dragging with the mouse and marked pastes are untested there; a picture or PDF path dropped into the prompt still becomes a chip when you send.
+- **Windows.** Install Git for Windows: models write bash, and sprint uses Git Bash when it finds it. Without it, commands run in PowerShell, where common ones (`ls`, `cat`) work but bash syntax often does not. The terminal there does not mark pastes, so sprint treats keys that arrive together as one paste. Dragging with the mouse is untested there; a picture or PDF path dropped into the prompt still becomes a chip when you send.
 
 ## As a library
 
@@ -200,8 +196,9 @@ python -m pytest
 |---|---|
 | `sprint.py` | the agent: tools, context handling, model backends, the plain session |
 | `sprint_tui.py` | the full-screen interface (stdlib `curses`) |
-| `test_sprint.py`, `test_tui.py` | tests; they use a scripted model and never touch your settings |
+| `test_sprint.py`, `test_tui.py`, `test_prompt.py`, `test_popups.py`, `test_showthink.py` | tests; they use a scripted model and never touch your settings |
 | `test_windows.py` | the Windows-only paths, run on Windows in CI and skipped elsewhere |
+| `assets/logo.svg` | the logo as the opening screen, animated; drawn from the same pixel font as the app |
 
 ## License
 
