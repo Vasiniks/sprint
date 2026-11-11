@@ -9,3 +9,7 @@ models/
 .mypy_cache/
 .ruff_cache/
 sprint-*.md
+.wrangler/
+node_modules/
+.playwright-mcp/
+.claude/worktrees/
