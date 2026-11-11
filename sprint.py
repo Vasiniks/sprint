@@ -490,16 +490,21 @@ class Agent:
         self.touched, self.cancel = [], False  # files changed so far; set cancel to stop the current turn
         self.forgotten = 0  # older turns dropped to stay inside the window
 
-    def compact(self):
+    def compact(self, everything=False):
         """fold everything before the latest exchange into one short summary of what was asked and done, so the
-        conversation can go on in less room -> how many messages that saved (0 when there is nothing to fold)"""
+        conversation can go on in less room -> how many messages were folded (0 when there is nothing to fold).
+        everything: fold the latest exchange too. Only /compact asks for that, when there is nothing older to fold;
+        the compaction that happens by itself mid-task must keep what the model is working from"""
         m = self.msgs
         tail = m[-1:] if m[-1]["role"] == "assistant" else m[-2:]
         old = m[1:len(m) - len(tail)]
+        whole = everything and len(m) > 2 and m[-1]["role"] == "assistant" and not m[-1].get("tool_calls")
+        if whole:  # a finished exchange: all of it goes, and a word from the model stands in so it is your turn next
+            old, tail = m[1:], [{"role": "assistant", "content": "Understood."}]
         if len(old) < 2:
             return 0
         asks = [x for x in old if x.get("human")]  # an earlier summary counts: it may be holding the request
-        current = None if tail[-1].get("human") else (asks[-1] if asks else None)
+        current = None if whole or tail[-1].get("human") else (asks[-1] if asks else None)
         lines, doing = [], ""
         for x in old:
             if x.get("summary"):  # an earlier summary: keep its lines, and its request becomes one more thing asked
@@ -529,7 +534,7 @@ class Agent:
         text += f"\n\nThe current request: {request}" if request else ""
         self.msgs = [m[0], {"role": "user", "content": text, "human": True, "summary": True}] + tail
         self.forgotten += len(old) // 2
-        return len(old) - 1
+        return len(old) if whole else len(old) - 1
 
     def count(self, **more):
         """add to this session's tally, and to what the next save writes into the lifetime file"""
@@ -1343,8 +1348,13 @@ def command(agent, line):
             return note("cannot list models: is Ollama running?")
         return note("installed models (switch with /model NAME):", *("  " + n + ("   ← current" if n == agent.model else "") for n in names))
     if cmd == "/compact":
-        before, folded = agent.used(), agent.compact()
-        return note(f"folded {folded} messages into a summary: {before:,} → {agent.used():,} tokens" if folded else "nothing to compact yet")
+        before, kept, forgotten = agent.used(), agent.msgs, agent.forgotten
+        folded = agent.compact() or agent.compact(everything=True)  # nothing older to fold: then the latest exchange as well
+        if folded and agent.used() >= before:  # a summary no shorter than what it replaces: leave the conversation be
+            agent.msgs, agent.forgotten, folded = kept, forgotten, 0
+        return note(f"folded {folded} message{'s' * (folded != 1)} into a summary: {before:,} → {agent.used():,} tokens" if folded else
+                    "nothing to compact: the conversation is empty" if len(agent.msgs) < 2 else
+                    f"already as short as a summary would be: {before:,} tokens")
     if cmd == "/context":
         return context_rows(agent)
     if cmd == "/usage":
