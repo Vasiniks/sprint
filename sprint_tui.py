@@ -500,6 +500,7 @@ class Screen:
         self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
+        self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
         self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -1828,9 +1829,28 @@ class Screen:
         return [("", top, it)] + [("", [("│ ", "frame")] + clip(r, inner) + [(" │", "frame")], it) for r in rows] + \
                [("", foot, it)]
 
+    def plan_now(self):
+        """the checklist of the message in hand, if plan mode made one for it"""
+        last = next((i for i in reversed(self.items) if i["t"] in ("plan", "user")), None)
+        return last if last and last["t"] == "plan" else None
+
+    def plan_rows(self, plan, w, room):
+        """the plan for the right-hand panel: every step wrapped to its width, done / in hand / still to do, and as many
+        rows as there is room for, kept around the step in hand"""
+        at, rows, first = plan["at"], [], 0
+        for n, step in enumerate(plan["steps"]):
+            first = len(rows) if n == at else first
+            mark, role = ("✓ ", "green") if n < at else ("▸ ", self.agent.mode) if n == at else ("· ", "dim")
+            for k, r in enumerate(wrap([(step, "bold" if n == at else "dim")], max(8, w - 2))):
+                rows.append([(mark if k == 0 else "  ", role)] + r)
+        start = max(0, min(first - 1, len(rows) - room))
+        return rows[start:start + room]
+
     def lines(self, w):
         out = []
         for it in self.items:
+            if it["t"] == "plan" and self.aside:
+                continue  # it is on show in the right-hand panel instead
             key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
                    self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""))  # a thought grows
             if self.cache.get(id(it), (None,))[0] != key:
@@ -1947,6 +1967,7 @@ class Screen:
             waiting = self.queue_rows()
             mw, vh = w - side - lw - 4, top - 2 - len(waiting)  # a blank row above and below the conversation
             self.page = max(1, vh - 2)
+            self.aside = bool(side)
             lines = self.lines(mw)
             if self.jump is not None:  # a click in a side panel: bring that item to the top
                 at = next((i for i, row in enumerate(lines) if row[2] is self.jump), None)
@@ -2000,7 +2021,13 @@ class Screen:
                 self.put(scr, 6, x, [(MODE_ICON[a.mode] + " " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
                          width=inner)
                 self.put(scr, 8, x, [("Activity", "dim")], width=inner)
-                log = self.activity()[-max(1, h - 12):]
+                plan, half = self.plan_now(), h // 2
+                if plan:  # the bottom half is the plan: how far along, then its steps
+                    done = f"{min(plan['at'], len(plan['steps']))}/{len(plan['steps'])}"
+                    self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
+                    for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 2 - half - 1))):
+                        self.put(scr, half + 1 + i, x, spans, width=inner)
+                log = self.activity()[-max(1, (half - 1 if plan else h - 3) - 9):]
                 for i, (item, spans) in enumerate(log):
                     self.put(scr, 9 + i, x, spans, width=inner)
                     self.hits[("side", 9 + i)] = item
