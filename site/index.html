@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sprint, a coding agent for very small local models</title>
-<meta name="description" content="sprint is a terminal coding agent for very small local models: 0.5B to 3B parameters, 8K context. Two Python files, no dependencies.">
+<title>sprint, a coding agent for small models</title>
+<meta name="description" content="sprint is a terminal coding agent for small local models. Two Python files, no dependencies.">
 <meta property="og:title" content="sprint">
-<meta property="og:description" content="A terminal coding agent for very small local models. Two Python files, no dependencies.">
+<meta property="og:description" content="A terminal coding agent for small local models. It works.">
 <meta name="color-scheme" content="light">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <script>document.documentElement.className = 'js'</script>
 <style>
 :root {
-  --paper: #fff; --ink: #000; --grey: #5c5c5c; --faint: #e9e9e9;
+  --paper: #fff; --ink: #000; --grey: #5c5c5c; --faint: #e9e9e9; --line: #4a4a4a; --dim: #8f8f8f;
   --y: #ffe100; --c: #00a8e8; --m: #e6007a;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --lean: "Avenir Next", "Helvetica Neue", "Segoe UI", system-ui, Arial, sans-serif;
-  --gutter: clamp(16px, 7vw, 112px);
+  --gutter: clamp(16px, 4vw, 72px);
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -26,161 +26,229 @@ a:hover { text-decoration-color: var(--c); }
 :focus-visible { outline: 3px solid var(--c); outline-offset: 3px; }
 p { margin: 0; max-width: 62ch; }
 h1, h2, h3 { font-family: var(--lean); font-style: italic; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
-h1 { font-size: clamp(2rem, 5.6vw, 4rem); line-height: 1.02; max-width: 15em; }
-h2 { font-size: clamp(1.5rem, 3.4vw, 2.25rem); line-height: 1.1; }
-h3 { font-size: 1.25rem; line-height: 1.2; }
+h1 { font-size: clamp(2.1rem, 5.9vw, 7rem); line-height: .98; }
+h1 span { white-space: nowrap; }
+h2 { font-size: clamp(1.6rem, 3.8vw, 3.25rem); line-height: 1.05; }
+h3 { font-size: 1.3rem; line-height: 1.2; }
 code { font: inherit; }
 
-.page { padding: 0 var(--gutter); max-width: calc(940px + var(--gutter) * 2); }
+/* hero: a black band the full width of the window */
+.hero { background: var(--ink); color: #fff; padding: 0 var(--gutter); overflow: hidden; }
 .top { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
 .top svg { width: 40px; height: auto; display: block; }
 .top nav { display: flex; gap: 24px; }
-
-/* hero */
-.hero { padding: clamp(32px, 9vh, 96px) 0 0; }
-.mark { display: block; width: min(100%, 720px); height: auto; overflow: visible; margin-bottom: clamp(28px, 5vh, 48px); }
+.mark { display: block; width: 100%; height: auto; overflow: visible; margin: clamp(20px, 6vh, 72px) 0 clamp(32px, 7vh, 80px); }
 .mark .s { transform-box: fill-box; transform-origin: 100% 50%; transform: scaleX(var(--k)); }
-.mark .s1 { --k: .034; } .mark .s2 { --k: .022; } .mark .s3 { --k: .011; }
-.mark .l { opacity: var(--o); }
-.hero p { margin-top: 20px; font-size: 16px; }
+.mark .s1 { --k: .03; } .mark .s2 { --k: .018; } .mark .s3 { --k: .008; }
+.pitch { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 640px); gap: 28px clamp(32px, 6vw, 96px); align-items: start; margin-top: clamp(24px, 4vh, 44px); }
+.pitch p { font-size: 16px; color: #d6d6d6; }
+.get { display: flex; align-items: stretch; background: #fff; color: var(--ink); }
+.get code { flex: 1; min-width: 0; padding: 16px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.get code::before { content: "$ "; color: var(--grey); }
+.get button { font: inherit; font-weight: 700; border: 0; padding: 0 22px; background: var(--y); color: var(--ink); cursor: pointer; }
+.get button:hover { background: var(--c); }
+.pitch .after { margin-top: 12px; font-size: 15px; color: var(--dim); }
+.track { margin: clamp(40px, 8vh, 88px) calc(var(--gutter) * -1) 0; padding-bottom: 28px; display: grid; gap: 9px; }
+.track i { display: block; height: 3px; background: #1f1f1f; position: relative; }
+.track i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 16vw; background: var(--tint); transform: translateX(var(--at)); }
+.track i:nth-child(1) { --tint: var(--y); --at: 62vw; --t: 1.5s; }
+.track i:nth-child(2) { --tint: var(--c); --at: 38vw; --t: 2.2s; }
+.track i:nth-child(3) { --tint: var(--m); --at: 17vw; --t: 3.1s; }
 
-.get { display: flex; align-items: stretch; margin-top: 32px; max-width: 640px; background: var(--ink); color: #fff; }
-.get code { flex: 1; min-width: 0; padding: 14px 16px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
-.get code::before { content: "$ "; color: #8a8a8a; }
-.get button { font: inherit; font-weight: 700; border: 0; padding: 0 20px; background: var(--y); color: var(--ink); cursor: pointer; }
-.get button:hover { background: #fff; }
-.after { margin-top: 12px; color: var(--grey); }
-
-section { padding-top: clamp(72px, 13vh, 136px); }
+main { padding: 0 var(--gutter); }
+section { padding-top: clamp(72px, 13vh, 144px); }
 section > h2 + p { margin-top: 14px; }
 
-/* terminal */
-.term { margin-top: 28px; background: var(--ink); color: #e6e6e6; padding: 20px clamp(14px, 3vw, 24px) 18px; font-size: 14px; line-height: 1.55; max-width: 760px; }
-.talk { min-height: 19.5em; }
+/* the screen: three panels, like the app */
+.tui { margin-top: 28px; background: var(--ink); color: #e6e6e6; font-size: 14px; line-height: 1.55; display: grid; grid-template-columns: minmax(180px, 2fr) minmax(0, 7fr) minmax(200px, 2.4fr); }
+.tui aside { padding: 16px 16px 14px; color: var(--dim); min-width: 0; }
+.tui .hist { border-right: 1px solid var(--line); }
+.tui .side { border-left: 1px solid var(--line); }
+.tui h4 { margin: 0 0 8px; font: inherit; color: #fff; }
+.tui h4 span { color: var(--dim); float: right; }
+.tui .side h4:not(:first-child) { margin-top: 18px; }
+.tui ol, .tui ul { list-style: none; margin: 0; padding: 0; }
+.hist li { padding: 6px 8px; margin: 0 -8px 4px; }
+.hist li.now { background: #1c1c1c; color: #fff; }
+.hist li b { display: block; font-weight: 400; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; }
+.grid i { aspect-ratio: 1.6; background: #242424; }
+.grid i.sys { background: #fff; } .grid i.used { background: var(--c); }
+.acts li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acts li b { font-weight: 400; color: var(--y); } .acts li em { font-style: normal; color: var(--c); }
+.mid { display: flex; flex-direction: column; min-width: 0; padding: 16px clamp(12px, 2vw, 22px) 14px; }
+.talk { height: 27.5em; overflow: hidden; }
 .talk > * + * { margin-top: 12px; }
 .you { background: #242424; padding: 6px 10px; color: #fff; }
-.win { position: relative; border: 1px solid #5a5a5a; border-radius: 7px; padding: 12px 12px 8px; margin-top: 18px !important; }
+.win { position: relative; border: 1px solid var(--line); border-radius: 7px; padding: 12px 12px 8px; }
+.talk > .win { margin-top: 20px; }
 .win .cap, .win .state { position: absolute; top: -0.8em; background: var(--ink); padding: 0 6px; white-space: nowrap; }
 .win .cap { left: 8px; max-width: calc(100% - 96px); overflow: hidden; text-overflow: ellipsis; }
 .win .cap b { color: var(--y); font-weight: 400; }
 .win .cap em { color: var(--c); font-style: normal; }
-.win .state { right: 8px; color: #8a8a8a; }
+.win .state { right: 8px; color: var(--dim); }
 .win .body { white-space: pre-wrap; min-height: 1.55em; }
-.plus { color: var(--c); } .dim { color: #8a8a8a; }
-.rule { display: flex; align-items: center; gap: 10px; margin-top: 18px; color: #8a8a8a; white-space: nowrap; }
-.rule::before { content: ""; width: 14px; border-top: 1px solid #5a5a5a; }
-.rule i { flex: 1; border-top: 1px solid #5a5a5a; min-width: 12px; }
-.rule::after { content: ""; width: 14px; border-top: 1px solid #5a5a5a; }
-#mode { color: var(--m); }
+.plus { color: var(--c); } .minus { color: var(--m); } .dim { color: var(--dim); }
+.rule { display: flex; align-items: center; gap: 10px; margin-top: 16px; color: var(--dim); white-space: nowrap; }
+.rule::before, .rule::after { content: ""; width: 14px; border-top: 1px solid var(--line); }
+.rule i { flex: 1; border-top: 1px solid var(--line); min-width: 12px; }
+#mode { color: var(--c); font-weight: 700; }
 #meta { overflow: hidden; text-overflow: ellipsis; }
 .line { display: flex; align-items: center; gap: 10px; margin-top: 6px; min-height: 1.6em; color: #fff; }
 .trail { display: inline-flex; flex: none; }
-.trail i { width: .6em; height: 1.05em; background: var(--m); }
+.trail i { width: .6em; height: 1.05em; background: var(--c); }
 .trail i:nth-child(1) { opacity: .3; } .trail i:nth-child(2) { opacity: .52; } .trail i:nth-child(3) { opacity: .76; }
-.keys { color: #8a8a8a; } .keys b { color: #fff; font-weight: 400; } .keys b ~ b { margin-left: 1.1em; } .keys b.hit { background: var(--y); color: var(--ink); }
-.caret { width: .55em; height: 1.05em; background: #fff; }
+.keys { color: var(--dim); } .keys b { color: #fff; font-weight: 400; } .keys b ~ b { margin-left: 1.1em; } .keys b.hit { background: var(--y); color: var(--ink); }
+.caret { width: .55em; height: 1.05em; background: #fff; flex: none; }
 .again { margin-top: 14px; font: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-color: var(--m); text-decoration-thickness: 2px; text-underline-offset: 3px; }
 
 /* two models */
-.lanes { margin-top: 32px; display: grid; gap: 28px; max-width: 760px; }
+.lanes { margin-top: 36px; display: grid; gap: 30px; }
 .lane .name { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; }
 .lane .name span { color: var(--grey); }
-.cells { display: grid; grid-template-columns: repeat(48, 1fr); gap: clamp(1px, .35vw, 3px); height: 34px; margin: 8px 0 6px; transform: skewX(-20deg); transform-origin: 0 100%; padding-right: 12px; }
+.cells { display: grid; grid-template-columns: repeat(48, 1fr); gap: clamp(1px, .35vw, 5px); height: clamp(34px, 5vw, 64px); margin: 8px 0 6px; transform: skewX(-20deg); transform-origin: 0 100%; padding-right: clamp(12px, 2vw, 24px); }
 .cells i { background: var(--tint); }
 .cells i.miss { background: none; box-shadow: inset 0 0 0 1px var(--tint); }
 .q { --tint: var(--c); --step: 34ms; } .g { --tint: var(--m); --step: 55ms; }
 .note { margin-top: 24px; color: var(--grey); }
 
-/* three points */
-.points { margin-top: 12px; }
-.point { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 20px 48px; align-items: start; padding-top: 44px; }
+/* three points, side by side */
+.points { margin-top: 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 48px clamp(28px, 4vw, 64px); }
 .point p { margin-top: 10px; }
-.fig { font-size: 13px; line-height: 1.5; }
+.fig { font-size: 13px; line-height: 1.5; min-height: 132px; margin-bottom: 22px; display: flex; flex-direction: column; justify-content: flex-end; }
 .bar { display: flex; height: 22px; background: var(--faint); margin-top: 6px; }
-.bar i { display: block; height: 100%; }
-.bar .k { background: var(--ink); } .bar .c { background: var(--c); } .bar .m { background: var(--m); } .bar .y { background: var(--y); margin-left: auto; }
-.fig .cap { display: block; color: var(--grey); margin-top: 14px; }
-.fig .cap:first-child { margin-top: 0; }
-.key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 12px; color: var(--grey); }
+.bar i { display: block; height: 100%; flex: none; }
+.bar .k { background: var(--ink); width: 9%; } .bar .c { background: var(--c); width: 79%; } .bar .m { background: var(--m); width: 0; } .bar .y { background: var(--y); margin-left: auto; width: 12%; }
+.bar.fold .c { width: 17%; } .bar.fold .m { width: 13%; }
+.fig .cap { display: block; color: var(--grey); }
+.fig .cap + .bar + .cap { margin-top: 12px; }
+.key { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 12px; color: var(--grey); }
 .key i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; }
-.calls { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: center; margin: 0; }
-.calls dt { margin: 0; } .calls dd { margin: 0; }
+.calls { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; align-items: center; margin: 0; }
+.calls dt, .calls dd { margin: 0; }
 .tag { padding: 1px 8px; } .tag.warn { background: var(--y); } .tag.stop { background: var(--ink); color: #fff; }
-.askline { background: var(--ink); color: #fff; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 4px 18px; }
-.askline span:first-child { color: var(--y); } .askline b { font-weight: 400; color: #8a8a8a; } .askline b::first-letter { color: #fff; }
+.askline { background: var(--ink); color: #fff; padding: 14px; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.askline span { color: var(--y); } .askline b { font-weight: 400; color: #fff; }
+.askline b:first-of-type { padding: 0 6px; margin: 0 -6px; }
 
-/* start */
-.steps { list-style: none; counter-reset: n; margin: 28px 0 0; padding: 0; max-width: 66ch; }
-.steps li { counter-increment: n; position: relative; padding: 0 0 22px 48px; }
-.steps li::before { content: counter(n); position: absolute; left: 0; top: -4px; font: italic 800 26px/1.2 var(--lean); }
+/* start: four steps across */
+.steps { list-style: none; counter-reset: n; margin: 36px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 32px clamp(24px, 3vw, 48px); }
+.steps li { counter-increment: n; border-top: 4px solid var(--ink); padding-top: 12px; }
+.steps li::before { content: counter(n); display: block; font: italic 800 clamp(2rem, 3.4vw, 3.25rem)/1.1 var(--lean); margin-bottom: 8px; }
+.steps li:nth-child(1) { border-color: var(--y); } .steps li:nth-child(2) { border-color: var(--c); } .steps li:nth-child(3) { border-color: var(--m); }
 .steps code { background: var(--faint); padding: 2px 6px; overflow-wrap: anywhere; }
+.steps + p { margin-top: 36px; }
 
-footer { margin-top: clamp(72px, 13vh, 136px); padding: 28px 0 48px; display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; border-top: 4px solid var(--ink); }
+footer { margin: clamp(72px, 13vh, 144px) var(--gutter) 0; padding: 28px 0 48px; display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; border-top: 4px solid var(--ink); }
 footer span { color: var(--grey); margin-left: auto; }
 
-@media (max-width: 720px) {
-  .point { grid-template-columns: 1fr; }
-  .term { font-size: 12.5px; }
-  .talk { min-height: 22em; }
+@media (max-width: 1000px) {
+  .pitch { grid-template-columns: minmax(0, 1fr); }
+  .tui { grid-template-columns: minmax(0, 1fr) minmax(190px, 240px); }
+  .tui .hist { display: none; }
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .tui { grid-template-columns: minmax(0, 1fr); font-size: 12.5px; }
+  .tui .side { display: none; }
+  .points { grid-template-columns: minmax(0, 1fr); }
+  .fig { min-height: 0; }
+  .steps { grid-template-columns: minmax(0, 1fr); }
   footer span { margin-left: 0; width: 100%; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .mark .run { animation: dash .95s cubic-bezier(.1, .8, .14, 1) both; }
   .mark .s { animation: tail .7s .8s cubic-bezier(.65, 0, .2, 1) both; }
-  .mark .l { animation: shade 11s ease-in-out infinite; animation-delay: calc(var(--i) * .9s - 11s); }
-  .hero h1, .hero p, .hero .get { animation: rise .45s .3s cubic-bezier(.2, .7, .2, 1) both; }
+  .hero h1, .pitch > * { animation: rise .45s .3s cubic-bezier(.2, .7, .2, 1) both; }
+  .pitch > * { animation-delay: .4s; } .pitch > * + * { animation-delay: .5s; }
+  .track i::after { animation: zip var(--t) cubic-bezier(.5, 0, .8, .4) infinite; }
   .busy .trail i { animation: ripple .9s ease-in-out infinite; }
   .busy .trail i:nth-child(2) { animation-delay: .12s; } .busy .trail i:nth-child(3) { animation-delay: .24s; } .busy .trail i:nth-child(4) { animation-delay: .36s; }
   .caret { animation: blink 1s steps(1) infinite; }
   .js .cells i { opacity: .1; }
   .js .go .cells i { animation: land 90ms both; animation-delay: calc(var(--n) * var(--step)); }
+  .js .bar.fold i { transition: width .8s cubic-bezier(.6, 0, .2, 1) .5s; }
+  .js .points:not(.go) .bar.fold .c { width: 79%; } .js .points:not(.go) .bar.fold .m { width: 0; }
+  .js .calls > * { opacity: 0; }
+  .js .go .calls > * { animation: land .25s both; animation-delay: calc(var(--n) * .55s + .3s); }
+  .go .askline b:first-of-type { animation: press 3.2s steps(1) 1.2s infinite; }
 }
 @keyframes dash { from { transform: translateX(-1500px); } to { transform: none; } }
 @keyframes tail { from { transform: scaleX(1); } to { transform: scaleX(var(--k)); } }
-@keyframes shade { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 @keyframes rise { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: none; } }
+@keyframes zip { 0% { transform: translateX(-20vw); } 70%, 100% { transform: translateX(104vw); } }
 @keyframes ripple { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 @keyframes blink { 50% { opacity: 0; } }
 @keyframes land { from { opacity: .1; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+@keyframes press { 0%, 100% { background: none; color: #fff; } 12%, 30% { background: var(--y); color: var(--ink); } }
 </style>
 </head>
 <body>
-<div class="page">
 
-<header class="top">
-  <a href="#top" aria-label="sprint"><svg viewBox="0 0 75 64" aria-hidden="true"><polygon points="19.28,8 30.28,8 13,56 2,56" fill="#ffe100"/><polygon points="33.28,8 44.28,8 27,56 16,56" fill="#00a8e8"/><polygon points="47.28,8 58.28,8 41,56 30,56" fill="#e6007a"/><polygon points="61.28,8 72.28,8 55,56 44,56" fill="#000000"/></svg></a>
-  <nav>
-    <a href="https://github.com/Vasiniks/sprint">GitHub</a>
-    <a href="https://github.com/Vasiniks/sprint/releases">Releases</a>
-  </nav>
+<header class="hero" id="top">
+  <div class="top">
+    <a href="#top" aria-label="sprint"><svg viewBox="0 0 75 64" aria-hidden="true"><polygon points="19.28,8 30.28,8 13,56 2,56" fill="#ffe100"/><polygon points="33.28,8 44.28,8 27,56 16,56" fill="#00a8e8"/><polygon points="47.28,8 58.28,8 41,56 30,56" fill="#e6007a"/><polygon points="61.28,8 72.28,8 55,56 44,56" fill="#ffffff"/></svg></a>
+    <nav>
+      <a href="https://github.com/Vasiniks/sprint">GitHub</a>
+      <a href="https://github.com/Vasiniks/sprint/releases">Releases</a>
+    </nav>
+  </div>
+  <svg class="mark" viewBox="0 0 600 100" role="img" aria-label="sprint"><defs><pattern id="d1" width="5" height="5" patternUnits="userSpaceOnUse"><rect width="3" height="3" fill="#ffe100"/></pattern><pattern id="d2" width="5" height="5" patternUnits="userSpaceOnUse"><rect width="2.5" height="2.5" fill="#00a8e8"/><rect x="2.5" y="2.5" width="2.5" height="2.5" fill="#00a8e8"/></pattern><pattern id="d3" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M0 0h5v5h-5zM2.5 2.5h2.5v2.5h-2.5z" fill-rule="evenodd" fill="#e6007a"/></pattern><g id="g-i"><rect x="40" y="0" width="20" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="20" y="40" width="20" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/></g><g id="g-n"><rect x="40" y="0" width="20" height="20"/><rect x="100" y="0" width="20" height="20"/><rect x="30" y="20" width="40" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="20" height="20"/><rect x="60" y="40" width="40" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="70" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/><rect x="60" y="80" width="20" height="20"/></g><g id="g-p"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="80" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/></g><g id="g-r"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="60" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="50" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/><rect x="60" y="80" width="20" height="20"/></g><g id="g-s"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="20" y="40" width="80" height="20"/><rect x="70" y="60" width="20" height="20"/><rect x="0" y="80" width="80" height="20"/></g><g id="g-t"><rect x="40" y="0" width="100" height="20"/><rect x="70" y="20" width="20" height="20"/><rect x="60" y="40" width="20" height="20"/><rect x="50" y="60" width="20" height="20"/><rect x="40" y="80" width="20" height="20"/></g></defs><style>@media (prefers-reduced-motion: no-preference){.v{animation:9s linear infinite reverse;animation-delay:var(--d)}.v1{animation-name:v1}.v2{animation-name:v2}.v3{animation-name:v3}.v4{animation-name:v4}}@keyframes v1{0%,16.66%{opacity:1}16.67%,100%{opacity:0}}@keyframes v2{0%,16.66%{opacity:0}16.67%,33.33%{opacity:1}33.34%,83.32%{opacity:0}83.33%,100%{opacity:1}}@keyframes v3{0%,33.33%{opacity:0}33.34%,50%{opacity:1}50.01%,66.66%{opacity:0}66.67%,83.32%{opacity:1}83.33%,100%{opacity:0}}@keyframes v4{0%,50%{opacity:0}50.01%,66.66%{opacity:1}66.67%,100%{opacity:0}}</style><g class="run"><rect class="s s1" x="-4000" y="20" width="4020" height="20" fill="#ffe100"/><rect class="s s2" x="-4000" y="40" width="4010" height="20" fill="#00a8e8"/><rect class="s s3" x="-4000" y="60" width="4000" height="20" fill="#e6007a"/><g shape-rendering="crispEdges"><g transform="translate(0,0)" style="--d:-7.50s"><use href="#g-s" class="v v1" fill="url(#d1)"/><use href="#g-s" class="v v2" fill="url(#d2)" opacity="0"/><use href="#g-s" class="v v3" fill="url(#d3)" opacity="0"/><use href="#g-s" class="v v4" fill="#ffffff" opacity="0"/></g><g transform="translate(100,0)" style="--d:-7.50s"><use href="#g-p" class="v v1" fill="url(#d1)"/><use href="#g-p" class="v v2" fill="url(#d2)" opacity="0"/><use href="#g-p" class="v v3" fill="url(#d3)" opacity="0"/><use href="#g-p" class="v v4" fill="#ffffff" opacity="0"/></g><g transform="translate(200,0)" style="--d:-6.00s"><use href="#g-r" class="v v1" fill="url(#d1)" opacity="0"/><use href="#g-r" class="v v2" fill="url(#d2)"/><use href="#g-r" class="v v3" fill="url(#d3)" opacity="0"/><use href="#g-r" class="v v4" fill="#ffffff" opacity="0"/></g><g transform="translate(300,0)" style="--d:-4.50s"><use href="#g-i" class="v v1" fill="url(#d1)" opacity="0"/><use href="#g-i" class="v v2" fill="url(#d2)" opacity="0"/><use href="#g-i" class="v v3" fill="url(#d3)"/><use href="#g-i" class="v v4" fill="#ffffff" opacity="0"/></g><g transform="translate(340,0)" style="--d:-4.50s"><use href="#g-n" class="v v1" fill="url(#d1)" opacity="0"/><use href="#g-n" class="v v2" fill="url(#d2)" opacity="0"/><use href="#g-n" class="v v3" fill="url(#d3)"/><use href="#g-n" class="v v4" fill="#ffffff" opacity="0"/></g><g transform="translate(440,0)" style="--d:-3.00s"><use href="#g-t" class="v v1" fill="url(#d1)" opacity="0"/><use href="#g-t" class="v v2" fill="url(#d2)" opacity="0"/><use href="#g-t" class="v v3" fill="url(#d3)" opacity="0"/><use href="#g-t" class="v v4" fill="#ffffff"/></g></g></g></svg>
+  <h1><span>For small agents.</span> <span>It works.</span></h1>
+  <div class="pitch">
+    <div>
+      <p>sprint is a terminal coding agent for small local models. It keeps them on track, checks every command, and asks before it acts.</p>
+    </div>
+    <div>
+      <div class="get">
+        <code id="cmd">pip install git+https://github.com/Vasiniks/sprint.git</code>
+        <button type="button" id="copy">Copy</button>
+      </div>
+      <p class="after">Then run <code>sprint</code>. Two Python files, no dependencies.</p>
+    </div>
+  </div>
+  <div class="track" aria-hidden="true"><i></i><i></i><i></i></div>
 </header>
 
-<main id="top">
-<div class="hero">
-  <svg class="mark" viewBox="-40 0 620 100" role="img" aria-label="sprint"><g transform="skewX(-20)"><g class="run"><rect class="s s1" x="-4000" y="20" width="3972" height="20" fill="#ffe100"/><rect class="s s2" x="-4000" y="40" width="3972" height="20" fill="#00a8e8"/><rect class="s s3" x="-4000" y="60" width="3972" height="20" fill="#e6007a"/><g class="l" style="--o:0.3;--i:0" stroke="#000" stroke-width=".8"><rect x="0" y="0" width="20" height="20"/><rect x="20" y="0" width="20" height="20"/><rect x="40" y="0" width="20" height="20"/><rect x="60" y="0" width="20" height="20"/><rect x="0" y="20" width="20" height="20"/><rect x="0" y="40" width="20" height="20"/><rect x="20" y="40" width="20" height="20"/><rect x="40" y="40" width="20" height="20"/><rect x="60" y="40" width="20" height="20"/><rect x="60" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/><rect x="20" y="80" width="20" height="20"/><rect x="40" y="80" width="20" height="20"/><rect x="60" y="80" width="20" height="20"/></g><g class="l" style="--o:0.3;--i:1" stroke="#000" stroke-width=".8"><rect x="100" y="0" width="20" height="20"/><rect x="120" y="0" width="20" height="20"/><rect x="140" y="0" width="20" height="20"/><rect x="160" y="0" width="20" height="20"/><rect x="100" y="20" width="20" height="20"/><rect x="160" y="20" width="20" height="20"/><rect x="100" y="40" width="20" height="20"/><rect x="120" y="40" width="20" height="20"/><rect x="140" y="40" width="20" height="20"/><rect x="160" y="40" width="20" height="20"/><rect x="100" y="60" width="20" height="20"/><rect x="100" y="80" width="20" height="20"/></g><g class="l" style="--o:0.52;--i:2" stroke="#000" stroke-width=".8"><rect x="200" y="0" width="20" height="20"/><rect x="220" y="0" width="20" height="20"/><rect x="240" y="0" width="20" height="20"/><rect x="260" y="0" width="20" height="20"/><rect x="200" y="20" width="20" height="20"/><rect x="260" y="20" width="20" height="20"/><rect x="200" y="40" width="20" height="20"/><rect x="220" y="40" width="20" height="20"/><rect x="240" y="40" width="20" height="20"/><rect x="200" y="60" width="20" height="20"/><rect x="240" y="60" width="20" height="20"/><rect x="200" y="80" width="20" height="20"/><rect x="260" y="80" width="20" height="20"/></g><g class="l" style="--o:0.76;--i:3" stroke="#000" stroke-width=".8"><rect x="300" y="0" width="20" height="20"/><rect x="300" y="20" width="20" height="20"/><rect x="300" y="40" width="20" height="20"/><rect x="300" y="60" width="20" height="20"/><rect x="300" y="80" width="20" height="20"/></g><g class="l" style="--o:0.76;--i:4" stroke="#000" stroke-width=".8"><rect x="340" y="0" width="20" height="20"/><rect x="400" y="0" width="20" height="20"/><rect x="340" y="20" width="20" height="20"/><rect x="360" y="20" width="20" height="20"/><rect x="400" y="20" width="20" height="20"/><rect x="340" y="40" width="20" height="20"/><rect x="380" y="40" width="20" height="20"/><rect x="400" y="40" width="20" height="20"/><rect x="340" y="60" width="20" height="20"/><rect x="400" y="60" width="20" height="20"/><rect x="340" y="80" width="20" height="20"/><rect x="400" y="80" width="20" height="20"/></g><g class="l" style="--o:1;--i:5" stroke="#000" stroke-width=".8"><rect x="440" y="0" width="20" height="20"/><rect x="460" y="0" width="20" height="20"/><rect x="480" y="0" width="20" height="20"/><rect x="500" y="0" width="20" height="20"/><rect x="520" y="0" width="20" height="20"/><rect x="480" y="20" width="20" height="20"/><rect x="480" y="40" width="20" height="20"/><rect x="480" y="60" width="20" height="20"/><rect x="480" y="80" width="20" height="20"/></g></g></g></svg>
-  <h1>A coding agent for very small models.</h1>
-  <p>sprint runs in your terminal and drives models of 0.5B to 3B parameters on your own machine, inside an 8K context. Two Python files, no dependencies.</p>
-  <div class="get">
-    <code id="cmd">pip install git+https://github.com/Vasiniks/sprint.git</code>
-    <button type="button" id="copy">Copy</button>
-  </div>
-  <p class="after">Then run <code>sprint</code>. Needs Python 3.9 or newer and Ollama.</p>
-</div>
-
+<main>
 <section id="demo">
-  <h2>One message, start to finish</h2>
-  <p>In the default mode, sprint shows each command and each file change before it happens.</p>
-  <div class="term" id="term" role="img" aria-label="sprint is asked to write hello.py and run it. It asks before writing the file, asks before running it, then reports that the file prints hello world.">
-    <div class="talk" id="talk">
-      <div class="you">write hello.py that prints hello world, then run it</div>
-      <div class="win"><span class="cap"><b>write</b> hello.py <em>+1</em></span><span class="state">done</span><div class="body"><span class="plus">+ print("hello world")</span></div></div>
-      <div class="win"><span class="cap"><b>shell</b> python3 hello.py</span><span class="state">done</span><div class="body"><span class="dim">$ python3 hello.py</span>
+  <h2>Two messages, start to finish</h2>
+  <p>Your messages on the left, the work in the middle, what it cost on the right.</p>
+  <div class="tui" id="term" role="img" aria-label="The sprint screen. It is asked to write hello.py and run it, then to change what it prints. It asks before writing the file, before running it and before editing it, and reports back each time.">
+    <aside class="hist">
+      <h4>Messages</h4>
+      <ol id="hist">
+        <li><b>write hello.py that prints hello world, then run it</b>2 tools, 4s</li>
+        <li class="now"><b>now make it say hello sprint</b>1 tool, 2s</li>
+      </ol>
+    </aside>
+    <div class="mid">
+      <div class="talk" id="talk">
+        <div class="you">write hello.py that prints hello world, then run it</div>
+        <div class="win"><span class="cap"><b>write</b> hello.py <em>+1</em></span><span class="state">done</span><div class="body"><span class="plus">+ print("hello world")</span></div></div>
+        <div class="win"><span class="cap"><b>shell</b> python3 hello.py</span><span class="state">done</span><div class="body"><span class="dim">$ python3 hello.py</span>
 hello world</div></div>
-      <div class="say">Saved hello.py and ran it. It prints hello world.</div>
+        <div class="say">Saved hello.py and ran it. It prints hello world.</div>
+        <div class="you">now make it say hello sprint</div>
+        <div class="win"><span class="cap"><b>edit</b> hello.py <em>+1 -1</em></span><span class="state">done</span><div class="body"><span class="minus">- print("hello world")</span>
+<span class="plus">+ print("hello sprint")</span></div></div>
+        <div class="say">Changed. hello.py now prints hello sprint.</div>
+      </div>
+      <div class="rule"><span id="mode">ask</span><i></i><span id="meta">Qwen3.5-0.8B:Q4_K_M  9%</span></div>
+      <div class="line"><span class="trail"><i></i><i></i><i></i><i></i></span><span id="typed"></span><span class="caret"></span></div>
     </div>
-    <div class="rule"><span id="mode">ask</span><i></i><span id="meta">Qwen3.5-0.8B:Q4_K_M  3%  122 tok/s</span></div>
-    <div class="line"><span class="trail"><i></i><i></i><i></i><i></i></span><span id="typed"></span><span class="caret"></span></div>
+    <aside class="side">
+      <h4>Context <span id="pct">9%</span></h4>
+      <div class="grid" id="grid"></div>
+      <h4>Speed <span id="spd">122 tok/s</span></h4>
+      <h4>Activity</h4>
+      <ul class="acts" id="acts">
+        <li><b>write</b> hello.py <em>done</em></li>
+        <li><b>shell</b> python3 hello.py <em>done</em></li>
+        <li><b>edit</b> hello.py <em>done</em></li>
+      </ul>
+    </aside>
   </div>
   <button type="button" class="again" id="again">Play it again</button>
 </section>
@@ -203,41 +271,35 @@ hello world</div></div>
 
 <section id="how">
   <h2>Built around what small models get wrong</h2>
-  <div class="points">
+  <div class="points" id="points">
     <div class="point">
-      <div>
-        <h3>They lose track of long conversations</h3>
-        <p>sprint keeps room free for the reply and folds older steps into a short summary of what you asked and what was done. File changes outlast things that were only looked at.</p>
-      </div>
       <div class="fig" aria-hidden="true">
-        <span class="cap">8K window, full</span>
-        <div class="bar"><i class="k" style="width:9%"></i><i class="c" style="width:79%"></i><i class="y" style="width:12%"></i></div>
+        <span class="cap">context window, full</span>
+        <div class="bar"><i class="k"></i><i class="c"></i><i class="y"></i></div>
         <span class="cap">after folding</span>
-        <div class="bar"><i class="k" style="width:9%"></i><i class="m" style="width:13%"></i><i class="c" style="width:17%"></i><i class="y" style="width:12%"></i></div>
+        <div class="bar fold"><i class="k"></i><i class="m"></i><i class="c"></i><i class="y"></i></div>
         <div class="key"><span><i style="background:var(--ink)"></i>prompt</span><span><i style="background:var(--m)"></i>summary</span><span><i style="background:var(--c)"></i>conversation</span><span><i style="background:var(--y)"></i>kept for the reply</span></div>
       </div>
+      <h3>They lose track of long conversations</h3>
+      <p>sprint keeps room free for the reply and folds older steps into a short summary of what you asked and what was done.</p>
     </div>
     <div class="point">
-      <div>
-        <h3>They go in circles</h3>
-        <p>The same call again, the same file rewritten, the same failure twice running: sprint warns the model once, then stops the turn and tells you why.</p>
-      </div>
       <div class="fig" aria-hidden="true">
         <dl class="calls">
-          <dt>read notes.txt</dt><dd></dd>
-          <dt>read notes.txt</dt><dd><span class="tag warn">one warning</span></dd>
-          <dt>read notes.txt</dt><dd><span class="tag stop">stopped</span></dd>
+          <dt style="--n:0">read notes.txt</dt><dd style="--n:0"></dd>
+          <dt style="--n:1">read notes.txt</dt><dd style="--n:1"><span class="tag warn">one warning</span></dd>
+          <dt style="--n:2">read notes.txt</dt><dd style="--n:2"><span class="tag stop">stopped</span></dd>
         </dl>
       </div>
+      <h3>They go in circles</h3>
+      <p>The same call again, the same file rewritten, the same failure twice running: sprint warns the model once, then stops the turn and tells you why.</p>
     </div>
     <div class="point">
-      <div>
-        <h3>They garble commands</h3>
-        <p>Every tool call is checked, and a reply cut off halfway is never run. You approve each command and edit, or allow the ones you trust for good. Esc stops a turn at once.</p>
-      </div>
       <div class="fig" aria-hidden="true">
         <div class="askline"><span>rm -rf build?</span><b>y once</b><b>a always</b><b>n no</b></div>
       </div>
+      <h3>They garble commands</h3>
+      <p>Every tool call is checked, and a reply cut off halfway is never run. You approve each command and edit, or allow the ones you trust for good. Esc stops a turn at once.</p>
     </div>
   </div>
 </section>
@@ -260,7 +322,6 @@ hello world</div></div>
   <a href="https://github.com/Vasiniks/sprint/blob/main/LICENSE">MIT license</a>
   <span>Runs on your machine. Nothing leaves it.</span>
 </footer>
-</div>
 
 <script>
 (() => {
@@ -282,58 +343,81 @@ hello world</div></div>
       row.append(cell);
     }
 
-  // the terminal
+  // the screen
   const term = $('term'), talk = $('talk'), typed = $('typed'), mode = $('mode'), meta = $('meta');
-  const MODEL = 'Qwen3.5-0.8B:Q4_K_M', ASK = 'write hello.py that prints hello world, then run it';
+  const hist = $('hist'), acts = $('acts'), grid = $('grid');
+  const MODEL = 'Qwen3.5-0.8B:Q4_K_M';
+  for (let n = 0; n < 60; n++) grid.append(document.createElement('i'));
+  const fill = pct => {  // 60 cells: the first three are the system prompt
+    [...grid.children].forEach((c, n) => c.className = n < 3 ? 'sys' : n < Math.round(pct * .6) ? 'used' : '');
+    $('pct').textContent = pct + '%'; meta.textContent = MODEL + '  ' + pct + '%';
+  };
+  fill(9);
+
   let run = 0;
   const wait = (ms, id) => new Promise((ok, no) => setTimeout(() => id === run ? ok() : no(), ms));
-  const add = (cls, html = '') => { const d = document.createElement('div'); d.className = cls; d.innerHTML = html; talk.append(d); return d; };
-  const type = async (el, text, ms, id) => { for (const ch of text) { el.textContent += ch; await wait(ms, id); } };
-  const win = (tool, arg, extra = '') => {
-    const w = add('win', `<span class="cap"><b>${tool}</b> ${arg} <em>${extra}</em></span><span class="state">waiting</span><div class="body"></div>`);
-    return { state: w.querySelector('.state'), body: w.querySelector('.body') };
-  };
+  const down = () => talk.scrollTop = talk.scrollHeight;
+  const add = (cls, html = '') => { const d = document.createElement('div'); d.className = cls; d.innerHTML = html; talk.append(d); down(); return d; };
+  const type = async (el, text, ms, id) => { for (const ch of text) { el.textContent += ch; down(); await wait(ms, id); } };
   const approve = async (question, id) => {
     mode.textContent = question;
-    typed.innerHTML = '<span class="keys"><b>y</b> once  <b>a</b> always  <b>n</b> no</span>';
+    typed.innerHTML = '<span class="keys"><b>y</b> once <b>a</b> always <b>n</b> no</span>';
     await wait(950, id);
     typed.querySelector('b').className = 'hit';
     await wait(320, id);
     mode.textContent = 'ask'; typed.textContent = '';
   };
+  const tool = async (name, arg, extra, question, body, pct, id) => {
+    const w = add('win', `<span class="cap"><b>${name}</b> ${arg} <em>${extra}</em></span><span class="state">waiting</span><div class="body"></div>`);
+    const log = document.createElement('li'); log.innerHTML = `<b>${name}</b> ${arg} <em></em>`; acts.append(log);
+    await approve(question, id);
+    w.querySelector('.body').innerHTML = body; w.querySelector('.state').textContent = 'done';
+    log.querySelector('em').textContent = 'done'; fill(pct); down();
+  };
+  const send = async (text, id) => {
+    await type(typed, text, 24, id);
+    await wait(380, id);
+    add('you').textContent = text; typed.textContent = ''; term.classList.add('busy');
+    hist.querySelector('.now')?.classList.remove('now');
+    const row = document.createElement('li'); row.className = 'now';
+    row.innerHTML = '<b></b><span>working</span>'; row.firstChild.textContent = text; hist.append(row);
+    await wait(800, id);
+    return row.lastChild;
+  };
+  const answer = async (text, cost, took, id) => {
+    await wait(600, id);
+    await type(add('say'), text, 11, id);
+    term.classList.remove('busy'); took.textContent = cost; $('spd').textContent = '122 tok/s';
+  };
   async function play() {
     const id = ++run;
-    talk.innerHTML = ''; typed.textContent = ''; mode.textContent = 'ask'; meta.textContent = MODEL + '  0%';
-    term.classList.remove('busy');
+    talk.innerHTML = hist.innerHTML = acts.innerHTML = typed.textContent = '';
+    mode.textContent = 'ask'; $('spd').textContent = ''; fill(5); term.classList.remove('busy');
     try {
       await wait(500, id);
-      await type(typed, ASK, 24, id);
-      await wait(380, id);
-      add('you').textContent = ASK; typed.textContent = ''; term.classList.add('busy');
-      await wait(800, id);
-      const w = win('write', 'hello.py', '+1');
-      await approve('write hello.py?', id);
-      w.body.innerHTML = '<span class="plus">+ print("hello world")</span>'; w.state.textContent = 'done';
+      let took = await send('write hello.py that prints hello world, then run it', id);
+      await tool('write', 'hello.py', '+1', 'write hello.py?', '<span class="plus">+ print("hello world")</span>', 6, id);
       await wait(700, id);
-      const s = win('shell', 'python3 hello.py');
-      await approve('run python3 hello.py?', id);
-      s.body.innerHTML = '<span class="dim">$ python3 hello.py</span>\nhello world'; s.state.textContent = 'done';
-      await wait(600, id);
-      await type(add('say'), 'Saved hello.py and ran it. It prints hello world.', 11, id);
-      term.classList.remove('busy'); meta.textContent = MODEL + '  3%  122 tok/s';
+      await tool('shell', 'python3 hello.py', '', 'run python3 hello.py?', '<span class="dim">$ python3 hello.py</span>\nhello world', 7, id);
+      await answer('Saved hello.py and ran it. It prints hello world.', '2 tools, 4s', took, id);
+      await wait(1300, id);
+      took = await send('now make it say hello sprint', id);
+      await tool('edit', 'hello.py', '+1 -1', 'edit hello.py?', '<span class="minus">- print("hello world")</span>\n<span class="plus">+ print("hello sprint")</span>', 9, id);
+      await answer('Changed. hello.py now prints hello sprint.', '1 tool, 2s', took, id);
     } catch { /* a newer run took over */ }
   }
   $('again').addEventListener('click', play);
 
-  if (still || !('IntersectionObserver' in window)) { $('models').classList.add('go'); return; }
-  talk.innerHTML = ''; meta.textContent = MODEL + '  0%';
+  const once = ['models', 'points'];
+  if (still || !('IntersectionObserver' in window)) { once.forEach(id => $(id).classList.add('go')); return; }
+  talk.innerHTML = hist.innerHTML = acts.innerHTML = ''; $('spd').textContent = ''; fill(5);
   const seen = new IntersectionObserver(entries => {
     for (const e of entries) if (e.isIntersecting) {
       seen.unobserve(e.target);
-      e.target.id === 'term' ? play() : e.target.classList.add('go');
+      e.target === term ? play() : e.target.classList.add('go');
     }
-  }, { threshold: .45 });
-  seen.observe(term); seen.observe($('models'));
+  }, { threshold: .4 });
+  seen.observe(term); once.forEach(id => seen.observe($(id)));
 })();
 </script>
 </body>
