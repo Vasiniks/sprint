@@ -106,17 +106,21 @@ open(f"{OUT}/favicon.svg", "w").write(
     + streak((64 - MARK_W) / 2, 12) + "</svg>\n")  # 12 down, not 10: at 16 px every line then covers three whole pixels
 
 # logo.svg: the app's opening screen as a card, for the README and anywhere else that wants the logo on dark.
-# Under the word, the prompt: a rule with the model on the right, ">" and the placeholder, a rule carrying the mode
+# Under the word, the prompt: a rule with the model on the right, the mark and the placeholder, a plain rule, then the mode with its icon
 CW = 8.4  # one character at 14px
 BOLD = ' font-weight="700"'
 GREY, FRAME = "#8a8a8a", "#5a5a5a"
 model, hint = "Qwen3.5-0.8B:Q4_K_M · 0%", "Ask anything…  / for commands  ! for shell"
-tips = [("tab", W), (" mode   ", GREY), ("/", W), (" commands   ", GREY), ("ctrl+c", W), (" quit", GREY)]
-tx = 380 - sum(len(t) for t, _ in tips) * CW / 2
+tips = [("/", W), (" commands   ", GREY), ("ctrl+c", W), (" quit", GREY)]
+tx = 704 - sum(len(t) for t, _ in tips) * CW  # they end where the rules end
 tip_text = ""
 for t, col in tips:
-    tip_text += cells(t, f"{tx:.1f}", 306, col, weight=BOLD if col == W else "")
+    tip_text += cells(t, f"{tx:.1f}", 296, col, weight=BOLD if col == W else "")
     tx += len(t) * CW
+# the mode under the bar: its icon (one cell of three filled: it asks first), its name, and how to change it
+icon = "".join(f'<polygon points="{56 + n * 9 + 5},284 {56 + n * 9 + 12},284 {56 + n * 9 + 7},298 {56 + n * 9},298" '
+               + (f'fill="{C}"' if n == 0 else f'fill="none" stroke="{C}"') + "/>" for n in range(3))
+mode_text = cells("ask", f"{56 + 4.5 * CW:.1f}", 296, C, weight=BOLD) + cells(" (tab to cycle)", f"{56 + 7.5 * CW:.1f}", 296, GREY)
 mx = 704 - (len(model) + 3) * CW  # the model sits three cells in from the right end of its rule
 card = (
     f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" role="img" aria-label="sprint" '
@@ -127,12 +131,11 @@ card = (
     f'<g transform="translate(90,52)">{letters()}</g>'
     f'<line x1="56" y1="212" x2="704" y2="212" stroke="{FRAME}"/>'
     f'<rect x="{mx - CW:.1f}" y="202" width="{(len(model) + 2) * CW:.1f}" height="20" fill="{K}"/>{cells(model, f"{mx:.1f}", 217, GREY)}'
-    f'{cells(">", "56", 245, C, weight=BOLD)}'
+    f'{cells("❯", "56", 245, C, weight=BOLD)}'
     f'<rect class="caret" x="{56 + 2 * CW:.1f}" y="232" width="{CW}" height="17" fill="{W}"/>'
     f'{cells(hint, f"{56 + 3.5 * CW:.1f}", 245, GREY)}'
     f'<line x1="56" y1="270" x2="704" y2="270" stroke="{FRAME}"/>'
-    f'<rect x="{56 + 2 * CW:.1f}" y="260" width="{5 * CW:.1f}" height="20" fill="{K}"/>{cells("ask", f"{56 + 3 * CW:.1f}", 275, C, weight=BOLD)}'
-    f"{tip_text}</svg>\n")
+    f"{icon}{mode_text}{tip_text}</svg>\n")
 open(sys.argv[3] if len(sys.argv) > 3 else f"{OUT}/logo.svg", "w").write(card)
 
 # the hero: the mark at 5/4 beside the word, its lines in pixel rows 2 to 4, ending 14 short of the word's leaning left side.

@@ -78,7 +78,9 @@ section > h2 + p { margin-top: 14px; }
 .mid { display: flex; flex-direction: column; min-width: 0; height: calc(33.7em + 52px); padding: 16px clamp(12px, 2vw, 22px) 14px; }
 .talk { flex: 1 1 0; min-height: 0; overflow: hidden; }
 .talk > * + * { margin-top: 12px; }
-.you { background: #242424; padding: 6px 10px; color: #fff; }
+.you { background: #2c2f35; padding: 6px 10px; color: #fff; font-weight: 700; border-left: 4px solid var(--c); }
+.you::before { content: "❯ "; color: var(--c); }
+.cost { color: var(--dim); margin-top: 2px !important; }
 .win { position: relative; border: 1px solid var(--line); border-radius: 7px; padding: 12px 12px 8px; }
 .talk > .win { margin-top: 20px; }
 .win .cap, .win .state { position: absolute; top: -0.8em; background: var(--ink); padding: 0 6px; white-space: nowrap; }
@@ -104,12 +106,17 @@ section > h2 + p { margin-top: 14px; }
 #meta { overflow: hidden; text-overflow: ellipsis; }
 .line { display: flex; align-items: flex-start; gap: .6em; margin-top: 4px; color: #fff; }
 .gt { flex: none; }
+.modeline { display: flex; align-items: center; margin-top: 6px; color: var(--dim); white-space: nowrap; }
+.icon { display: inline-flex; gap: 2px; margin: 0 .7em 0 .25em; transform: skewX(-26.565deg); }
+.icon i { width: .5em; height: .8em; box-shadow: inset 0 0 0 1px var(--c); }
+.icon i.on { background: var(--c); }
+.modeline span:last-child { margin-left: .6em; }
 .entry { min-width: 0; overflow-wrap: anywhere; }
 .caret { display: inline-block; width: .55em; height: 1.05em; background: #fff; vertical-align: -.2em; }
 .hint { color: var(--dim); margin-left: .6em; white-space: pre-wrap; }
 #typed:not(:empty) ~ .hint, .asking .caret { display: none; }
 .q { margin-right: 1.2em; }
-.keys { display: inline-block; white-space: nowrap; color: var(--dim); } .keys b { color: #fff; font-weight: 400; } .keys b ~ b { margin-left: 1.1em; } .keys b.hit { background: var(--y); color: var(--ink); }
+.keys { display: inline-block; white-space: nowrap; color: var(--dim); } .keys b { color: #fff; font-weight: 400; } .keys b ~ b { margin-left: 1.1em; } .keys u { text-decoration: none; background: #fff; color: var(--ink); font-weight: 700; padding: 0 .45em; margin-right: .7em; } .keys u.hit { background: var(--y); } .keys b.hit { background: var(--y); color: var(--ink); }
 .again { margin-top: 14px; font: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-color: var(--m); text-decoration-thickness: 2px; text-underline-offset: 3px; }
 
 /* two models */
@@ -245,15 +252,18 @@ footer span { color: var(--grey); margin-left: auto; }
         <div class="win"><span class="cap"><b>shell</b> python3 hello.py</span><span class="state">done</span><div class="body"><span class="dim">$ python3 hello.py</span>
 hello world</div></div>
         <div class="say">Saved hello.py and ran it. It prints hello world.</div>
+        <div class="cost">↑ 1.9k ↓ 310 tokens | 5s</div>
         <div class="you">now make it say hello sprint</div>
         <div class="win"><span class="cap"><b>edit</b> hello.py <em>+1 -1</em></span><span class="state">done</span><div class="body"><span class="minus">- print("hello world")</span>
 <span class="plus">+ print("hello sprint")</span></div></div>
         <div class="say">Changed. hello.py now prints hello sprint.</div>
+        <div class="cost">↑ 2.1k ↓ 190 tokens | 3s</div>
       </div>
       <div class="status"><div class="lap"><b><i></i><i></i><i></i><i></i></b></div><span>answering (<span id="secs">0</span>s | ↓ <span id="toks">0</span> tokens<span class="wide"> | medium effort</span>)</span></div>
       <div class="rule over"><i></i><span id="meta">Qwen3.5-0.8B:Q4_K_M · 9%</span></div>
-      <div class="line"><span class="gt">&gt;</span><span class="entry"><span id="typed"></span><span class="caret"></span><span class="hint">Ask anything…  / for commands</span></span></div>
-      <div class="rule under"><span id="mode">ask</span><i></i></div>
+      <div class="line"><span class="gt">❯</span><span class="entry"><span id="typed"></span><span class="caret"></span><span class="hint">Ask anything…  / for commands  ! for shell</span></span></div>
+      <div class="rule under"><i></i></div>
+      <div class="modeline"><span class="icon" aria-hidden="true"><i class="on"></i><i></i><i></i></span><span id="mode">ask</span><span> (tab to cycle)</span></div>
     </div>
     <aside class="side">
       <h4>Context <span id="pct">9%</span></h4>
@@ -391,10 +401,10 @@ hello world</div></div>
   const type = async (el, text, ms, id) => { for (const ch of text) { el.textContent += ch; down(); await wait(ms, id); } };
   const approve = async (question, id) => {
     tick(); talking = false; term.classList.add('asking');
-    typed.innerHTML = '<span class="q"></span><span class="keys"><b>y</b> once <b>a</b> always <b>n</b> no</span>';
+    typed.innerHTML = '<span class="q"></span><span class="keys"><u>y once</u> <b>a</b> always <b>n</b> no</span>';
     typed.firstChild.textContent = question; down();
     await wait(950, id);
-    typed.querySelector('b').className = 'hit';
+    typed.querySelector('u').className = 'hit';
     await wait(320, id);
     typed.textContent = ''; term.classList.remove('asking'); tick(); talking = true;
   };
@@ -415,10 +425,11 @@ hello world</div></div>
     await wait(800, id);
     return row.lastChild;
   };
-  const answer = async (text, cost, took, id) => {
+  const answer = async (text, cost, took, id, up = '1.9k') => {
     await wait(600, id);
     await type(add('say'), text, 11, id);
-    tick(); busy(false); took.textContent = cost + ', ' + $('secs').textContent + 's'; $('spd').textContent = '122 tok/s';
+    tick(); busy(false);
+    add('cost').textContent = '↑ ' + up + ' ↓ ' + $('toks').textContent + ' tokens | ' + $('secs').textContent + 's'; took.textContent = cost + ', ' + $('secs').textContent + 's'; $('spd').textContent = '122 tok/s';
   };
   async function play() {
     const id = ++run;
