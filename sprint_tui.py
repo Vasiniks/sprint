@@ -39,9 +39,12 @@ HELP = """In a message
   a large paste becomes a chip too, like [Pasted #1 +42 lines]; the model gets the full text
   ctrl+v, alt+v or /paste attaches the picture on the clipboard (a screenshot, or a copied file)
 Keys
-  enter send · tab switch mode (ask → edits → auto) · esc interrupt · ctrl+l clear · ctrl+c quit
+  enter send · shift+enter, ctrl+j, or a \\ before enter: new line
+  while it works: enter queues your message · enter on an empty prompt runs the queue now
+  esc interrupt (queued messages come back to the prompt) · ctrl+l clear · ctrl+c twice to quit
+  tab switch mode (ask → edits → auto) · up / down recall earlier messages
   ctrl+o expand or collapse all tool windows · click a window to toggle just that one
-  pgup / pgdn or the mouse wheel scroll · up / down recall earlier messages
+  the mouse wheel scrolls, and so do pgup / pgdn
 Commands
   /clear  /model [name]  /mode [ask|edits|auto]  /permissions  /think  /effort [low|medium|high]
   /context  /config [key value]  /systemprompt  /theme  /sidebar [width]  /history [width]  /tools  /mouse
@@ -244,6 +247,7 @@ class Screen:
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
         self.began, self.got, self.down = 0.0, 0, False  # this turn: when it started, characters of reply, is one arriving?
+        self.queue, self.leave = [], 0.0  # messages sent while the agent worked; until when a second ctrl+c quits
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -338,7 +342,7 @@ class Screen:
     def active(self):
         """is anything on the screen changing by itself? When nothing is, the loop sleeps instead of redrawing."""
         wave = not self.items and self.motion
-        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave
+        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave or self.queue
                     or (self.job and self.job.is_alive()) or self.esc is not None or self.pasting is not None)
 
     def busy(self):
@@ -350,6 +354,19 @@ class Screen:
             self.answer = False
             self.gate.set()
 
+    def halt(self):
+        """stop the turn and hand the queued messages back to the prompt, ahead of what is typed there: nothing
+        is lost, and nothing runs by surprise"""
+        self.interrupt()
+        if self.queue:
+            self.buf, self.queue = "\n".join(self.queue + [self.buf] * bool(self.buf)), []
+            self.cur = len(self.buf)
+
+    def advance(self):
+        """start the next queued message once nothing is running"""
+        if self.queue and not self.busy() and not self.pending:
+            self.submit(self.queue.pop(0))
+
     # --- input
 
     def submit(self, line):
@@ -358,6 +375,7 @@ class Screen:
         if cmd in ("/exit", "/quit", "/bye"):
             self.quit = True
         elif cmd in ("/new", "/clear"):
+            self.queue = []
             if not self.busy():
                 a.reset()
                 self.items, self.cache, self.scroll = [], {}, 0
@@ -473,12 +491,14 @@ class Screen:
         self.cur, self.pick = len(self.buf), 0
 
     def key(self, k):
+        if self.leave and k != "\x03":  # any other key takes back the offer to quit, and the note that made it
+            self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
         if self.pending:  # only the approval keys count while a call waits
             if k in ("y", "Y", "\n", "\r", "a", "A"):
                 self.answer = "always" if k in ("a", "A") else True
                 self.gate.set()
             elif k in ("n", "N", "\x1b", "\x03"):
-                self.interrupt() if k in ("\x1b", "\x03") else (setattr(self, "answer", False), self.gate.set())
+                self.halt() if k in ("\x1b", "\x03") else (setattr(self, "answer", False), self.gate.set())
             return
         if self.popup:
             return self.popup_key(k)
@@ -491,10 +511,15 @@ class Screen:
             if opts:
                 self.complete(opts)
             line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
-            if line and not (opts and self.buf.endswith(" ")) and (line.startswith("/") or not self.busy()):
+            if not line and self.queue and self.busy():  # nothing typed, messages waiting: stop, so they start now
+                self.interrupt()
+            elif line and not (opts and self.buf.endswith(" ")):
                 self.past.append(line)
                 self.buf, self.cur, self.at, self.scroll = "", 0, len(self.past), 0
-                self.submit(line)
+                if (self.busy() or self.queue) and not line.startswith("/"):  # the agent is working: it waits its turn
+                    self.queue.append(line)
+                else:
+                    self.submit(line)
         elif k == "\t":
             self.complete(opts) if opts else self.agent.cycle()
         elif k == curses.KEY_BTAB:
@@ -539,14 +564,17 @@ class Screen:
         elif k == curses.KEY_MOUSE:
             self.mouse()
         elif k == "\x1b":
-            self.interrupt() if self.busy() else None
-        elif k == "\x03":  # ctrl+c: clear the line, else stop the turn, else leave
+            self.halt() if self.busy() or self.queue else None
+        elif k == "\x03":  # ctrl+c: clear the line, else stop the turn, else leave once it is pressed again
             if self.buf:
                 self.buf, self.cur = "", 0
-            elif self.busy():
-                self.interrupt()
-            else:
+            elif self.busy() or self.queue:
+                self.halt()
+            elif time.time() < self.leave:
                 self.quit = True
+            else:
+                self.leave = time.time() + 2
+                self.toast = ("press ctrl+c again to quit", self.leave)
         elif k == "\x04" and not self.buf:
             self.quit = True
         elif isinstance(k, str) and k.isprintable():
@@ -1206,6 +1234,12 @@ class Screen:
         return [(" ", "")] + dash(time.time() - self.began if self.motion else None) + \
             [(f" {doing} ", ""), (f"({took} · {flow} tokens · {a.effort})", "dim")]
 
+    def queue_rows(self):
+        """the messages sent while the agent worked, in the order they will run: three at most, then how many more"""
+        rows = [[(f"  queued {n}  ", "dim"), (q.split("\n")[0] + (" …" if "\n" in q else ""), "")]
+                for n, q in enumerate(self.queue[:3], 1)]
+        return rows + [[(f"  +{len(self.queue) - 3} more", "dim")]] * (len(self.queue) > 3)
+
     def input_rows(self, bw, used=0, side=0):
         """the bar: a rule carrying the model, the prompt (or the approval question), a rule carrying the mode
         -> (rows, the typed lines on show). Where the cursor belongs is left in self.caret"""
@@ -1361,7 +1395,8 @@ class Screen:
             self.put(scr, h - 1, w - 12, [("sprint 0.3", "dim")])
         else:
             # conversation
-            mw, vh = w - side - lw - 4, top - 2  # a blank row above and below the conversation
+            waiting = self.queue_rows()
+            mw, vh = w - side - lw - 4, top - 2 - len(waiting)  # a blank row above and below the conversation
             self.page = max(1, vh - 2)
             lines = self.lines(mw)
             if self.jump is not None:  # a click in a side panel: bring that item to the top
@@ -1387,11 +1422,13 @@ class Screen:
                     right = min(x0 + mw - 1, xb) if y == yb else x0 + mw - 1
                     if right >= left:
                         self.mark(scr, y, left, right - left + 1, curses.A_REVERSE)
-            # the status line, on the blank row above the bar, and the footer
+            # the status line, on the blank row above the bar; what is queued, between the two; and the footer
             keys = [("tab", "bold"), (" mode  ", "dim"), ("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
+            for i, r in enumerate(waiting):
+                self.put(scr, top - len(waiting) + i, x0, r, width=mw)
             if self.busy():
-                self.put(scr, top - 1, x0, self.status_row(), width=mw)
-                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys[2:]
+                self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
+                keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + [("esc", "bold"), (" interrupt  ", "dim")] + keys[2:]
             if self.scroll:
                 self.put(scr, h - 1, x0, [("↓ newer messages below", "warn")])
             keys = keys if len(flat(keys)) < mw - 24 else keys[:4]
@@ -1484,6 +1521,7 @@ class Screen:
             sys.stdout.flush()
         fresh = was = True
         while not self.quit:
+            self.advance()
             now = self.active()
             if fresh or now or was:  # one more frame after things settle, then leave the screen alone
                 self.draw(scr)

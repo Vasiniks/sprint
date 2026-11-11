@@ -270,7 +270,7 @@ def test_while_a_turn_runs_the_status_is_above_the_bar_and_the_footer_is_free_fo
     rows, c = drawn(s, monkeypatch)
     assert rows[19].startswith("   " + tui.ENDS[0]) and "thinking (0s · ↑" in rows[19]  # where the blank row was
     assert rows[20].startswith("  ───") and "Qwen3.5-0.8B" in rows[20]
-    assert rows[21].startswith("  ░") and "> Ask anything" in rows[21] and c.at == (21, 9)
+    assert sorted(rows[21][2:6]) == sorted("░▒▓█") and "> Ask anything" in rows[21] and c.at == (21, 9)
     assert rows[22].startswith("  ── auto ───")
     assert "copied 12 characters" in rows[23] and rows[23].endswith("esc interrupt  ctrl+o tools  /help")
     assert "thinking" not in rows[23] and "working" not in rows[23]
@@ -303,6 +303,160 @@ def test_the_home_screen_has_the_same_bar_under_the_logo(monkeypatch):
     assert "Qwen3.5-0.8B" in rows[bar - 1] and "── auto ─" in rows[bar + 1] and c.at[0] == bar
     assert "░░░░░░░░" in rows[bar - 8] and "pgup" not in "".join(rows)
     assert rows[bar].index(">") == c.at[1] - 2
+
+
+# ---------- the queue ----------
+
+def said(s):
+    return [i["text"] for i in s.items if i["t"] == "user"]
+
+
+def stopped(s):
+    return any(i["t"] == "note" and "interrupted" in i["text"] for i in s.items)
+
+
+def test_enter_while_a_turn_runs_queues_the_message_and_it_runs_when_the_turn_is_over():
+    s, chat = slow("one", "two")
+    s.submit("first")
+    assert chat.started.wait(5)
+    typed(s, "second")
+    s.key("\n")
+    assert s.queue == ["second"] and s.buf == "" and said(s) == ["first"]
+    s.advance()  # not yet: the first turn is still running
+    assert s.queue == ["second"] and said(s) == ["first"]
+    chat.go.set()
+    finish(s)
+    assert s.active()  # something is still to happen, so the loop must not go to sleep
+    s.advance()
+    assert s.queue == []
+    finish(s)
+    assert said(s) == ["first", "second"] and not stopped(s)
+    s.advance()
+    assert not s.busy() and not s.active()
+    s.key(curses.KEY_UP)
+    assert s.buf == "second"  # a queued message is in the history like any other
+
+
+def test_a_command_typed_while_a_turn_runs_is_not_queued_and_enter_alone_does_nothing():
+    s, chat = slow("one")
+    s.submit("first")
+    assert chat.started.wait(5)
+    typed(s, "/sidebar")
+    s.key("\n")
+    assert s.queue == [] and s.buf == "" and s.sidebar is False  # it ran at once
+    s.key("\n")
+    assert s.busy() and not s.agent.cancel  # nothing queued: an empty Enter stops nothing
+    chat.go.set()
+    finish(s)
+
+
+def test_enter_on_an_empty_prompt_stops_the_turn_so_the_queue_starts_at_once():
+    s, chat = slow("too late", "second answer")
+    s.submit("first")
+    assert chat.started.wait(5)
+    typed(s, "second")
+    s.key("\n")
+    s.key("\n")
+    finish(s)
+    assert stopped(s) and s.queue == ["second"] and s.buf == ""
+    s.advance()
+    finish(s)
+    assert said(s) == ["first", "second"] and "second answer" in s.items[-1]["text"]
+
+
+def test_escape_stops_the_turn_and_puts_the_queue_back_on_the_prompt():
+    s, chat = slow("too late")
+    s.submit("first")
+    assert chat.started.wait(5)
+    for text in ("second", "third"):
+        typed(s, text)
+        s.key("\n")
+    typed(s, "half")
+    s.key("\x1b")
+    finish(s)
+    assert stopped(s) and s.queue == [] and s.buf == "second\nthird\nhalf" and s.cur == len(s.buf)
+    s.advance()
+    assert not s.busy() and said(s) == ["first"]  # nothing runs by surprise
+
+
+def test_ctrl_c_and_stopping_at_an_approval_hand_the_queue_back_too(tmp_path, monkeypatch):
+    s, chat = slow("too late")
+    s.submit("first")
+    assert chat.started.wait(5)
+    typed(s, "second")
+    s.key("\n")
+    s.key("\x03")
+    finish(s)
+    assert stopped(s) and s.buf == "second" and s.queue == [] and not s.quit
+    monkeypatch.chdir(tmp_path)
+    s = screen("```shell\necho 1\n```", "ok", mode="ask")
+    s.submit("go")
+    for _ in range(200):
+        if s.pending:
+            break
+        s.worker.join(0.02)
+    s.queue = ["later"]
+    s.advance()  # an approval is waiting: the queue waits with it
+    assert s.queue == ["later"]
+    s.key("\x1b")
+    finish(s)
+    assert s.buf == "later" and s.queue == []
+
+
+def test_clear_empties_the_queue():
+    s = screen()
+    s.queue = ["one", "two"]
+    s.submit("/clear")
+    assert s.queue == []
+
+
+def test_queued_messages_are_listed_above_the_bar_three_at_most(monkeypatch):
+    s, chat = slow("ok")
+    s.submit("go")
+    assert chat.started.wait(5)
+    s.queue = ["then run the tests", "and\ncommit"]
+    rows, _ = drawn(s, monkeypatch)
+    assert "thinking (" in rows[17] and rows[18:20] == ["    queued 1  then run the tests", "    queued 2  and …"]
+    assert "Qwen3.5-0.8B" in rows[20] and "enter run queued now  esc interrupt" in rows[23]
+    s.queue += ["three", "four", "five"]
+    rows, _ = drawn(s, monkeypatch)
+    assert "thinking (" in rows[15] and rows[18:20] == ["    queued 3  three", "    +2 more"] and "go" in rows[1]
+    chat.go.set()
+    finish(s)
+
+
+# ---------- leaving ----------
+
+def test_ctrl_c_asks_to_be_pressed_again_before_it_quits(monkeypatch):
+    s = screen()
+    typed(s, "half a thought")
+    s.key("\x03")
+    assert s.buf == "" and not s.quit and not s.note_text()  # with text on the prompt it only clears the line
+    s.key("\x03")
+    assert not s.quit and "ctrl+c again to quit" in s.note_text()
+    s.key("x")  # any other key takes it back, and the note with it
+    assert not s.note_text()
+    s.key("\x15")
+    s.key("\x03")
+    assert not s.quit
+    s.key("\x03")
+    assert s.quit
+
+
+def test_the_second_ctrl_c_must_come_within_two_seconds_and_ctrl_d_still_leaves_at_once(monkeypatch):
+    s, now = screen(), [1000.0]
+    monkeypatch.setattr(tui.time, "time", lambda: now[0])
+    s.key("\x03")
+    now[0] += 2.5
+    assert not s.note_text()  # the offer has lapsed, and so has its note
+    s.key("\x03")
+    assert not s.quit and s.note_text()
+    now[0] += 1
+    s.key("\x03")
+    assert s.quit
+    s = screen()
+    s.key("\x04")
+    assert s.quit
 
 
 class Window:
