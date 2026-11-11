@@ -289,7 +289,8 @@ for _hue in HUES:  # each of the three colours also in bold and in dim, for the 
 SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline",
         "[27;5;13~": "newline", "[13;5u": "newline"}  # and ctrl+enter, which the same terminals report the same way
 MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports with its modifiers, whole or still arriving
-DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching"}  # a tool at work
+DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching",
+         "think": "thinking"}  # a tool at work, or the reasoning coming down
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
@@ -508,7 +509,7 @@ class Screen:
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
-        agent.show_plan = self.show_plan
+        agent.show_plan, agent.show_thinking = self.show_plan, self.show_thinking
 
     def load_ui(self):
         kept = sprint.load_config()
@@ -586,10 +587,17 @@ class Screen:
         self.items.append({"t": "tool", "call": c, "result": None, "state": "running", "open": False, "began": time.time(),
                            "old": c.tool == "write" and os.path.isfile(os.path.expanduser(c.arg))})
 
+    def show_thinking(self, text, state="running"):
+        """the reasoning so far, each time it has grown: one item from its first words on, and what came down counted once"""
+        it = self.items[-1] if self.items else None
+        if not (it and it["t"] == "tool" and it["call"].tool == "think" and it["state"] == "running"):
+            it = {"t": "tool", "call": sprint.Call("think", "", "", 0, 0), "result": "", "state": "running", "open": False, "old": False}
+            self.items.append(it)
+        self.got, self.down = self.got + len(text) - len(it["result"]), True
+        it["result"], it["state"] = text, state
+
     def show_thought(self, text):
-        self.got, self.down = self.got + len(text), True
-        self.items.append({"t": "tool", "call": sprint.Call("think", "", "", 0, 0), "result": text, "state": "done",
-                           "open": False, "old": False})
+        self.show_thinking(text, "done")  # the reasoning is over: the item it grew in, or a new one if it came all at once
 
     def show_result(self, r):
         it = self.items[-1]
@@ -1721,10 +1729,12 @@ class Screen:
         c, inner = it["call"], w - 4
         full = it["open"] or (c.tool == "think" and self.showthink)
         if c.tool == "think":  # reasoning is not an action: no status and no time, only how much of it there is
-            said = it["result"] or ""
-            name = [("thought", "dim"), (f"  {len(said.split())} words ", "dim")]
-            if not full:  # folded: one line saying it thought; click it, or /showthink for all
-                return [("", clip([("  ┄ ", "frame")] + name, w), it)]
+            said, live = it["result"] or "", it["state"] == "running"  # live: still being written, and growing on the screen
+            name = [("thinking" if live else "thought", "dim"), (f"  {len(said.split())} words ", "dim")]
+            if not full:  # folded: one line saying it thought, or is thinking and its newest words; click it, or /showthink for all
+                last, room = " ".join(said.split()), max(0, w - len(flat(name)) - 7)
+                last = last if len(last) <= room else "… " + last[len(last) - room:].split(" ", 1)[-1]  # cut between words
+                return [("", clip([("  ┄ ", "frame")] + name + [(" " + last, "thought")] * live, w), it)]
             top = [("┌┄ ", "frame")] + name
             rows = [r for x in said.splitlines() for r in wrap([(x.replace("\t", "    "), "thought")], inner)]  # wrapped, never cut
             return [("", top + [("┄" * (w - len(flat(top)) - 1) + "┐", "frame")], it)] + \
@@ -1770,7 +1780,7 @@ class Screen:
         out = []
         for it in self.items:
             key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
-                   self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"))
+                   self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""))  # a thought grows
             if self.cache.get(id(it), (None,))[0] != key:
                 if it["t"] == "tool":
                     rows = self.window(it, w)

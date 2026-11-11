@@ -182,6 +182,12 @@ def unthink(text):
     return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S)
 
 
+def thoughts(text, live=False):
+    """the reasoning in a reply; while it is still arriving (live), without a last piece that may yet be its closing tag"""
+    text = re.sub(r"</?t?h?i?n?k?$", "", text) if live else text
+    return " ".join(re.findall(r"<think>(.*?)(?:</think>|$)", text, re.S)).strip()
+
+
 # ---------- tools ----------
 
 def clip(s, cap):
@@ -704,7 +710,7 @@ class Agent:
         sent = self.extra() + sum(weigh(m) for m in self.msgs)
         room = self.ctx - self.used() - self.ctx // 16  # a long file needs a long reply: up to half the window,
         self.limit = max(self.max_out, min(self.ctx // 2, room))  # no more, or a rambling model wastes minutes
-        buf, cut, shown, raw, told = "", False, 0, None, False
+        buf, cut, shown, raw, told, mused = "", False, 0, None, False, ""
         keep = ("role", "content", "tool_calls", "tool_name") + (() if self.url.rstrip("/").endswith("/v1") else ("images",))
         stream = self.chat([{k: m[k] for k in keep if k in m} for m in self.msgs])
         began, wrote, secs, asked, self.thread = time.time(), 0, 0.0, 0, threading.get_ident()
@@ -722,9 +728,12 @@ class Agent:
                     wrote, secs = chunk.get("out", wrote), chunk.get("secs", secs)
                     continue
                 buf += chunk
-                text = unthink(buf).lstrip()
+                text, mind = unthink(buf).lstrip(), thoughts(buf, True) if self.think and not told else ""
                 if text and not told:  # the reasoning is over: show it before the answer
-                    told = self.thought(buf)
+                    told = self.thought(buf, mused)
+                elif len(mind) > len(mused):  # still reasoning: show how far it has got
+                    mused = mind
+                    self.show_thinking(mused)
                 peek = parse(text, final=True)  # a tool block is hidden while it streams, then drawn properly
                 vis = text[:peek.start] if peek else text
                 if not peek and vis[vis.rfind("\n") + 1:].lstrip().startswith("`"):
@@ -750,6 +759,8 @@ class Agent:
             getattr(stream, "close", lambda: None)()
             SOCKETS.pop(self.thread, None)
             self.status("")
+            if mused and not told:  # reasoning that was on show is closed however the reply ended: stopped, cut, or nothing after it
+                told = self.thought(buf, mused)
         if self.cancel:
             raise KeyboardInterrupt
         self.took = time.time() - began
@@ -789,11 +800,20 @@ class Agent:
             return f"fetch {u.scheme}://{u.netloc}/*"
         return f"{c.tool} {glob.escape(self.target(c))}"
 
-    def thought(self, buf):
-        text = " ".join(re.findall(r"<think>(.*?)(?:</think>|$)", buf, re.S)).strip()
-        if text and self.think:
+    def thought(self, buf, begun=""):
+        """the reasoning is over: hand it on whole. What was shown as it arrived (begun) is closed even if thinking went off since"""
+        text = thoughts(buf)
+        if text and (self.think or begun):
             self.show_thought(text)
         return True
+
+    def show_thinking(self, text):
+        """the reasoning so far, each time it has grown: a terminal's passing line counts its words and shows the newest,
+        as many as fit on one line. show_thought gets the whole of it once it is over"""
+        words, room = text.split(), max(0, shutil.get_terminal_size().columns - 32)
+        said = " ".join(words)
+        last = said if len(said) <= room else said[len(said) - room:].split(" ", 1)[-1]  # cut between words, not through one
+        self.status(f"thinking · {len(words)} word{'s' * (len(words) != 1)} · {last}")
 
     def show_thought(self, text):
         lines = text.splitlines()
