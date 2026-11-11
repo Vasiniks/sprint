@@ -57,7 +57,7 @@ WINDOWS = os.name == "nt"  # there: PowerShell instead of bash, taskkill instead
 
 def here(cap=400):
     """the folder's files, for the system prompt: tiny models stop claiming they can't see them"""
-    names = ", ".join(sorted(x.name + "/" * x.is_dir() for x in Path(".").iterdir() if not x.name.startswith(".")))
+    names = ", ".join(sorted(x.name + "/" * x.is_dir() for x in Path(folder()).iterdir() if not x.name.startswith(".")))
     return "Files here: " + (names if len(names) <= cap else names[:cap] + " ...") if names else "The folder is empty."
 
 
@@ -303,12 +303,30 @@ def kill_tree(p):
         pass
 
 
+SEEN = [""]  # the last working folder known to exist
+
+
+def folder():
+    """the folder sprint is working in. A command can delete it (a model once removed the one it was running in), and
+    then nothing can even ask where it is: step up to the nearest folder that is still there and carry on from it"""
+    try:
+        SEEN[0] = os.getcwd()
+    except OSError:
+        at = Path(SEEN[0] or Path.home())
+        while not at.is_dir() and at != at.parent:
+            at = at.parent
+        os.chdir(at if at.is_dir() else Path.home())
+        SEEN[0] = os.getcwd()
+    return SEEN[0]
+
+
 def own_group():
     """Popen options that give a command its own process group, so stopping it never stops sprint"""
     return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {"start_new_session": True}
 
 
 def shell(cmd, cap=4000, timeout=60):
+    was = folder()
     fd, tmp = tempfile.mkstemp()
     os.close(fd)
     p = subprocess.Popen(shell_argv(cmd, tmp), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -319,8 +337,10 @@ def shell(cmd, cap=4000, timeout=60):
     try:
         out = p.communicate(timeout=timeout)[0]
         cwd = Path(tmp).read_text(encoding="utf-8-sig", errors="replace").strip()
-        if cwd:
-            os.chdir(cwd)
+        try:
+            os.chdir(cwd) if cwd else None
+        except OSError:
+            pass  # the folder it ended in is gone: it deleted it
     except (subprocess.TimeoutExpired, KeyboardInterrupt) as e:
         kill_tree(p)
         try:
@@ -335,6 +355,8 @@ def shell(cmd, cap=4000, timeout=60):
         os.unlink(tmp)
     if p.returncode and not note:
         note = f"\n[exit {p.returncode}]"
+    if not os.path.isdir(was):  # it deleted the folder it was started in: say so, and where things stand now
+        note += f"\n[the working folder {was} was deleted by this command; now working in {folder()}]"
     return (clip(out.strip(), cap) or "(no output)") + note
 
 
@@ -905,7 +927,7 @@ class Agent:
     def _run(self, task, chips=None):
         self.msgs[0]["content"] = self.system()  # refresh the file listing
         self.cancel = False
-        log("message", text=task[:300], model=self.model, mode=self.mode, cwd=os.getcwd())
+        log("message", text=task[:300], model=self.model, mode=self.mode, cwd=folder())
         text, images = attach(task, self.cap, chips)
         self.reply(None, text, human=True)
         if images:
@@ -1080,7 +1102,7 @@ def log(kind, **data):
 
 def transcript(agent):
     """the conversation as markdown"""
-    out = ["# sprint conversation", "", f"{agent.model} · {time.strftime('%Y-%m-%d %H:%M')} · {os.getcwd()}", ""]
+    out = ["# sprint conversation", "", f"{agent.model} · {time.strftime('%Y-%m-%d %H:%M')} · {folder()}", ""]
     for m in agent.msgs[1:]:
         if m["role"] == "user" and m.get("human"):
             out += ["## You", "", m["content"], ""]
@@ -1412,7 +1434,7 @@ def command(agent, line):
                 return note(f"cannot go there: {arg} is not a folder")
             os.chdir(path)  # the file listing in the system prompt follows at the next message
             save_config(recent=([path] + [p for p in load_config().get("recent", []) if p != path])[:6])
-        return note("working in " + os.getcwd().replace(str(Path.home()), "~", 1))
+        return note("working in " + folder().replace(str(Path.home()), "~", 1))
     if cmd in ("/systemprompt", "/system"):
         if arg == "reset":
             agent.custom = ""
@@ -1693,7 +1715,7 @@ def main():
     except ImportError:
         pass
     say("◆ sprint", "1;35")
-    say(f"  {agent.model} · {os.getcwd().replace(str(Path.home()), '~', 1)}\n", "2")
+    say(f"  {agent.model} · {folder().replace(str(Path.home()), '~', 1)}\n", "2")
     say(f"  {'shift+tab' if hotkey else '/mode'} switches ask → edits → auto · /help for more\n", "2")
     line, draft, gap = " ".join(a.task), "", "\n"
     while True:

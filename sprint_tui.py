@@ -743,14 +743,14 @@ class Screen:
 
     def files(self, part):
         """files under this folder whose path contains part, best matches first (for @ completion)"""
-        if time.time() - self.tree[0] > 3 or self.tree[1] != os.getcwd():
+        if time.time() - self.tree[0] > 3 or self.tree[1] != sprint.folder():
             found = []
             for root, dirs, names in os.walk("."):
                 dirs[:] = [] if root.count(os.sep) >= 3 else sorted(d for d in dirs if not d.startswith(".") and d not in SKIP)
                 found += [os.path.join(root, n)[2:] for n in sorted(names) if not n.startswith(".")]
                 if len(found) > 2000:
                     break
-            self.tree = (time.time(), os.getcwd(), found)
+            self.tree = (time.time(), sprint.folder(), found)
         low = part.lower()
         hits = [p for p in self.tree[2] if low in p.lower() and p != part]
         return sorted(hits, key=lambda p: (not os.path.basename(p).lower().startswith(low), p))[:20]
@@ -1519,7 +1519,7 @@ class Screen:
 
     def dir_popup(self, at=None):
         """a small folder browser: enter goes into a folder; nothing changes until you choose to work there"""
-        at = os.path.abspath(at or os.getcwd())
+        at = os.path.abspath(at or sprint.folder())
         tilde = lambda p: p.replace(str(Path.home()), "~", 1)
         try:
             subs = sorted(d.name for d in os.scandir(at) if d.is_dir() and not d.name.startswith("."))
@@ -1882,7 +1882,7 @@ class Screen:
             tips = [("/", "bold"), (" commands   ", "dim"), ("ctrl+c", "bold"), (" quit", "dim")]
             self.put(scr, top + len(rows), bx, self.mode_row(), width=bw - len(flat(tips)) - 2)
             self.put(scr, top + len(rows), bx + bw - len(flat(tips)), tips)
-            where = os.getcwd().replace(str(Path.home()), "~", 1)
+            where = sprint.folder().replace(str(Path.home()), "~", 1)
             # bottom left: the version, and a newer one when there is one; a passing note takes its place while it lasts
             version = clip([(self.note_text(), "warn")], max(20, w // 2)) if self.note_text() else self.version_text()
             self.put(scr, h - 1, 2, version, width=w - 4)
@@ -1954,7 +1954,7 @@ class Screen:
                     self.hits[("side", 9 + i)] = item
                 if not log:
                     self.put(scr, 9, x, [("nothing yet", "dim")])
-                self.put(scr, h - 1, x, [(os.getcwd().replace(str(Path.home()), "~", 1), "dim")], width=inner)
+                self.put(scr, h - 1, x, [(sprint.folder().replace(str(Path.home()), "~", 1), "dim")], width=inner)
                 for y in range(h):
                     self.put(scr, y, w - side - 1, [("┃" if self.drag == "right" else "│", a.mode if self.drag == "right" else "frame")])
             if lw:  # left panel: your messages, newest at the bottom
