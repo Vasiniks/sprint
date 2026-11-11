@@ -127,22 +127,55 @@ def test_fetch_latest_reads_the_version_line_of_the_published_project_file(monke
     assert sprint.fetch_latest() == "1.2.3" and seen[0].startswith("https://raw.githubusercontent.com/Vasiniks/sprint/")
 
 
-def test_the_screen_shows_the_version_and_a_newer_one_beside_it():
-    s = Screen(Agent(chat=scripted(), out=io.StringIO()))
-    assert flat(s.version_text()) == "sprint " + sprint.VERSION
-    s.newer = "9.9.9"
-    assert flat(s.version_text()) == f"sprint {sprint.VERSION} · 9.9.9 is out: sprint update" and s.version_text()[-1][1] == "warn"
-
-
-def test_the_version_sits_bottom_left_of_the_opening_screen_and_says_when_a_newer_one_is_out(tmp_path, monkeypatch):
+def drawn(tmp_path, monkeypatch, talk=False, history=True, w=120):
+    """a screen drawn once on a stand-in terminal: the opening screen, or one with a conversation on it"""
     from test_popups import Scr
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(tui.curses, "curs_set", lambda n: None)
     monkeypatch.setattr(tui.curses, "color_pair", lambda n: n << 8)
-    s, scr = Screen(Agent(chat=scripted(), out=io.StringIO())), Scr(30, 120)
+    s, scr = Screen(Agent(chat=scripted(), out=io.StringIO())), Scr(30, w)
+    s.items = [{"t": "user", "text": "hello"}, {"t": "text", "text": "hi"}] * talk
+    s.history = history
     s.draw(scr)
-    bottom = scr.text(29)
-    assert bottom.startswith("  sprint " + sprint.VERSION + " ") and bottom.rstrip().endswith(tmp_path.name)  # the folder moved right
+    return s, scr
+
+
+def test_the_version_is_its_own_line_and_a_newer_one_another_in_another_colour():
+    s = Screen(Agent(chat=scripted(), out=io.StringIO()))
+    assert s.version_text() == [("sprint " + sprint.VERSION, "dim")] and s.update_text(40) == []
+    s.newer = "9.9.9"
+    assert s.version_text() == [("sprint " + sprint.VERSION, "dim")]
+    assert s.update_text(40) == [("9.9.9 is out: sprint update", "warn")]
+    assert flat(s.update_text(22)) == "↑ 9.9.9 sprint update" and flat(s.update_text(12)) == "↑ 9.9.9"  # said shorter where it is narrow
+
+
+def test_on_the_opening_screen_the_version_is_bottom_left_with_a_newer_one_on_the_line_above(tmp_path, monkeypatch):
+    s, scr = drawn(tmp_path, monkeypatch)
+    assert scr.text(29).startswith("  sprint " + sprint.VERSION + " ") and scr.text(29).rstrip().endswith(tmp_path.name)
+    assert not scr.text(28).strip()
     s.newer = "9.9.9"
     s.draw(scr)
-    assert scr.text(29).startswith(f"  sprint {sprint.VERSION} · 9.9.9 is out: sprint update")
+    assert scr.text(29).startswith("  sprint " + sprint.VERSION + " ") and scr.text(28).startswith("  9.9.9 is out: sprint update")
+
+
+def test_in_a_conversation_the_version_stays_bottom_left_under_your_messages(tmp_path, monkeypatch):
+    s, scr = drawn(tmp_path, monkeypatch, talk=True)
+    w, lw, side = s.geo
+    assert lw and scr.text(29)[:lw].strip() == "sprint " + sprint.VERSION
+    s.newer = "9.9.9"
+    s.draw(scr)
+    assert scr.text(29)[:lw].strip() == "sprint " + sprint.VERSION and scr.text(28)[:lw].strip() == "↑ 9.9.9 sprint update"
+    for n in range(40):  # however many messages there are, they never run into it
+        s.items += [{"t": "user", "text": f"message {n}"}, {"t": "text", "text": "ok"}]
+    s.draw(scr)
+    assert scr.text(29)[:lw].strip() == "sprint " + sprint.VERSION and scr.text(28)[:lw].strip() == "↑ 9.9.9 sprint update"
+    assert not scr.text(27)[:lw].strip()
+
+
+def test_without_the_message_list_the_version_follows_the_mode_at_the_bottom_left(tmp_path, monkeypatch):
+    s, scr = drawn(tmp_path, monkeypatch, talk=True, history=False)
+    assert s.geo[1] == 0 and "sprint " + sprint.VERSION in scr.text(29)
+    assert scr.text(29).index("sprint " + sprint.VERSION) < 60
+    s.newer = "9.9.9"
+    s.draw(scr)
+    assert "↑ 9.9.9" in scr.text(29) or "9.9.9 is out" in scr.text(29)  # said as fully as the room beside the key hints allows

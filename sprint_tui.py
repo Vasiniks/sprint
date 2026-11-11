@@ -1745,8 +1745,14 @@ class Screen:
             [(f"  {held} waiting for you: /permissions", "warn")] * bool(held)
 
     def version_text(self):
-        """this version, and beside it a newer one when there is one to get"""
-        return [("sprint " + sprint.VERSION, "dim")] + ([(" · ", "dim"), (f"{self.newer} is out: sprint update", "warn")] if self.newer else [])
+        """this version: always there, bottom left"""
+        return [("sprint " + sprint.VERSION, "dim")]
+
+    def update_text(self, width):
+        """a newer version, when there is one to get: for the line above this one's, in a colour of its own, and said
+        as fully as the width allows. Nothing when this is the newest"""
+        said = [f"{self.newer} is out: sprint update", f"↑ {self.newer} sprint update", f"↑ {self.newer}"]
+        return [(next((s for s in said if len(s) <= width), said[-1])[:max(0, width)], "warn")] if self.newer else []
 
     def verb(self):
         """one or two words for what is happening right now"""
@@ -2002,6 +2008,7 @@ class Screen:
             # bottom left: the version, and a newer one when there is one; a passing note takes its place while it lasts
             version = clip([(self.note_text(), "warn")], max(20, w // 2)) if self.note_text() else self.version_text()
             self.put(scr, h - 1, 2, version, width=w - 4)
+            self.put(scr, h - 2, 2, self.update_text(w - 4))  # a newer one: on the line above, in its own colour
             room = w - 8 - len(flat(version))
             if room >= 12:
                 where = where if len(where) <= room else "…" + where[-(room - 1):]  # the end of a long path says more
@@ -2051,6 +2058,12 @@ class Screen:
             elif self.scroll:
                 keys = [("end", "bold"), (" or click ↓ for the newest", "dim")]
             keys = keys if len(flat(keys)) < mw - len(flat(under)) - 2 else keys[:2] if len(keys) > 2 else clip(keys, max(4, mw - len(flat(under)) - 2))
+            if not lw:  # no message list to stand under: the version follows the mode, a newer one after it, where there is room
+                extra = [("  ", "")] + self.version_text()
+                room = mw - len(flat(under)) - len(flat(keys)) - 4 - len(flat(extra))
+                if room >= 0:
+                    newer = [(" · ", "dim")] + self.update_text(room - 3) if self.newer and room - 3 >= len(self.newer) + 2 else []
+                    under = under + extra + newer
             self.put(scr, h - 1, x0, under, width=mw)
             self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)
             if side:  # right panel: the context window in small, then what the agent has done
@@ -2084,7 +2097,9 @@ class Screen:
                 rows = self.outline()
                 self.areas["left"] = (1, lw - 1, 0, h - 1)
                 self.put(scr, 1, 1, [("Messages", "dim")], width=lw - 3)
-                for i, (item, title, meta) in enumerate(rows[-max(1, (h - 4) // 2):]):
+                self.put(scr, h - 1, 1, self.version_text(), width=lw - 2)  # bottom left, always: the version,
+                self.put(scr, h - 2, 1, self.update_text(lw - 3))           # and over it a newer one when there is one
+                for i, (item, title, meta) in enumerate(rows[-max(1, (h - 7) // 2):]):  # the list stops a line short of them
                     latest = item is rows[-1][0]
                     self.put(scr, 3 + i * 2, 1, [(t, "bold" if latest and not r else r) for t, r in title], width=lw - 3)
                     self.put(scr, 4 + i * 2, 1, meta, width=lw - 3)

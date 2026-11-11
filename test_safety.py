@@ -59,7 +59,7 @@ def test_the_screen_draws_on_after_the_working_folder_is_deleted(nest, monkeypat
     s.items = [{"t": "text", "text": "hello"}]
     s.sidebar = True
     s.draw(scr)  # and so does the side panel
-    assert os.path.samefile(os.getcwd(), nest) and "sprint" not in scr.text(29)[:10]  # in the conversation, not back at the start
+    assert os.path.samefile(os.getcwd(), nest) and "hello" in "".join(scr.text(y) for y in range(6))  # the conversation, drawn
 
 
 # ---------- a command that deletes is always put to you first ----------
