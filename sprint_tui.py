@@ -1420,6 +1420,13 @@ class Screen:
             p["cursor"] = (1 + e["row"] - e["top"], e["col"] - shift)
             hint = " ctrl+s save · ctrl+r default · esc cancel "
             return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], None, None
+        if p.get("tabs"):  # a strip of pages under the title, the one on show marked
+            strip, p["tabs_at"] = [("│ ", "frame")], []
+            for n, (name, _) in enumerate(p["tabs"]):
+                at = len(flat(strip))
+                strip += [(f" {name} ", "chosen" if n == p["tab"] else "dim"), (" ", "")]
+                p["tabs_at"].append((at, at + len(name) + 2, n))
+            lines.append(clip(strip, w - 2) + [(" " * max(0, w - 2 - len(flat(strip))) + " │", "frame")])
         if p["field"]:
             field_at = len(lines)
             lines.append([("│ ", "frame")] + clip([(p["field"]["label"] + " ", "dim"), (p["field"]["text"], "")], w - 4) + [(" │", "frame")])
@@ -1434,7 +1441,7 @@ class Screen:
                 p["at"][len(lines)] = nth[id(r)]
             lines.append([("│ ", "frame")] + clip(r["s"], w - 4) + [(" │", "frame")])
         field = p["field"] or {}
-        hint = " " + " · ".join(x for x in ("↑↓ move" if len(can) > 1 else "", "type to filter" if field.get("filter") else "",
+        hint = " " + " · ".join(x for x in ("←→ pages" if p.get("tabs") else "", "↑↓ move" if len(can) > 1 else "", "type to filter" if field.get("filter") else "",
                                            "enter choose" if can and p["pick"] else "enter confirm" if field.get("submit") else "",
                                            "esc back" if p["back"] else "esc close") if x) + " "
         return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], sel_at, field_at
@@ -1462,6 +1469,8 @@ class Screen:
             return self.popup_to(p["sel"] - turn)
         if press and not inside:
             return self.popup_key("\x1b")
+        if press and p.get("tabs") and y == py + 1:  # a click on a page's name turns to it
+            return [self.popup_tab(n) for a, b, n in p.get("tabs_at", []) if px + a <= x < px + b] and None
         p["held"] = at if press or (held == at and not state & curses.BUTTON1_RELEASED) else None
         if at is not None:
             self.popup_to(at)
@@ -1480,6 +1489,10 @@ class Screen:
             self.popup = None
             if p["back"]:
                 p["back"]()
+        elif p.get("tabs") and k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):
+            self.popup_tab(p["tab"] + (1 if k in (curses.KEY_RIGHT, "\t") else -1))
+        elif p.get("tabs") and isinstance(k, str) and k.isdigit() and 1 <= int(k) <= len(p["tabs"]):
+            self.popup_tab(int(k) - 1)
         elif k in (curses.KEY_UP, curses.KEY_DOWN) and can:
             self.popup_to((p["sel"] + (1 if k == curses.KEY_DOWN else -1)) % len(can))
         elif k in (curses.KEY_PPAGE, curses.KEY_NPAGE) and can:
@@ -1569,7 +1582,7 @@ class Screen:
         return {"/systemprompt": self.prompt_popup, "/system": self.prompt_popup, "/theme": self.theme_popup,
                 "/directory": self.dir_popup, "/dir": self.dir_popup, "/cd": self.dir_popup,
                 "/log": lambda: self.pop("Log", [row(list(r)) for r in sprint.command(self.agent, "/log")]),
-                "/usage": lambda: self.pop("Usage", [row(list(r), n) for n, r in enumerate(sprint.command(self.agent, "/usage"))]),
+                "/usage": self.usage_popup,
                 "/race": self.race_popup, "/model": self.model_popup, "/mode": self.mode_popup,
                 "/permissions": lambda: self.mode_popup("Permissions"),
                 "/effort": self.effort_popup, "/context": self.context_popup, "/config": self.config_popup, "/help": self.help_popup}
@@ -1580,6 +1593,16 @@ class Screen:
         self.popup = None
         self.load_ui()
         self.tell(flat(rows[0]) if rows else "")
+
+    def usage_popup(self):
+        """/usage, a tab to a page: left and right (or tab, or its number, or a click) turn them, up and down scroll"""
+        tabs = [(name, [row(list(r), n) for n, r in enumerate(rows)]) for name, rows in sprint.usage_pages(self.agent)]
+        self.pop("Usage", tabs[0][1]).update(tabs=tabs, tab=0)
+
+    def popup_tab(self, n):
+        p = self.popup
+        p["tab"] = n % len(p["tabs"])
+        p["rows"], p["sel"], p["top"] = p["tabs"][p["tab"]][1], 0, 0
 
     def background(self, work):
         self.job = threading.Thread(target=work, daemon=True)

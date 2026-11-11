@@ -1310,8 +1310,9 @@ def bar(n, top, width=20):
     return "█" * max(1 if n else 0, round(width * n / top)) if top else ""
 
 
-def usage_rows(agent):
-    """/usage: this session, what is in the window now, the last fourteen days, each model, and everything so far"""
+def usage_pages(agent):
+    """/usage, a page to a subject: this session with its tokens taken apart, the last fourteen days as a chart with
+    the lifetime under it, and every model ranked -> [(title, rows), ...]"""
     s, days = agent.tally, load_usage()
     add(days.setdefault(time.strftime("%Y-%m-%d"), blank()), agent.unsaved)  # the turn in progress is not on disk yet
     life = blank()
@@ -1331,34 +1332,59 @@ def usage_rows(agent):
             [line((f"generating {clock(t['secs'])}" + (f" at {t['written'] / t['secs']:.0f} tok/s" if t["secs"] else ""), "dim")),
              line((" · ".join(f"{k} {v}" for k, v in sorted(t["tools"].items(), key=lambda kv: -kv[1])) or "no tool calls", "dim"))]
 
-    rows = [head("Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
-                            f"{clock(time.time() - agent.started)} ago · {name(agent.model)[:30]}")]
-    rows += about(s) if s["messages"] or s["replies"] else [line(("nothing yet this session", "dim"))]
-
+    # --- the session: what it used, the tokens taken apart, and what is in the window now
+    session = [head("Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
+                               f"{clock(time.time() - agent.started)} ago · {name(agent.model)[:30]}")]
+    session += about(s) if s["messages"] or s["replies"] else [line(("nothing yet this session", "dim"))]
+    if s["replies"]:
+        n, calls = s["replies"], sum(s["tools"].values())
+        session += [[], head("Token analysis"),
+                    line(("per reply   ", ""), (f"↑ {human(s['sent'] / n)} sent · ↓ {human(s['written'] / n)} written · {s['secs'] / n:.1f}s", "bold")),
+                    line(("reasoning   ", ""), (f"{s['reasoning'] * 100 // max(1, s['written'])}%", "bold"), (" of what was written", "dim")),
+                    line(("going up    ", ""), (f"{s['sent'] / max(1, s['written']):.0f}", "bold"),
+                         (" sent for every token written", "dim")),
+                    line(("tool calls  ", ""), (f"{calls / max(1, s['messages']):.1f}", "bold"), (" a message", "dim"),
+                         (f" · {s['failed'] * 100 // calls}% failed" if calls and s["failed"] else "", "dim"))]
     parts = agent.breakdown()
     top = max(n for _, n in parts) or 1
-    rows += [[], head("In the window now", f"  {human(agent.used())} of {human(agent.ctx)} tokens")]
-    rows += [line((f"{what:<24}", ""), (f"{human(n):>6} ", "bold"), (bar(n, top, 24), SHADE.get(what, "dim"))) for what, n in parts]
+    session += [[], head("In the window now", f"  {human(agent.used())} of {human(agent.ctx)} tokens")]
+    session += [line((f"{what:<24}", ""), (f"{human(n):>6} ", "bold"), (bar(n, top, 24), SHADE.get(what, "dim"))) for what, n in parts]
 
+    # --- the days: a column for each of the last fourteen, the busy ones listed, then everything so far
     last = [time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400 * back)) for back in range(13, -1, -1)]
     wrote = [days[d]["written"] if d in days else 0 for d in last]
-    peak = max(wrote)
+    peak, tall = max(wrote), 6
     spark = "".join("▁▂▃▄▅▆▇█"[min(7, n * 8 // (peak + 1))] if n else " " for n in wrote)
-    rows += [[], head("Last 14 days", "  tokens written each day"),
-             line((spark, "magenta"), (f"  most: {human(peak)} on {last[wrote.index(peak)][5:]}" if peak else "  nothing written", "dim"))]
-    rows += [line((d[5:] + "  ", "dim"), (f"↑ {human(days[d]['sent']):>6}  ↓ {human(days[d]['written']):>6}  ", ""),
-                  (f"{days[d]['replies']:>4} replies  ", "dim"), (bar(days[d]["written"], peak, 16), "magenta"))
-             for d in last[-7:] if d in days and days[d]["replies"]]
+    eighths = [max(1, round(n * tall * 8 / peak)) if n else 0 for n in wrote] if peak else [0] * 14
+    activity = [head("Last 14 days", "  tokens written each day"),
+                line((spark, "magenta"), (f"  most: {human(peak)} on {last[wrote.index(peak)][5:]}" if peak else "  nothing written", "dim")), []]
+    for level in range(tall - 1, -1, -1):  # from the top row down; a column's last cell is filled by eighths
+        cells = "".join(" ▁▂▃▄▅▆▇█"[max(0, min(8, e - level * 8))] * 2 + " " for e in eighths)
+        activity.append(line((f"{human(peak) if level == tall - 1 and peak else '':>6} ", "dim"), (cells, "magenta")))
+    activity.append(line((" " * 7 + "".join(d[8:] + " " for d in last), "dim")))
+    used = [d for d in last if d in days and days[d]["replies"]]
+    activity += [[]] + [line((d[5:] + "  ", "dim"), (f"↑ {human(days[d]['sent']):>6}  ↓ {human(days[d]['written']):>6}  ", ""),
+                             (f"{days[d]['replies']:>4} replies  ", "dim"), (bar(days[d]["written"], peak, 16), "magenta")) for d in used[-7:]]
+    activity += [line((f"busiest {last[wrote.index(peak)][5:]} with {human(peak)} written · {len(used)} of these 14 days with use", "dim"))] if peak else []
+    activity += [[], head("Lifetime", f"  since {min(days)}, {len(days)} day{'s' * (len(days) != 1)} with use")] + about(life)
 
-    rows += [[], head("Models", "  every session")]
-    for model, m in sorted(life["models"].items(), key=lambda kv: -kv[1].get("written", 0))[:8]:
+    # --- the models: every one ever used, by what it wrote
+    models = [head("Models", "  every session, by tokens written")]
+    ranked = sorted(life["models"].items(), key=lambda kv: -kv[1].get("written", 0))[:10]
+    most, whole = max([m.get("written", 0) for _, m in ranked] + [1]), max(1, sum(m.get("written", 0) for _, m in life["models"].items()))
+    for model, m in ranked:
         speed = f" · {m['written'] / m['secs']:.0f} tok/s" if m.get("secs") else ""
-        rows.append(line((f"{name(model)[:24]:<24} ", ""), (f"↑ {human(m.get('sent', 0)):>6}  ↓ {human(m.get('written', 0)):>6}  ", "bold"),
-                         (f"{m.get('replies', 0)} replies{speed}", "dim")))
+        models += [line((f"{name(model)[:22]:<22} ", ""), (f"{bar(m.get('written', 0), most, 12):<12} ", "magenta"),
+                        (f"{m.get('written', 0) * 100 // whole:>3}%", "bold"), (f"  ↓ {human(m.get('written', 0)):>6}  ↑ {human(m.get('sent', 0)):>6}", "")),
+                   line((f"  {m.get('replies', 0)} replies{speed}" + (" · this session" if model == agent.model else ""), "dim"))]
     if not life["models"]:
-        rows.append(line(("none yet", "dim")))
+        models.append(line(("none yet", "dim")))
+    return [("Session", session), ("Activity", activity), ("Models", models)]
 
-    return rows + [[], head("Lifetime", f"  since {min(days)}, {len(days)} day{'s' * (len(days) != 1)} with use")] + about(life)
+
+def usage_rows(agent):
+    """/usage in plain mode: the pages one after another"""
+    return [r for n, (_, rows) in enumerate(usage_pages(agent)) for r in [[]] * bool(n) + rows]
 
 
 def context_rows(agent):

@@ -124,7 +124,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
 | `/plan` | Split each message into a short list of steps first. Off by default. The steps show in the bottom half of the sidebar (in the conversation when the sidebar is hidden); switching plan mode off puts them away. The plan itself is asked for without reasoning and with a small budget, so it comes in seconds, and it can be stopped like any reply. |
 | `/context` | What is filling the context window, as a coloured grid. |
-| `/usage` | Tokens sent, written and spent on reasoning, time, speed and tool calls: for this session, per day for the last two weeks, per model, and for all time. |
+| `/usage` | Three pages; left and right (or Tab, a page's number, or a click on its name) turn them. **Session**: tokens sent, written and spent on reasoning, time, speed, tool calls, the tokens taken apart (per reply, the share that was reasoning, how much goes up for each token written), and what is in the window now. **Activity**: the last two weeks as a column chart, the busy days listed, and everything so far. **Models**: every model you have used, ranked by what it wrote, with its share and speed. |
 | `/compact` | Fold the conversation into a short summary, at any time: everything before the latest exchange, or that exchange too when there is nothing older. sprint also does this by itself when room runs out. |
 | `/copy [code\|all]` | Copy the last answer, the last code block, or everything. |
 | `/paste` | Attach the picture on the clipboard. |

@@ -130,3 +130,94 @@ def test_a_command_you_ran_yourself_has_no_cost_line(tmp_path, monkeypatch):
     s.submit("!echo hi")
     s.worker.join(10)
     assert not any("cost" in it for it in s.items)
+
+
+# ---------- /usage in pages: the session, the days, the models ----------
+
+import curses
+
+
+def seeded(days=None):
+    """an agent that has answered once, with some earlier days on file"""
+    sprint.usage_file().parent.mkdir(parents=True, exist_ok=True)
+    day = lambda n, wrote, model="old-model": {
+        "messages": 3, "replies": 10, "sent": wrote * 12, "written": wrote, "reasoning": wrote // 5, "secs": wrote / 50,
+        "tools": {"shell": 4}, "failed": 1, "models": {model: {"replies": 10, "sent": wrote * 12, "written": wrote, "secs": wrote / 50}}}
+    back = lambda n: time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400 * n))
+    sprint.usage_file().write_text(json.dumps({"days": days or {back(3): day(3, 4000), back(1): day(1, 1000, "other-model")}}))
+    a = agent([{"prompt": 1200}, "<think>hm hm hm hm</think>Hello there.", {"out": 40, "secs": 0.4}], model="hf.co/acme/tiny-GGUF:Q4", think=True)
+    a.run("hi")
+    return a
+
+
+def test_usage_comes_in_three_pages():
+    pages = sprint.usage_pages(seeded())
+    assert [name for name, _ in pages] == ["Session", "Activity", "Models"]
+    assert all(len("".join(t for t, _ in r)) <= 74 for _, rows in pages for r in rows)
+    joined = [r for n, (_, rows) in enumerate(pages) for r in ([[]] * bool(n) + rows)]
+    assert text(sprint.usage_rows(seeded())) .count("Session") >= 1 and len(sprint.usage_rows(seeded())) == len(joined)  # plain mode: one after another
+
+
+def test_the_session_page_analyses_the_tokens():
+    out = text(dict(sprint.usage_pages(seeded()))["Session"])
+    for part in ("Session", "sent", "written", "reasoning", "Token analysis", "per reply", "of what was written", "sent for every token written",
+                 "In the window now", "system prompt"):
+        assert part in out, part
+    assert "1.2k" in out and "30" in out  # 1200 sent for 40 written: thirty to one
+
+
+def test_the_activity_page_draws_the_days_as_columns_and_sums_the_lifetime():
+    rows = dict(sprint.usage_pages(seeded()))["Activity"]
+    out = text(rows)
+    assert "Last 14 days" in out and "Lifetime" in out and "busiest" in out
+    chart = [r for r in rows if any(role == "magenta" and set(t) <= set("▁▂▃▄▅▆▇█ ") and len(t) >= 40 for t, role in r)]
+    assert len(chart) >= 5  # tall enough to read
+    cols = ["".join(t for t, role in r if role == "magenta") for r in chart]
+    height = lambda day: sum(1 for line in cols if line[day * 3:day * 3 + 2].strip())
+    assert height(10) == len(chart) and 0 < height(12) < height(10) and height(11) == 0 and height(0) == 0  # three days ago the most
+    axis = next(text([r]).split() for r in rows if len(text([r]).split()) == 14 and all(d.isdigit() and len(d) == 2 for d in text([r]).split()))
+    assert axis[-1] == time.strftime("%d")  # a day of the month under every column, today last
+
+
+def test_the_models_page_ranks_every_model_with_its_share():
+    rows = dict(sprint.usage_pages(seeded()))["Models"]
+    out = text(rows)
+    assert "Models" in out and "old-model" in out and "other-model" in out and "tiny" in out and "%" in out
+    order = [n for n, r in enumerate(rows) for name in ("old-model", "other-model", "tiny") if name in text([r])]
+    names = [name for r in rows for name in ("old-model", "other-model", "tiny") if name in text([r])]
+    assert names[:3] == ["old-model", "other-model", "tiny"]  # by what they wrote
+    assert "this session" in out  # the one in use is pointed out
+
+
+def test_the_usage_popup_has_a_tab_for_each_page_and_the_arrows_turn_them():
+    s = Screen(seeded())
+    s.submit("/usage")
+    p = s.popup
+    assert [name for name, _ in p["tabs"]] == ["Session", "Activity", "Models"] and p["tab"] == 0
+    lines = [flat(l) for l in s.popup_lines(80, 30)[0]]
+    assert "Session" in lines[1] and "Activity" in lines[1] and "Models" in lines[1]
+    strip = s.popup_lines(80, 30)[0][1]
+    assert ("Session", "chosen") in [(t.strip(), r) for t, r in strip] and ("Activity", "chosen") not in [(t.strip(), r) for t, r in strip]
+    assert "pages" in lines[-1]  # the hint says how
+    s.popup_key(curses.KEY_RIGHT)
+    assert p["tab"] == 1 and any("Last 14 days" in flat(r["s"]) for r in s.shown()[0]) and p["sel"] == 0
+    s.popup_key("\t")
+    assert p["tab"] == 2 and any("Models" in flat(r["s"]) for r in s.shown()[0])
+    s.popup_key(curses.KEY_RIGHT)
+    assert p["tab"] == 0  # round again
+    s.popup_key(curses.KEY_LEFT)
+    assert p["tab"] == 2
+    s.popup_key("2")
+    assert p["tab"] == 1
+    s.popup_key(curses.KEY_DOWN)
+    assert p["sel"] == 1 and s.popup is p  # and a page still scrolls
+
+
+def test_clicking_a_tab_turns_to_it(monkeypatch):
+    s = Screen(seeded())
+    s.submit("/usage")
+    lines = s.popup_lines(80, 30)[0]
+    s.popup["box"] = (3, 10, 80, len(lines))
+    x = 10 + flat(lines[1]).index("Models") + 2
+    s.pointer(x, 4, curses.BUTTON1_PRESSED)
+    assert s.popup and s.popup["tab"] == 2
