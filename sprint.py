@@ -536,6 +536,11 @@ class Agent:
         add(self.tally, more)
         add(self.unsaved, more)
 
+    def receipt(self, before, began):
+        """what one message cost, given the tally and the time from before it: tokens up and down | how long"""
+        sent, wrote, secs = self.tally["sent"] - before["sent"], self.tally["written"] - before["written"], time.time() - began
+        return f"↑ {human(sent)} ↓ {human(wrote)} tokens | " + (f"{secs:.1f}s" if secs < 10 else clock(secs))
+
     def breakdown(self):
         """where the context window goes, in tokens: [(what, tokens), ...] ending with what is free"""
         tok = lambda group: int(sum(map(weigh, group)) / self.cpt) + 4 * len(group)
@@ -1675,8 +1680,10 @@ def main():
             elif cmd.startswith("!") and (cmd + _ + arg)[1:].strip():
                 agent.bang((cmd + _ + arg)[1:].strip())
             elif cmd:
+                before, began = dict(agent.tally), time.time()
                 stop = (agent.run_plan if load_config().get("plan") else agent.run)(cmd + _ + arg)
                 say(f"  {stop}\n" if stop.startswith("stopped:") else "", "33")
+                say(f"  {agent.receipt(before, began)}\n", "2")
                 n = round(min(agent.used() / agent.ctx, 1) * 10)
                 speed = f" · {agent.rate:.0f} tok/s" if agent.rate else ""
                 say(f"  {'━' * n}{'─' * (10 - n)} {agent.used() * 100 // agent.ctx}% of {agent.ctx} ctx{speed}\n", "2")

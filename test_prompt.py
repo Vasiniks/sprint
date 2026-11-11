@@ -571,3 +571,57 @@ def test_a_command_you_ran_yourself_keeps_its_mark_in_the_conversation(tmp_path,
     finish(s)
     first = next(spans for kind, spans, item in s.lines(60) if kind == "user")
     assert flat(first) == "! echo hi" and first[0] == ("!", "yellow")
+
+
+# ---------- answering an approval: a highlighted choice, arrows to move it, enter to take it ----------
+
+def waiting(tmp_path, monkeypatch, *more):
+    monkeypatch.chdir(tmp_path)
+    s = screen("```shell\necho 1\n```", *more, "ok", mode="ask")
+    s.submit("go")
+    for _ in range(300):
+        if s.pending:
+            return s
+        s.worker.join(0.02)
+    raise AssertionError("never asked")
+
+
+def choices(s):
+    return [(text.strip(), role) for text, role in s.input_rows(70)[0][2] if text.strip()]
+
+
+def test_the_approval_shows_its_choices_with_once_highlighted(tmp_path, monkeypatch):
+    s = waiting(tmp_path, monkeypatch)
+    assert ("y once", "chosen") in choices(s) and [t for t, r in choices(s) if r == "chosen"] == ["y once"]
+    assert "enter" in flat(s.input_rows(70)[0][2]) and "←→" in flat(s.input_rows(70)[0][2])
+    s.key("n")
+    finish(s)
+
+
+def test_right_and_left_move_the_choice_and_enter_takes_it(tmp_path, monkeypatch):
+    s = waiting(tmp_path, monkeypatch)
+    s.key(curses.KEY_RIGHT)
+    assert [t for t, r in choices(s) if r == "chosen"] == ["a always this"]
+    s.key(curses.KEY_RIGHT)
+    assert [t for t, r in choices(s) if r == "chosen"] == ["n no"]
+    s.key(curses.KEY_RIGHT)  # round to the start
+    s.key(curses.KEY_LEFT)   # and back to the end
+    assert [t for t, r in choices(s) if r == "chosen"] == ["n no"]
+    s.key(curses.KEY_LEFT)
+    s.key("\n")  # always
+    finish(s)
+    assert s.agent.allow == ["shell echo 1"] and s.items[1]["state"] == "done"
+
+
+def test_enter_on_no_refuses_and_the_next_approval_starts_on_once_again(tmp_path, monkeypatch):
+    s = waiting(tmp_path, monkeypatch, "```shell\necho 2\n```")
+    s.key(curses.KEY_LEFT)  # from once round to no
+    s.key("\r")
+    for _ in range(300):
+        if s.pending and s.pending.body.strip() == "echo 2":
+            break
+        s.worker.join(0.02)
+    assert s.items[1]["state"] == "denied" and [t for t, r in choices(s) if r == "chosen"] == ["y once"]
+    s.key("y")  # the letters still answer directly
+    finish(s)
+    assert s.items[2]["state"] == "done"

@@ -147,6 +147,7 @@ BUTTON = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON1_CLICK
 MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | (WHEEL_DOWN or 0x200000) | MOVED
 FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
+ROLE["chosen"] = (0, curses.A_REVERSE | curses.A_BOLD)  # the highlighted answer to an approval
 for _hue in HUES:  # each of the three colours also in bold and in dim, for the working animation's head and tail
     ROLE[_hue + ".bold"], ROLE[_hue + ".dim"] = (ROLE[_hue][0], curses.A_BOLD), (ROLE[_hue][0], curses.A_DIM)
 # what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
@@ -288,6 +289,7 @@ class Screen:
         self.chips, self.esc, self.pasting = {}, None, None  # pasted files by chip label; a held escape; a paste in progress
         self.pastes = {}  # large pasted texts by their chip label
         self.newer = ""  # a newer published version, once the daily look has found one
+        self.choice = 0  # which answer to an approval is highlighted: once, always, no
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -372,7 +374,7 @@ class Screen:
     def ask(self, call):
         self.items[-1]["state"] = "waiting"
         self.gate.clear()
-        self.pending = call
+        self.pending, self.choice = call, 0  # every question starts on "once"
         self.gate.wait()
         self.pending = None
         self.items[-1]["state"], self.items[-1]["began"] = "running", time.time()  # the wait for you is not the call's time
@@ -390,6 +392,7 @@ class Screen:
         return f"{a.rate:.0f} tok/s · {a.took:.1f}s last reply" if a.rate else ""
 
     def work(self, task, chips=None):
+        before, began = dict(self.agent.tally), time.time()
         try:
             stop = (self.agent.run_plan if self.plan else self.agent.run)(task, chips)
             if stop.startswith("stopped:"):
@@ -400,6 +403,8 @@ class Screen:
             import traceback
             sprint.log("crash", error=traceback.format_exc()[-1500:])
             self.say(str(e), "err")
+        if self.agent.tally["replies"] > before["replies"]:  # under the answer: what the message cost
+            self.items[-1]["cost"] = self.agent.receipt(before, began)
         self.note = ""
 
     def active(self):
@@ -562,7 +567,11 @@ class Screen:
         if self.leave and k != "\x03":  # any other key takes back the offer to quit, and the note that made it
             self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
         if self.pending:  # only the approval keys count while a call waits
-            if k in ("y", "Y", "\n", "\r", "a", "A"):
+            if k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):  # move the highlighted choice
+                self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % 3
+                return
+            k = "yan"[self.choice] if k in ("\n", "\r", curses.KEY_ENTER) else k  # enter takes the highlighted one
+            if k in ("y", "Y", "a", "A"):
                 self.answer = "always" if k in ("a", "A") else True
                 self.gate.set()
             elif k in ("n", "N", "\x1b", "\x03"):
@@ -1381,8 +1390,11 @@ class Screen:
         if self.pending:
             c = self.pending
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
-            keys = [("  y", "bold"), (" once   ", "dim"), ("a", "bold"), (" always this   ", "dim"), ("n", "bold"), (" no   ", "dim"),
-                    ("esc", "bold"), (" stop", "dim")]
+            keys = [("  ", "")]
+            for n, text in enumerate(("y once", "a always this", "n no")):  # the highlighted one is what enter takes
+                keys += [(f" {text} ", "chosen")] if n == self.choice else [(" " + text[0], "bold"), (text[1:] + " ", "dim")]
+                keys += [("  ", "")]
+            keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
             return [rule, [(">", a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
         typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
@@ -1447,7 +1459,7 @@ class Screen:
         out = []
         for it in self.items:
             key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
-                   self.showthink, took(it) if it["t"] == "tool" else "")
+                   self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"))
             if self.cache.get(id(it), (None,))[0] != key:
                 if it["t"] == "tool":
                     rows = self.window(it, w)
@@ -1466,6 +1478,8 @@ class Screen:
                 else:
                     rows = [("", [("  ", "")] + r if r else r, None) for spans in prose(it["text"].strip("\n"))
                             for r in wrap(spans, w - 2)]
+                if it.get("cost"):
+                    rows = rows + [("", [("  ", ""), (it["cost"], "ghost")], None)]
                 self.cache[id(it)] = (key, rows)
             out += self.cache[id(it)][1] + [("", [], None)]
         return out
