@@ -34,7 +34,7 @@ def typed(s, text):
 def test_the_working_animation_held_still_is_four_filled_cells_at_the_start_of_a_slanted_track():
     full, empty = tui.CELLS
     text = flat(tui.dash())
-    assert tui.CELLS == ("▰▱" if tui.VT else "//") and len(text) == tui.RUN == 14  # the same fourteen cells as the website's
+    assert tui.CELLS == ("▰▱" if tui.VT else "■□") and len(text) == tui.RUN == 14  # the same fourteen cells as the website's
     assert text[:4] == full * 4 and text[4:] == empty * 10
     assert {role for cell, role in tui.dash()[4:]} == {"ghost"}  # the track itself is grey
 
@@ -66,7 +66,7 @@ def test_the_bar_has_the_model_on_its_top_rule_and_the_mode_on_its_bottom_rule()
     top, prompt, bottom = rows
     assert len(flat(top)) == len(flat(bottom)) == 60 and set(flat(top)[:20]) == {"─"}
     assert "Qwen3.5-0.8B" in flat(top) and "7%" in flat(top) and "edits" not in flat(top)
-    assert flat(bottom).startswith("── edits ─") and ("edits", "edits") in bottom  # the mode, in the mode's colour
+    assert set(flat(bottom)) == {"─"} and "edits" not in flat(bottom)  # a plain rule: the mode sits under it
 
 
 def test_the_prompt_is_marked_in_the_mode_colour_and_the_hint_is_a_ghost():
@@ -280,13 +280,15 @@ def test_while_a_turn_runs_the_status_is_above_the_bar_and_the_footer_is_free_fo
     assert rows[19].startswith("   " + tui.CELLS[0]) and "working (0s | ↑" in rows[19]  # where the blank row was
     assert rows[20].startswith("  ───") and "Qwen3.5-0.8B" in rows[20]
     assert rows[21].startswith("  " + tui.MARK + " Ask anything") and "░" not in rows[21] and c.at == (21, 4)
-    assert rows[22].startswith("  ── auto ───")
-    assert "copied 12 characters" in rows[23] and rows[23].endswith("esc interrupt  ctrl+o tools  /help")
+    assert set(rows[22].strip()) == {"─"}  # a plain rule; the mode sits on the row under it
+    assert rows[23].strip().startswith(tui.MODE_ICON["auto"] + " auto (tab to cycle)") and rows[23].endswith("copied 12 characters")
     assert "thinking" not in rows[23] and "working" not in rows[23]
+    s.toast = ("", 0.0)
+    assert drawn(s, monkeypatch)[0][23].endswith("esc interrupt  ctrl+o tools  /help")
     chat.go.set()
     finish(s)
     rows, _ = drawn(s, monkeypatch)
-    assert rows[19] == "" and rows[23].endswith("tab mode  ctrl+o tools  /help") and "pg" not in rows[23]
+    assert rows[19] == "" and rows[23].endswith("ctrl+o tools  /help") and "pg" not in rows[23]
 
 
 def test_the_approval_question_sits_between_the_same_two_rules(tmp_path, monkeypatch):
@@ -299,7 +301,7 @@ def test_the_approval_question_sits_between_the_same_two_rules(tmp_path, monkeyp
         s.worker.join(0.02)
     rows, _ = drawn(s, monkeypatch)
     assert "waiting for you (" in rows[18] and "Qwen" in rows[19] and "allow shell  echo 1" in rows[20]
-    assert "always this" in rows[21] and rows[22].startswith("  ── ask ───")
+    assert "always this" in rows[21] and set(rows[22].strip()) == {"─"} and " ask (tab to cycle)" in rows[23]
     s.key("n")
     finish(s)
 
@@ -309,7 +311,7 @@ def test_the_home_screen_has_the_same_bar_under_the_logo(monkeypatch):
     s.motion = False
     rows, c = drawn(s, monkeypatch, h=30, w=100)
     bar = next(i for i, r in enumerate(rows) if tui.MARK + " Ask anything" in r)
-    assert "Qwen3.5-0.8B" in rows[bar - 1] and "── auto ─" in rows[bar + 1] and c.at[0] == bar
+    assert "Qwen3.5-0.8B" in rows[bar - 1] and set(rows[bar + 1].strip()) == {"─"} and c.at[0] == bar
     assert "░░░░░░░░" in rows[bar - 8] and "pgup" not in "".join(rows)
     assert rows[bar].index(tui.MARK) == c.at[1] - 2
 
@@ -555,13 +557,14 @@ def test_a_line_starting_with_a_bang_turns_the_bar_into_shell_mode():
     s.buf, s.cur = "!git status", 11
     top, prompt, bottom = s.input_rows(60)[0]
     assert flat(prompt) == "! git status" and prompt[0] == ("!", "yellow")  # the ! is the mark; it is not shown twice
-    assert top[0][1] == "yellow" and bottom[0][1] == "yellow" and ("shell", "yellow") in bottom  # both rules change colour
-    assert "ask" not in flat(bottom) and len(flat(top)) == len(flat(bottom)) == 60 and s.caret == (1, 12)
+    assert top[0][1] == "yellow" and bottom[0][1] == "yellow"  # both rules change colour
+    assert flat(s.mode_row()).startswith("! shell") and s.mode_row()[0] == ("!", "yellow") and "ask" not in flat(s.mode_row())
+    assert len(flat(top)) == len(flat(bottom)) == 60 and s.caret == (1, 12)
     s.buf, s.cur = "!", 1
     assert s.input_rows(60)[0][1][-1] == ("a command to run yourself", "ghost")
     s.buf, s.cur = "", 0  # the ! deleted: an ordinary prompt again
     top, prompt, bottom = s.input_rows(60)[0]
-    assert prompt[0] == (tui.MARK, "ask") and top[0][1] == "frame" and ("ask", "ask") in bottom
+    assert prompt[0] == (tui.MARK, "ask") and top[0][1] == "frame" and ("ask", "ask") in s.mode_row()
 
 
 def test_a_command_you_ran_yourself_keeps_its_mark_in_the_conversation(tmp_path, monkeypatch):
@@ -686,3 +689,40 @@ def test_the_prompt_mark_is_a_heavy_angle_where_the_font_has_one():
     assert tui.MARK == ("❯" if tui.VT else ">")
     s = screen(mode="ask")
     assert s.input_rows(60)[0][1][0] == (tui.MARK, "ask")
+
+
+# ---------- the mode: under the bar, with an icon and how to change it ----------
+
+def test_each_mode_has_an_icon_more_filled_the_more_it_may_do_by_itself():
+    full, empty = tui.CELLS
+    assert full != empty and tui.MODE_ICON == {"ask": full + empty * 2, "edits": full * 2 + empty, "auto": full * 3}
+
+
+def test_the_mode_row_is_icon_name_and_tab_to_cycle():
+    for mode in ("ask", "edits", "auto"):
+        row = screen(mode=mode).mode_row()
+        assert flat(row) == f"{tui.MODE_ICON[mode]} {mode} (tab to cycle)"
+        assert row[0] == (tui.MODE_ICON[mode], mode) and (mode, mode) in row and row[-1] == (" (tab to cycle)", "dim")
+
+
+def test_the_mode_is_drawn_directly_under_the_bar_and_a_note_sits_to_its_right(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    s = screen("ok", mode="edits")
+    s.submit("hi")
+    finish(s)
+    rows, c = drawn(s, monkeypatch)
+    under = rows[-1]
+    assert set(rows[-2].strip()) == {"─"} and under.strip().startswith(f"{tui.MODE_ICON['edits']} edits (tab to cycle)")
+    assert "ctrl+o" in under  # the keys keep the right-hand side
+    s.tell("copied 12 characters")
+    under = drawn(s, monkeypatch)[0][-1]
+    assert "(tab to cycle)" in under and under.rstrip().endswith("copied 12 characters")  # the note takes the keys' place
+
+
+def test_on_the_opening_screen_the_mode_is_under_the_bar_too(monkeypatch):
+    s = screen(mode="ask")
+    s.motion = False
+    rows, c = drawn(s, monkeypatch, h=30, w=100)
+    bar = next(i for i, r in enumerate(rows) if tui.MARK + " Ask anything" in r)
+    assert rows[bar + 2].strip().startswith(f"{tui.MODE_ICON['ask']} ask (tab to cycle)") and "ctrl+c" in rows[bar + 2]
+    assert rows[bar + 2].index(tui.MODE_ICON["ask"]) == rows[bar].index(tui.MARK)  # in line with the prompt

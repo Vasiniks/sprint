@@ -46,7 +46,7 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 | Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. |
 | Conversation (middle) | Your messages on a shaded band, the model's replies, and one window per tool call. Under each answer, what the message cost: tokens up and down, and the time. |
 | Sidebar (right) | The context window in small, the model's speed, then a log of every tool call and how it ended. |
-| Prompt (bottom) | The line you type on, between two rules: the model and context above it, the mode below it. |
+| Prompt (bottom) | The line you type on, between two rules, with the model and context on the upper one. Under it, the mode with its icon (`▰▱▱` ask, `▰▰▱` edits, `▰▰▰` auto: fuller, the more runs without asking) and a reminder that Tab cycles it. |
 | Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. |
 
 Tool windows start collapsed to a few lines, and each says how long the call took:

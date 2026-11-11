@@ -193,7 +193,8 @@ DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "edi
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
-CELLS = "▰▱" if VT else "//"  # a filled and an empty cell of the working animation; Windows console fonts lack the parallelograms
+CELLS = "▰▱" if VT else "■□"  # a filled and an empty cell: the working animation and the mode icons (Windows fonts lack the slanted ones)
+MODE_ICON = {"ask": CELLS[0] + CELLS[1] * 2, "edits": CELLS[0] * 2 + CELLS[1], "auto": CELLS[0] * 3}  # fuller, the more runs unasked
 
 CODE = re.compile(
     r"(?P<comment>#.*|//.*)|(?P<string>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|(?P<number>\b\d+(?:\.\d+)?\b)"
@@ -1295,7 +1296,7 @@ class Screen:
     def mode_popup(self, title="Mode"):
         a = self.agent
         free = {"read": True, "write": a.mode != "ask", "edit": a.mode != "ask", "shell": a.mode == "auto", "fetch": a.mode == "auto"}
-        rows = [row([("● " if m == a.mode else "  ", m), (f"{m:<7}", m), (ABOUT[m], "")], m) for m in MODES]
+        rows = [row([("● " if m == a.mode else "  ", m), (MODE_ICON[m] + " ", m), (f"{m:<7}", m), (ABOUT[m], "")], m) for m in MODES]
         rows += [row(""), row([(f"in {a.mode} mode", "dim")])]
         rows += [row([(f"  {tool:<7}", ""), ("runs without asking", "green") if ok else ("asks first", "yellow")]) for tool, ok in free.items()]
         if title == "Permissions":  # the calls that never ask, whatever the mode: enter removes one
@@ -1435,6 +1436,13 @@ class Screen:
 
     # --- the input area
 
+    def mode_row(self):
+        """what sits under the bar: the mode's icon and name, and how to change it; or that this line is a command"""
+        if self.buf.startswith("!") and not self.pending:
+            return [("!", "yellow"), (" shell", "yellow"), (" (runs it yourself, no model)", "dim")]
+        mode = self.agent.mode
+        return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")]
+
     def version_text(self):
         """this version, and beside it a newer one when there is one to get"""
         return [("sprint " + sprint.VERSION, "dim")] + ([(" · ", "dim"), (f"{self.newer} is out: sprint update", "warn")] if self.newer else [])
@@ -1475,10 +1483,7 @@ class Screen:
         tone, line_role = ("yellow", "yellow") if shell else (a.mode, "frame")
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
-        label = "shell" if shell else a.mode
-        hint = " runs it yourself, no model " if shell and bw > 50 else ""
-        foot = [("── ", line_role), (label, tone), (" " + "─" * max(0, bw - len(label) - len(hint) - 6), line_role), (hint, "dim"),
-                ("──", line_role)]
+        foot = [("─" * bw, line_role)]
         if self.pending:
             c = self.pending
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
@@ -1640,9 +1645,9 @@ class Screen:
         if home:
             for i, row in enumerate(art):
                 self.put(scr, top - logo_h + i, (w - len(flat(art[0]))) // 2, row)
-            tips = [("tab", "bold"), (" mode   ", "dim"), ("/", "bold"), (" commands   ", "dim"),
-                    ("ctrl+c", "bold"), (" quit", "dim")]
-            self.put(scr, top + len(rows) + 1, (w - len(flat(tips))) // 2, tips)
+            tips = [("/", "bold"), (" commands   ", "dim"), ("ctrl+c", "bold"), (" quit", "dim")]
+            self.put(scr, top + len(rows), bx, self.mode_row(), width=bw - len(flat(tips)) - 2)
+            self.put(scr, top + len(rows), bx + bw - len(flat(tips)), tips)
             version = self.version_text()
             self.put(scr, h - 1, 2, [(os.getcwd().replace(str(Path.home()), "~", 1), "dim")], width=w - len(flat(version)) - 8)
             self.put(scr, h - 1, w - 2 - len(flat(version)), version)
@@ -1677,17 +1682,21 @@ class Screen:
                     if right >= left:
                         self.mark(scr, y, left, right - left + 1, curses.A_REVERSE)
             # the status line, on the blank row above the bar; what is queued, between the two; and the footer
-            keys = [("tab", "bold"), (" mode  ", "dim"), ("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
+            keys = [("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
             for i, r in enumerate(waiting):
                 self.put(scr, top - len(waiting) + i, x0, r, width=mw)
             if self.busy():
                 self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
-                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys[2:]
+                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys
                 keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + keys
-            if self.scroll:
-                self.put(scr, h - 1, x0, [("↓ newer messages below", "warn")])
-            keys = keys if len(flat(keys)) < mw - 24 else keys[:4]
-            self.put(scr, h - 1, max(x0, w - side - 2 - len(flat(keys))), keys)
+            under = self.mode_row()
+            if self.note_text():
+                keys = [(self.note_text(), "warn")]
+            elif self.scroll:
+                keys = [("↓ newer messages below", "warn")]
+            keys = keys if len(flat(keys)) < mw - len(flat(under)) - 2 else keys[:2] if len(keys) > 2 else clip(keys, max(4, mw - len(flat(under)) - 2))
+            self.put(scr, h - 1, x0, under, width=mw)
+            self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)
             if side:  # right panel: the context window in small, then what the agent has done
                 x, inner = w - side + 1, side - 3
                 cells = sprint.context_cells(a, inner * 2)
@@ -1696,7 +1705,7 @@ class Screen:
                 self.put(scr, 3, x, cells[inner:])
                 self.put(scr, 4, x, [(f"{kilo(a.used())} of {kilo(a.ctx)} tokens", "dim")], width=inner)
                 self.put(scr, 5, x, [(self.speed_text(), "dim")], width=inner)
-                self.put(scr, 6, x, [("● " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
+                self.put(scr, 6, x, [(MODE_ICON[a.mode] + " " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
                          width=inner)
                 self.put(scr, 8, x, [("Activity", "dim")], width=inner)
                 log = self.activity()[-max(1, h - 12):]
@@ -1719,8 +1728,8 @@ class Screen:
                 for y in range(h):
                     self.put(scr, y, lw, [("┃" if self.drag == "left" else "│", a.mode if self.drag == "left" else "frame")])
 
-        if self.note_text():
-            self.put(scr, h - 1, 2 if home else x0, [(self.note_text(), "warn")], width=max(20, (w - side - lw) // 2))
+        if self.note_text() and home:
+            self.put(scr, h - 1, 2, [(self.note_text(), "warn")], width=max(20, w // 2))
 
         # completion popup, drawn over whatever is above the input
         every = [] if self.pending or self.popup else self.options()
