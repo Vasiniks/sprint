@@ -31,27 +31,31 @@ def typed(s, text):
 
 # ---------- the working animation ----------
 
-def test_the_working_animation_held_still_is_a_comet_at_the_start_of_a_slanted_track():
+def test_the_working_animation_held_still_is_four_filled_cells_at_the_start_of_a_slanted_track():
+    full, empty = tui.CELLS
     text = flat(tui.dash())
-    assert 14 <= len(text) <= 18 and text[0] + text[-1] == tui.ENDS
-    assert tui.ENDS == ("◢◤" if tui.VT else "//")
-    assert text[1:5] == "░▒▓█" and set(text[5:-1]) == {" "}
+    assert tui.CELLS == ("▰▱" if tui.VT else "//") and len(text) == tui.RUN == 14  # the same fourteen cells as the website's
+    assert text[:4] == full * 4 and text[4:] == empty * 10
+    assert {role for cell, role in tui.dash()[4:]} == {"ghost"}  # the track itself is grey
 
 
-def test_the_comet_sprints_left_to_right_faster_and_faster():
-    frames = [flat(tui.dash(tui.LAP * f)) for f in (0, 0.3, 0.6, 0.9)]
-    assert len({len(f) for f in frames}) == 1 and all(f[0] + f[-1] == tui.ENDS for f in frames)
-    heads = [f.index("█") for f in frames]
+def test_the_runner_sprints_left_to_right_faster_and_faster():
+    frames = [tui.dash(tui.LAP * f) for f in (0, 0.3, 0.6, 0.9)]
+    assert all(len(f) == tui.RUN for f in frames)
+    heads = [max(x for x, (cell, role) in enumerate(f) if role != "ghost") for f in frames]
     steps = [b - a for a, b in zip(heads, heads[1:])]
     assert steps == sorted(steps) and steps[0] > 0 and steps[-1] > 2 * steps[0]  # it gathers speed
-    assert frames[2][heads[2] - 3:heads[2] + 1] == "░▒▓█"  # the tail fades out behind the head
+    tail = [role for cell, role in frames[2][heads[2] - 3:heads[2] + 1]]
+    assert tail == ["yellow.dim", "yellow.dim", "yellow", "yellow.bold"]  # it fades out behind the head
     assert tui.dash(0.4) == tui.dash(0.4)  # nothing but the time decides the picture
 
 
-def test_each_lap_of_the_comet_is_the_next_of_yellow_cyan_and_magenta():
-    laps = [{role for _, role in tui.dash(tui.LAP * (n + 0.5))} for n in range(4)]
+def test_each_lap_is_the_next_of_yellow_cyan_and_magenta():
+    laps = [{role.split(".")[0] for _, role in tui.dash(tui.LAP * (n + 0.5)) if role != "ghost"} for n in range(4)]
     assert laps == [{"yellow"}, {"cyan"}, {"magenta"}, {"yellow"}]
     assert 0.6 <= tui.LAP <= 2
+    for hue in tui.HUES:  # the bold and dim of each colour are real roles, in that colour
+        assert tui.ROLE[hue + ".bold"] == (tui.ROLE[hue][0], curses.A_BOLD) and tui.ROLE[hue + ".dim"] == (tui.ROLE[hue][0], curses.A_DIM)
 
 
 # ---------- the bar: two rules, a marked prompt, a ghost of a hint ----------
@@ -68,11 +72,11 @@ def test_the_bar_has_the_model_on_its_top_rule_and_the_mode_on_its_bottom_rule()
 def test_the_prompt_is_marked_in_the_mode_colour_and_the_hint_is_a_ghost():
     s = screen(mode="ask")
     prompt = s.input_rows(60)[0][1]
-    assert flat(prompt).startswith("░▒▓█ > Ask anything") and (">", "ask") in prompt
-    assert prompt[-1] == ("Ask anything…  / for commands", "ghost")
+    assert flat(prompt).startswith("> Ask anything") and prompt[0] == (">", "ask")  # just the mark: no shade trail
+    assert prompt[-1] == ("Ask anything…  / for commands  ! for shell", "ghost")
     s.buf = "hello"
     prompt = s.input_rows(60)[0][1]
-    assert flat(prompt) == "░▒▓█ > hello" and prompt[-1] == ("hello", "")
+    assert flat(prompt) == "> hello" and prompt[-1] == ("hello", "")
 
 
 # ---------- more than one line ----------
@@ -82,21 +86,21 @@ def test_line_breaks_lay_the_text_out_and_later_lines_sit_under_the_first():
     s.buf = "make it so\na second line\n"
     rows, lines = s.input_rows(60)
     assert lines == ["make it so", "a second line", ""] and len(rows) == 5
-    assert [flat(r) for r in rows[1:4]] == ["░▒▓█ > make it so", "       a second line", "       "]
+    assert [flat(r) for r in rows[1:4]] == ["> make it so", "  a second line", "  "]
 
 
 def test_the_bar_says_where_the_cursor_is():
     s = screen()
     s.buf = "one\ntwo"
-    for cur, where in ((0, (1, 7)), (3, (1, 10)), (4, (2, 7)), (7, (2, 10))):
+    for cur, where in ((0, (1, 2)), (3, (1, 5)), (4, (2, 2)), (7, (2, 5))):
         s.cur = cur
         s.input_rows(60)
         assert s.caret == where  # the row within the bar, and the column from its left edge
     s.buf, s.cur = "x" * 50, 50  # a long line wraps at the width, and the cursor goes with it
     rows, lines = s.input_rows(40)
-    assert lines == ["x" * 33, "x" * 17] and s.caret == (2, 24)
-    s.buf, s.cur = "x" * 33, 33  # a full line: the cursor waits on the next one
-    assert s.input_rows(40)[1] == ["x" * 33, ""] and s.caret == (2, 7)
+    assert lines == ["x" * 38, "x" * 12] and s.caret == (2, 14)
+    s.buf, s.cur = "x" * 38, 38  # a full line: the cursor waits on the next one
+    assert s.input_rows(40)[1] == ["x" * 38, ""] and s.caret == (2, 2)
 
 
 def test_a_tall_message_shows_six_lines_around_the_cursor():
@@ -104,11 +108,11 @@ def test_a_tall_message_shows_six_lines_around_the_cursor():
     s.buf = "\n".join(f"line {i}" for i in range(10))
     s.cur = len(s.buf)
     rows, lines = s.input_rows(60)
-    assert lines == [f"line {i}" for i in range(4, 10)] and len(rows) == 8 and s.caret == (6, 13)
+    assert lines == [f"line {i}" for i in range(4, 10)] and len(rows) == 8 and s.caret == (6, 8)
     s.cur = 0
-    assert s.input_rows(60)[1] == [f"line {i}" for i in range(6)] and s.caret == (1, 7)
+    assert s.input_rows(60)[1] == [f"line {i}" for i in range(6)] and s.caret == (1, 2)
     s.cur = s.buf.index("line 5")
-    assert s.input_rows(60)[1] == [f"line {i}" for i in range(4, 10)] and s.caret == (2, 7)
+    assert s.input_rows(60)[1] == [f"line {i}" for i in range(4, 10)] and s.caret == (2, 2)
 
 
 def test_shift_enter_and_alt_enter_start_a_new_line_however_the_terminal_says_it():
@@ -236,8 +240,8 @@ def test_the_status_line_says_what_is_happening_for_how_long_and_how_much():
     assert chat.started.wait(5)
     s.began -= 12
     row = s.status_row()
-    assert flat(row).startswith(" " + tui.ENDS[0]) and row[1][1] in tui.HUES  # the sprint leads it
-    assert f"{tui.ENDS[1]} working (12s | ↑ {tui.kilo(s.agent.used())} tokens | medium effort)" in flat(row)
+    assert flat(row).startswith(" " + tui.CELLS[0]) and row[1][1].split(".")[0] in tui.HUES  # the sprint leads it
+    assert f"{tui.CELLS[1]} working (12s | ↑ {tui.kilo(s.agent.used())} tokens | medium effort)" in flat(row)
     s.emit("x" * 35)  # the reply has begun: count what comes down, by the agent's own measure of a token
     assert "answering (12s | ↓ 10 tokens | medium effort)" in flat(s.status_row())
     s.show_thought("y" * 7000)
@@ -273,9 +277,9 @@ def test_while_a_turn_runs_the_status_is_above_the_bar_and_the_footer_is_free_fo
     assert chat.started.wait(5)
     s.tell("copied 12 characters")
     rows, c = drawn(s, monkeypatch)
-    assert rows[19].startswith("   " + tui.ENDS[0]) and "working (0s | ↑" in rows[19]  # where the blank row was
+    assert rows[19].startswith("   " + tui.CELLS[0]) and "working (0s | ↑" in rows[19]  # where the blank row was
     assert rows[20].startswith("  ───") and "Qwen3.5-0.8B" in rows[20]
-    assert sorted(rows[21][2:6]) == sorted("░▒▓█") and "> Ask anything" in rows[21] and c.at == (21, 9)
+    assert rows[21].startswith("  > Ask anything") and "░" not in rows[21] and c.at == (21, 4)
     assert rows[22].startswith("  ── auto ───")
     assert "copied 12 characters" in rows[23] and rows[23].endswith("esc interrupt  ctrl+o tools  /help")
     assert "thinking" not in rows[23] and "working" not in rows[23]
@@ -542,3 +546,28 @@ def test_the_verb_follows_what_is_happening(monkeypatch):
     assert s.verb() == "working"  # the tool is done: back to the model
     s.pending = object()
     assert s.verb() == "waiting for you"
+
+
+# ---------- shell mode: a line that starts with ! ----------
+
+def test_a_line_starting_with_a_bang_turns_the_bar_into_shell_mode():
+    s = screen(mode="ask")
+    s.buf, s.cur = "!git status", 11
+    top, prompt, bottom = s.input_rows(60)[0]
+    assert flat(prompt) == "! git status" and prompt[0] == ("!", "yellow")  # the ! is the mark; it is not shown twice
+    assert top[0][1] == "yellow" and bottom[0][1] == "yellow" and ("shell", "yellow") in bottom  # both rules change colour
+    assert "ask" not in flat(bottom) and len(flat(top)) == len(flat(bottom)) == 60 and s.caret == (1, 12)
+    s.buf, s.cur = "!", 1
+    assert s.input_rows(60)[0][1][-1] == ("a command to run yourself", "ghost")
+    s.buf, s.cur = "", 0  # the ! deleted: an ordinary prompt again
+    top, prompt, bottom = s.input_rows(60)[0]
+    assert prompt[0] == (">", "ask") and top[0][1] == "frame" and ("ask", "ask") in bottom
+
+
+def test_a_command_you_ran_yourself_keeps_its_mark_in_the_conversation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    s = screen()
+    s.submit("!echo hi")
+    finish(s)
+    first = next(spans for kind, spans, item in s.lines(60) if kind == "user")
+    assert flat(first) == "! echo hi" and first[0] == ("!", "yellow")

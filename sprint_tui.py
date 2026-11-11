@@ -69,7 +69,7 @@ HUES = ("yellow", "cyan", "magenta")  # the colours that take turns: one per gli
 GLINT_EVERY = 4      # seconds from one glint of colour to the next; the wave is plain in between
 GLINT_SECONDS = 1.0  # how long a glint takes to cross the word
 GLINT = 14           # columns a glint covers: about three letters
-RUN = 16             # cells of track the working animation sprints along
+RUN = 14             # cells of track the working animation sprints along
 LAP = 1.0            # seconds one lap of it takes
 
 
@@ -98,12 +98,12 @@ def logo_rows(t=None):
 
 
 def dash(t=None):
-    """the working animation as spans: a comet with a shaded tail sprints along a slanted track, gathering speed,
-    and comes round again in the next colour. t in seconds; None holds it still on its mark"""
+    """the working animation as spans: a track of slanted cells along which four filled ones sprint, gathering
+    speed, and come round again in the next colour. t in seconds; None holds them still on their mark"""
     lap, into = divmod((t or 0) / LAP, 1)
-    head = 3 + int(into * into * RUN)  # the square of the time: slow off the line, then fast
-    track = "".join("█▓▒░"[head - x] if 0 <= head - x < 4 else " " for x in range(RUN))
-    return [(ENDS[0] + track + ENDS[1], HUES[int(lap) % 3])]
+    head, hue = 3 + int(into * into * RUN), HUES[int(lap) % 3]  # the square of the time: slow off the line, then fast
+    fade = (hue + ".bold", hue, hue + ".dim", hue + ".dim")  # the head, then a tail that fades behind it
+    return [(CELLS[0], fade[head - x]) if 0 <= head - x < 4 else (CELLS[1], "ghost") for x in range(RUN)]
 
 
 # what each kind of text looks like: (colour, attribute). 0 = plain text, 1-6 the theme's hues, 9 its grey
@@ -147,6 +147,8 @@ BUTTON = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON1_CLICK
 MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | (WHEEL_DOWN or 0x200000) | MOVED
 FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
+for _hue in HUES:  # each of the three colours also in bold and in dim, for the working animation's head and tail
+    ROLE[_hue + ".bold"], ROLE[_hue + ".dim"] = (ROLE[_hue][0], curses.A_BOLD), (ROLE[_hue][0], curses.A_DIM)
 # what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
 SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline",
         "[27;5;13~": "newline", "[13;5u": "newline"}  # and ctrl+enter, which the same terminals report the same way
@@ -154,7 +156,7 @@ MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports 
 DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching"}  # a tool at work
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
-ENDS = "◢◤" if VT else "//"  # the slanted ends of the working animation; Windows console fonts lack the triangles
+CELLS = "▰▱" if VT else "//"  # a filled and an empty cell of the working animation; Windows console fonts lack the parallelograms
 
 CODE = re.compile(
     r"(?P<comment>#.*|//.*)|(?P<string>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|(?P<number>\b\d+(?:\.\d+)?\b)"
@@ -1336,11 +1338,6 @@ class Screen:
         """this version, and beside it a newer one when there is one to get"""
         return [("sprint " + sprint.VERSION, "dim")] + ([(" · ", "dim"), (f"{self.newer} is out: sprint update", "warn")] if self.newer else [])
 
-    def trail(self):
-        """the four shade cells that lead every prompt, in the mode colour. They hold still: the sprint above the bar
-        is what moves while the agent works"""
-        return [("░▒▓█", self.agent.mode)]
-
     def verb(self):
         """one or two words for what is happening right now"""
         last = self.items[-1] if self.items else None
@@ -1370,28 +1367,36 @@ class Screen:
 
     def input_rows(self, bw, used=0, side=0):
         """the bar: a rule carrying the model, the prompt (or the approval question), a rule carrying the mode
-        -> (rows, the typed lines on show). Where the cursor belongs is left in self.caret"""
-        a, tw = self.agent, bw - 7
+        -> (rows, the typed lines on show). Where the cursor belongs is left in self.caret.
+        A line that starts with ! is shell mode: the mark becomes !, and the rules take the shell colour"""
+        a, tw = self.agent, bw - 2
+        shell = self.buf.startswith("!") and not self.pending
+        tone, line_role = ("yellow", "yellow") if shell else (a.mode, "frame")
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
-        rule = [("─" * max(0, bw - len(right) - 2), "frame"), (right, "dim"), ("──", "frame")]
-        foot = [("── ", "frame"), (a.mode, a.mode), (" " + "─" * max(0, bw - len(a.mode) - 4), "frame")]
+        rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
+        label = "shell" if shell else a.mode
+        hint = " runs it yourself, no model " if shell and bw > 50 else ""
+        foot = [("── ", line_role), (label, tone), (" " + "─" * max(0, bw - len(label) - len(hint) - 6), line_role), (hint, "dim"),
+                ("──", line_role)]
         if self.pending:
             c = self.pending
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
-            keys = [("     y", "bold"), (" once   ", "dim"), ("a", "bold"), (" always this   ", "dim"), ("n", "bold"), (" no   ", "dim"),
+            keys = [("  y", "bold"), (" once   ", "dim"), ("a", "bold"), (" always this   ", "dim"), ("n", "bold"), (" no   ", "dim"),
                     ("esc", "bold"), (" stop", "dim")]
-            return [rule, self.trail() + [(" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
+            return [rule, [(">", a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
+        text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
         typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
-        for line in self.buf.split("\n"):
-            if start <= self.cur <= start + len(line):
-                at, col = len(typed) + (self.cur - start) // tw, (self.cur - start) % tw
+        for line in text.split("\n"):
+            if start <= cur <= start + len(line):
+                at, col = len(typed) + (cur - start) // tw, (cur - start) % tw
             typed += [line[i:i + tw] for i in range(0, len(line) + 1, tw)]
             start += len(line) + 1
         first = min(at, max(0, len(typed) - 6))  # six lines at most: the last ones, or from the cursor's line down
-        typed, self.caret = typed[first:first + 6], (1 + at - first, 7 + col)
-        body = [[(t, "")] for t in typed] if self.buf else [[("Ask anything…  / for commands", "ghost")]]
-        lead = self.trail() + [(" ", ""), (">", a.mode), (" ", "")]
-        return [rule] + [(lead if n == 0 else [(" " * 7, "")]) + r for n, r in enumerate(body)] + [foot], typed
+        typed, self.caret = typed[first:first + 6], (1 + at - first, 2 + col)
+        empty = "a command to run yourself" if shell else "Ask anything…  / for commands  ! for shell"
+        body = [[(t, "")] for t in typed] if text else [[(empty, "ghost")]]
+        lead = [("!" if shell else ">", tone), (" ", "")]
+        return [rule] + [(lead if n == 0 else [("  ", "")]) + r for n, r in enumerate(body)] + [foot], typed
 
     # --- conversation -> lines of (kind, spans, item)
 
@@ -1447,8 +1452,9 @@ class Screen:
                 if it["t"] == "tool":
                     rows = self.window(it, w)
                 elif it["t"] == "user":
-                    rows = [r for line in it["text"].split("\n") for r in wrap([(line, "bold")], w - 5)]
-                    rows = [("user", ([("░▒▓█", self.agent.mode), (" ", "")] if n == 0 else [("     ", "")]) + r, it)
+                    mine = it["text"].startswith("!")  # a command you ran yourself keeps its mark
+                    rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 2)]
+                    rows = [("user", ([("!" if mine else ">", "yellow" if mine else self.agent.mode), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
                 elif it["t"] == "plan":  # plan mode's checklist: done, doing now, still to do
                     at, me = it["at"], self.agent.mode

@@ -47,7 +47,7 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 | Conversation (middle) | Your messages on a shaded band, the model's replies, and one window per tool call. |
 | Sidebar (right) | The context window in small, the model's speed, then a log of every tool call and how it ended. |
 | Prompt (bottom) | The line you type on, between two rules: the model and context above it, the mode below it. |
-| Status (above the prompt) | While a turn runs: a small sprint animation, what is happening, for how long, tokens going up or coming down, and the effort. |
+| Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. |
 
 Tool windows start collapsed to a few lines, and each says how long the call took:
 
@@ -69,7 +69,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | you type | what happens |
 |---|---|
 | `@notes.txt` | That file is attached to the message, so the model doesn't have to go and read it. Tab completes the name. |
-| `!git status` | The command runs yourself: no model, no approval. Its output joins the conversation. |
+| `!git status` | Shell mode: the prompt's `>` becomes `!` and the bar changes colour. The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |
 | `ctrl+v`, `alt+v` or `/paste` | The picture on the clipboard (a screenshot, or a copied file) is attached as `[Image #1]`. Terminals paste text only, so sprint asks the system. In Windows Terminal use `alt+v` or `/paste`. |
