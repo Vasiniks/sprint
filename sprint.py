@@ -317,6 +317,68 @@ def deletes(cmd):
     return bool(DELETES.search(cmd) or (WINDOWS and DELETES_WIN.search(cmd)))
 
 
+REMOVERS = ("rm", "rmdir", "unlink", "shred", "srm", "trash", "rimraf")  # commands whose arguments are what they delete
+PREFIXES = ("sudo", "command", "exec", "nohup", "time", "env")  # words that may stand before one
+EVERYTHING = ("*", ".*", "*.*", ".[!.]*", "..?*")  # a pattern that takes all there is in a folder
+
+
+def deletion(cmd, cwd=None):
+    """what kind of deletion a shell command is: "" none, or only inside the working folder (files and folders in it
+    are yours to let the model tidy); "own" the working folder itself, all that is in it, or a folder that holds it;
+    "outside" anything beyond it; "unknown" a deletion whose targets cannot be read (a cd first, a variable, find
+    -delete, a script). Anything but "" is always put to you, whatever the mode"""
+    if not deletes(cmd):
+        return ""
+    cwd, home = os.path.realpath(cwd or folder()), str(Path.home())
+    try:
+        lex = shlex.shlex(cmd.replace("\n", " ; "), posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        words = list(lex)
+    except ValueError:
+        return "unknown"  # quotes that never close
+    found, moved, rest, simple = set(), False, [], []
+    for word in words + [";"]:
+        if word and not word.strip(";&|()"):  # the end of one command: look at it
+            while simple and (simple[0] in PREFIXES or re.fullmatch(r"\w+=.*", simple[0])):
+                simple.pop(0)
+            name = os.path.basename(simple[0]) if simple else ""
+            if name in REMOVERS:
+                found.add("unknown" if moved else "")
+                dashes = simple.index("--") if "--" in simple else len(simple)
+                for arg in [a for a in simple[1:dashes] if not a.startswith("-")] + simple[dashes + 1:]:
+                    found.add(target_kind(arg, cwd, home))
+            else:
+                moved = moved or name in ("cd", "pushd", "popd")
+                rest += simple + [";"]
+            simple = []
+        else:
+            simple.append(word)
+    if deletes(" ".join(rest)):
+        found.add("unknown")  # something else in it deletes too, in a way that cannot be read
+    return next((kind for kind in ("own", "outside", "unknown") if kind in found), "")
+
+
+def target_kind(arg, cwd, home):
+    """where one thing to delete lies: "" inside the working folder, or own, outside, unknown (see deletion)"""
+    arg = re.sub(r"^~(?=/|$)", lambda m: home, arg)
+    arg = re.sub(r"\$\{?HOME\}?", lambda m: home, re.sub(r"\$\{?PWD\}?", lambda m: cwd, arg))
+    if re.search(r"[$`]", arg):
+        return "unknown"  # some other variable, or a command's output
+    parts, pattern = arg.rstrip("/").split("/") if arg.rstrip("/") else [""], None
+    for n, part in enumerate(parts):
+        if re.search(r"[*?\[{]", part):  # a pattern: it deletes within the folder before it
+            parts, pattern = parts[:n], part
+            break
+    at = os.path.realpath(os.path.join(cwd, "/".join(parts) or ("/" if arg.startswith("/") and not pattern else ".")))
+    if arg.startswith("/") and not parts[1:] and pattern:
+        at = "/"
+    if at == cwd:
+        return "own" if pattern is None or pattern in EVERYTHING else ""
+    if cwd.startswith(at.rstrip(os.sep) + os.sep):
+        return "own" if pattern is None else "outside"  # a folder that holds this one; or things beside it, up there
+    return "" if at.startswith(cwd + os.sep) else "outside"
+
+
 SEEN = [""]  # the last working folder known to exist
 
 
@@ -639,9 +701,15 @@ class Agent:
         self.busy = bool(s)
         self.out.flush()
 
+    def set_mode(self, mode):
+        """change the mode, and remember it: the mode you leave in is the one you come back to (starting with -y or
+        --mode is for that run only, and is not remembered)"""
+        self.mode = mode
+        save_config(mode=mode)
+        return mode
+
     def cycle(self):
-        self.mode = MODES[(MODES.index(self.mode) + 1) % len(MODES)]
-        return self.mode
+        return self.set_mode(MODES[(MODES.index(self.mode) + 1) % len(MODES)])
 
     def ask(self, call):
         if not sys.stdin.isatty():
@@ -866,7 +934,7 @@ class Agent:
         return f"allowed once: {c.tool} {self.target(c).splitlines()[0][:60]} (it runs when the model next asks for it)"
 
     def do(self, c):
-        key, risky = (c.tool, self.target(c)), c.tool == "shell" and deletes(c.body)  # a deletion is always put to you
+        key, risky = (c.tool, self.target(c)), c.tool == "shell" and deletion(c.body)  # of this folder, or beyond it: always put to you
         free = c.tool == "read" or self.mode == "auto" or (self.mode == "edits" and c.tool in ("write", "edit")) or self.allowed(c)
         if key in self.passes:  # set aside earlier, and since allowed by you
             self.passes.remove(key)
@@ -1117,7 +1185,7 @@ CONFIG = config_dir() / "config.json"
 SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "think": bool, "effort": str,
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
             "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool,
-            "update_check": bool, "ask_timeout": int}
+            "update_check": bool, "ask_timeout": int, "plan_h": int}
 SHADE = {"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
          "tool results": "yellow", "reserved for the reply": "dim", "free": "dim"}
 ANSI = {"": "", "dim": "2", "bold": "1", "blue": "34", "magenta": "35", "cyan": "36", "green": "32", "yellow": "33", "red": "31"}
@@ -1310,8 +1378,9 @@ def bar(n, top, width=20):
     return "█" * max(1 if n else 0, round(width * n / top)) if top else ""
 
 
-def usage_rows(agent):
-    """/usage: this session, what is in the window now, the last fourteen days, each model, and everything so far"""
+def usage_pages(agent):
+    """/usage, a page to a subject: this session with its tokens taken apart, the last fourteen days as a chart with
+    the lifetime under it, and every model ranked -> [(title, rows), ...]"""
     s, days = agent.tally, load_usage()
     add(days.setdefault(time.strftime("%Y-%m-%d"), blank()), agent.unsaved)  # the turn in progress is not on disk yet
     life = blank()
@@ -1331,34 +1400,59 @@ def usage_rows(agent):
             [line((f"generating {clock(t['secs'])}" + (f" at {t['written'] / t['secs']:.0f} tok/s" if t["secs"] else ""), "dim")),
              line((" · ".join(f"{k} {v}" for k, v in sorted(t["tools"].items(), key=lambda kv: -kv[1])) or "no tool calls", "dim"))]
 
-    rows = [head("Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
-                            f"{clock(time.time() - agent.started)} ago · {name(agent.model)[:30]}")]
-    rows += about(s) if s["messages"] or s["replies"] else [line(("nothing yet this session", "dim"))]
-
+    # --- the session: what it used, the tokens taken apart, and what is in the window now
+    session = [head("Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
+                               f"{clock(time.time() - agent.started)} ago · {name(agent.model)[:30]}")]
+    session += about(s) if s["messages"] or s["replies"] else [line(("nothing yet this session", "dim"))]
+    if s["replies"]:
+        n, calls = s["replies"], sum(s["tools"].values())
+        session += [[], head("Token analysis"),
+                    line(("per reply   ", ""), (f"↑ {human(s['sent'] / n)} sent · ↓ {human(s['written'] / n)} written · {s['secs'] / n:.1f}s", "bold")),
+                    line(("reasoning   ", ""), (f"{s['reasoning'] * 100 // max(1, s['written'])}%", "bold"), (" of what was written", "dim")),
+                    line(("going up    ", ""), (f"{s['sent'] / max(1, s['written']):.0f}", "bold"),
+                         (" sent for every token written", "dim")),
+                    line(("tool calls  ", ""), (f"{calls / max(1, s['messages']):.1f}", "bold"), (" a message", "dim"),
+                         (f" · {s['failed'] * 100 // calls}% failed" if calls and s["failed"] else "", "dim"))]
     parts = agent.breakdown()
     top = max(n for _, n in parts) or 1
-    rows += [[], head("In the window now", f"  {human(agent.used())} of {human(agent.ctx)} tokens")]
-    rows += [line((f"{what:<24}", ""), (f"{human(n):>6} ", "bold"), (bar(n, top, 24), SHADE.get(what, "dim"))) for what, n in parts]
+    session += [[], head("In the window now", f"  {human(agent.used())} of {human(agent.ctx)} tokens")]
+    session += [line((f"{what:<24}", ""), (f"{human(n):>6} ", "bold"), (bar(n, top, 24), SHADE.get(what, "dim"))) for what, n in parts]
 
+    # --- the days: a column for each of the last fourteen, the busy ones listed, then everything so far
     last = [time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400 * back)) for back in range(13, -1, -1)]
     wrote = [days[d]["written"] if d in days else 0 for d in last]
-    peak = max(wrote)
+    peak, tall = max(wrote), 6
     spark = "".join("▁▂▃▄▅▆▇█"[min(7, n * 8 // (peak + 1))] if n else " " for n in wrote)
-    rows += [[], head("Last 14 days", "  tokens written each day"),
-             line((spark, "magenta"), (f"  most: {human(peak)} on {last[wrote.index(peak)][5:]}" if peak else "  nothing written", "dim"))]
-    rows += [line((d[5:] + "  ", "dim"), (f"↑ {human(days[d]['sent']):>6}  ↓ {human(days[d]['written']):>6}  ", ""),
-                  (f"{days[d]['replies']:>4} replies  ", "dim"), (bar(days[d]["written"], peak, 16), "magenta"))
-             for d in last[-7:] if d in days and days[d]["replies"]]
+    eighths = [max(1, round(n * tall * 8 / peak)) if n else 0 for n in wrote] if peak else [0] * 14
+    activity = [head("Last 14 days", "  tokens written each day"),
+                line((spark, "magenta"), (f"  most: {human(peak)} on {last[wrote.index(peak)][5:]}" if peak else "  nothing written", "dim")), []]
+    for level in range(tall - 1, -1, -1):  # from the top row down; a column's last cell is filled by eighths
+        cells = "".join(" ▁▂▃▄▅▆▇█"[max(0, min(8, e - level * 8))] * 2 + " " for e in eighths)
+        activity.append(line((f"{human(peak) if level == tall - 1 and peak else '':>6} ", "dim"), (cells, "magenta")))
+    activity.append(line((" " * 7 + "".join(d[8:] + " " for d in last), "dim")))
+    used = [d for d in last if d in days and days[d]["replies"]]
+    activity += [[]] + [line((d[5:] + "  ", "dim"), (f"↑ {human(days[d]['sent']):>6}  ↓ {human(days[d]['written']):>6}  ", ""),
+                             (f"{days[d]['replies']:>4} replies  ", "dim"), (bar(days[d]["written"], peak, 16), "magenta")) for d in used[-7:]]
+    activity += [line((f"busiest {last[wrote.index(peak)][5:]} with {human(peak)} written · {len(used)} of these 14 days with use", "dim"))] if peak else []
+    activity += [[], head("Lifetime", f"  since {min(days)}, {len(days)} day{'s' * (len(days) != 1)} with use")] + about(life)
 
-    rows += [[], head("Models", "  every session")]
-    for model, m in sorted(life["models"].items(), key=lambda kv: -kv[1].get("written", 0))[:8]:
+    # --- the models: every one ever used, by what it wrote
+    models = [head("Models", "  every session, by tokens written")]
+    ranked = sorted(life["models"].items(), key=lambda kv: -kv[1].get("written", 0))[:10]
+    most, whole = max([m.get("written", 0) for _, m in ranked] + [1]), max(1, sum(m.get("written", 0) for _, m in life["models"].items()))
+    for model, m in ranked:
         speed = f" · {m['written'] / m['secs']:.0f} tok/s" if m.get("secs") else ""
-        rows.append(line((f"{name(model)[:24]:<24} ", ""), (f"↑ {human(m.get('sent', 0)):>6}  ↓ {human(m.get('written', 0)):>6}  ", "bold"),
-                         (f"{m.get('replies', 0)} replies{speed}", "dim")))
+        models += [line((f"{name(model)[:22]:<22} ", ""), (f"{bar(m.get('written', 0), most, 12):<12} ", "magenta"),
+                        (f"{m.get('written', 0) * 100 // whole:>3}%", "bold"), (f"  ↓ {human(m.get('written', 0)):>6}  ↑ {human(m.get('sent', 0)):>6}", "")),
+                   line((f"  {m.get('replies', 0)} replies{speed}" + (" · this session" if model == agent.model else ""), "dim"))]
     if not life["models"]:
-        rows.append(line(("none yet", "dim")))
+        models.append(line(("none yet", "dim")))
+    return [("Session", session), ("Activity", activity), ("Models", models)]
 
-    return rows + [[], head("Lifetime", f"  since {min(days)}, {len(days)} day{'s' * (len(days) != 1)} with use")] + about(life)
+
+def usage_rows(agent):
+    """/usage in plain mode: the pages one after another"""
+    return [r for n, (_, rows) in enumerate(usage_pages(agent)) for r in [[]] * bool(n) + rows]
 
 
 def context_rows(agent):
@@ -1403,7 +1497,7 @@ def command(agent, line):
         return rows
     if cmd in ("/mode", "/permissions"):
         if arg in MODES:
-            agent.mode = arg
+            agent.set_mode(arg)
         elif cmd == "/mode":
             agent.cycle()
         if cmd == "/mode" or arg:
@@ -1437,6 +1531,8 @@ def command(agent, line):
         except (OSError, ValueError, KeyError):
             return note("cannot list models: is Ollama running?")
         return note("installed models (switch with /model NAME):", *("  " + n + ("   ← current" if n == agent.model else "") for n in names))
+    if cmd == "/update":
+        return note(fetch_update()[1])
     if cmd == "/compact":
         before, kept, forgotten = agent.used(), agent.msgs, agent.forgotten
         folded = agent.compact() or agent.compact(everything=True)  # nothing older to fold: then the latest exchange as well
@@ -1569,7 +1665,7 @@ HELP = [("@file", "attach a file"), ("!command", "run the command yourself, with
         ("/directory [PATH]", "change the folder sprint works in"), ("/plan", "split each message into steps first, on or off"),
         ("/race MODEL MESSAGE", "one message, two models, side by side"),
         ("/systemprompt", "edit what the model is told at the start"), ("/config", "see or change saved settings"),
-        ("/clear", "clear the conversation and start fresh"), ("/bye", "quit")]
+        ("/update", "get the newest sprint"), ("/clear", "clear the conversation and start fresh"), ("/bye", "quit")]
 
 
 def help_rows():
@@ -1580,7 +1676,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.11"  # the same as in pyproject.toml
+VERSION = "0.4.12"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
@@ -1615,11 +1711,40 @@ def open_file(path):
         return False
 
 
-def update(home=None):
-    """get the newest sprint: pull if this copy is a git checkout, else reinstall with pip -> exit code"""
-    home = Path(home or Path(__file__).resolve().parent)
-    argv = ["git", "-C", str(home), "pull", "--ff-only"] if (home / ".git").exists() else \
+def update_argv(home):
+    """the command that gets the newest sprint: pull if this copy is a git checkout, else reinstall with pip"""
+    return ["git", "-C", str(home), "pull", "--ff-only"] if (home / ".git").exists() else \
         [sys.executable, "-m", "pip", "install", "--upgrade", f"git+https://github.com/{REPO}.git"]
+
+
+def fetch_update(home=None):
+    """/update, from inside sprint: get the newest without writing a thing to the screen -> (did it work, what to say).
+    What is on disk afterwards is read back, so it can say which version a restart will bring"""
+    home = Path(home or Path(__file__).resolve().parent)
+    try:
+        done = subprocess.run(update_argv(home), capture_output=True, text=True, errors="replace", timeout=300)
+        ok, out = done.returncode == 0, (done.stdout or "") + (done.stderr or "")
+    except (OSError, subprocess.SubprocessError) as e:
+        ok, out = False, str(e)
+    try:
+        update_file().unlink()  # look again for what is newest next time
+    except OSError:
+        pass
+    if not ok:
+        return False, "the update did not go through: " + (out.strip().splitlines() or ["no reason given"])[-1][:200]
+    try:
+        now = re.search(r'^VERSION = "([^"]+)"', (home / "sprint.py").read_text(encoding="utf-8"), re.M).group(1)
+    except (OSError, AttributeError):
+        now = ""
+    if now == VERSION:
+        return True, f"already the newest ({VERSION})"
+    return True, f"updated{' to ' + now if now else ''}: start sprint again to use it"
+
+
+def update(home=None):
+    """sprint update, from the shell: the same, with the command and its own output on show -> exit code"""
+    home = Path(home or Path(__file__).resolve().parent)
+    argv = update_argv(home)
     print("  " + " ".join(argv))
     try:
         ok = subprocess.run(argv).returncode == 0

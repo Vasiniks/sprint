@@ -37,7 +37,7 @@ Type a request and press Enter. In the default mode sprint asks before it runs a
 | `sprint update` | get the newest sprint: `git pull` for a checkout, `pip install --upgrade` otherwise |
 | `sprint --version` | the version |
 
-Once a day sprint looks at this repository for a newer version and, if there is one, says so beside the version, bottom left on the opening screen. The look sends nothing but the request itself; `/config update_check off` stops it.
+Once a day sprint looks at this repository for a newer version and, if there is one, says so on the line above the version, in a colour of its own (`/update` gets it). The version is always bottom left: on the opening screen, and under your messages once a conversation is going. The look sends nothing but the request itself; `/config update_check off` stops it.
 
 ## The screen
 
@@ -45,7 +45,7 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 |---|---|
 | Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. |
 | Conversation (middle) | Your messages on a bright band with a bar down the side in the mode's colour, the model's replies, and one window per tool call. Under each answer, what the message cost: tokens up and down, and the time. |
-| Sidebar (right) | The context window in small, the model's speed, then a log of every tool call and how it ended. In plan mode its bottom half is the plan: how far along it is, and each step ticked, in hand, or still to do. |
+| Sidebar (right) | At the top, the context window in small with how full it is; on a tall screen also a legend of what fills it, and the session in labelled rows (model, thinking, showthink, effort, plan, speed, tokens, tool calls, time; the mode is by the prompt). Then a log of every tool call and how it ended. In plan mode its bottom half is the plan: how far along it is, and each step ticked, in hand, or still to do; drag the line above it to give it more or less room. |
 | Prompt (bottom) | The line you type on, between two rules, with the model and context on the upper one. Under it, the mode with its icon (`▰▱▱` ask, `▰▰▱` edits, `▰▰▰` auto: fuller, the more runs without asking) and a reminder that Tab cycles it. |
 | Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. |
 
@@ -102,11 +102,13 @@ Drag over text to copy it: in the conversation, in the prompt, or in either side
 |---|---|
 | `ask` (default) | reading files |
 | `edits` | reading, writing and editing files |
-| `auto` | everything, except commands that delete |
+| `auto` | everything, except deleting the working folder or anything outside it |
+
+The mode you leave in is the mode you come back to (starting with `-y` or `--mode` is for that run only).
 
 When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One of the three is highlighted; left and right move it and Enter takes it. "Always" allows just that command or file from then on (a fetch allows the whole site). `/permissions` lists those rules, removes them, and adds patterns such as `shell git status*`.
 
-**Deleting always asks.** A command that deletes (`rm`, `rmdir`, `git clean`, `find -delete`, `Remove-Item`, a one-line script calling `rmtree` and the like) is put to you in every mode, `auto` included, and can be allowed once but never for ever; no allow rule covers it. If a command does remove the folder sprint is working in, sprint steps up to the nearest folder that still exists and tells the model.
+**Deleting beyond the folder's contents always asks.** Files and folders inside the folder sprint is working in are the model's to tidy, under the mode's ordinary rules. But a command that would delete that folder itself (or everything in it, or a folder that holds it), or anything outside it, is put to you in every mode, `auto` included, and so is a deletion sprint cannot read (a `cd` first, a variable, `find -delete`, `git clean`, a one-line script). Such a call can be allowed once but never for ever; no allow rule covers it. If a command does remove the working folder, sprint steps up to the nearest folder that still exists and tells the model.
 
 **A question nobody answers does not stall the work.** After 20 seconds (`/config ask_timeout N`; `0` waits for ever; any key starts the wait again) the call is set aside, not run: the model is told to carry on without it, and the prompt shows that something is waiting. `/permissions` lists what was set aside; Enter on one allows it once, and it runs the next time the model asks for it. (Plain mode, `--plain`, waits as long as it takes.)
 
@@ -122,21 +124,22 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/think` | Let the model reason before answering. Its reasoning shows as it is written: a line that counts the words and shows the newest ones. |
 | `/showthink` | Show that reasoning in full, growing as it arrives, in a dashed frame of its own so it never looks like an action. Otherwise it is one line; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
-| `/plan` | Split each message into a short list of steps first. Off by default. The steps show in the bottom half of the sidebar (in the conversation when the sidebar is hidden). The plan itself is asked for without reasoning and with a small budget, so it comes in seconds, and it can be stopped like any reply. |
+| `/plan` | Split each message into a short list of steps first. Off by default. The steps show in the bottom half of the sidebar (in the conversation when the sidebar is hidden); switching plan mode off puts them away. The plan itself is asked for without reasoning and with a small budget, so it comes in seconds, and it can be stopped like any reply. |
 | `/context` | What is filling the context window, as a coloured grid. |
-| `/usage` | Tokens sent, written and spent on reasoning, time, speed and tool calls: for this session, per day for the last two weeks, per model, and for all time. |
+| `/usage` | Three pages; left and right (or Tab, a page's number, or a click on its name) turn them. **Session**: tokens sent, written and spent on reasoning, time, speed, tool calls, the tokens taken apart (per reply, the share that was reasoning, how much goes up for each token written), and what is in the window now. **Activity**: the last two weeks as a column chart, the busy days listed, and everything so far. **Models**: every model you have used, ranked by what it wrote, with its share and speed. |
 | `/compact` | Fold the conversation into a short summary, at any time: everything before the latest exchange, or that exchange too when there is nothing older. sprint also does this by itself when room runs out. |
 | `/copy [code\|all]` | Copy the last answer, the last code block, or everything. |
 | `/paste` | Attach the picture on the clipboard. |
 | `/export [file]` | Save the conversation as markdown. |
 | `/directory [path]` | Change the folder sprint works in, with a small folder browser. |
 | `/systemprompt` | Edit what the model is told at the start. |
-| `/theme` | sprint (the one you get: near-black with the logo's colours), terminal (your terminal's own colours), mono, sapphire, midnight, slate, ocean, forest, grape, sunset, amber, matrix, paper. A theme sets the whole screen, background included; the list previews each in its own colours. Terminals that say they show 24-bit colour (`COLORTERM=truecolor`; Apple's Terminal does from macOS 26) get the exact colours, without anything in the terminal's own palette being changed; others get the nearest of their 256. Sapphire follows [Tyriar's Sapphire](https://marketplace.visualstudio.com/items?itemName=Tyriar.theme-sapphire) for VS Code. |
+| `/theme` | sprint (the one you get: near-black with the logo's colours), terminal (your terminal's own colours), mono, sapphire, midnight, slate, ocean, forest, grape, sunset, amber, matrix, paper. A theme sets the whole window, background included, right to its edges: while sprint runs, the terminal itself is given the theme's background (the margin round the text is the terminal's own colour, which nothing drawn can reach), and gets its own back when sprint leaves. Apple's Terminal is asked through the Terminal app; on Windows this is done in Windows Terminal only. The list previews each theme in its own colours. Terminals that say they show 24-bit colour (`COLORTERM=truecolor`; Apple's Terminal does from macOS 26) get the exact colours, without anything in the terminal's own palette being changed; others get the nearest of their 256. Sapphire follows [Tyriar's Sapphire](https://marketplace.visualstudio.com/items?itemName=Tyriar.theme-sapphire) for VS Code. |
 | `/config [key value]` | Every setting in one list. |
 | `/sidebar`, `/history` | Hide, show or size the side panels. |
 | `/tools`, `/mouse` | Expand or collapse all tool windows; turn mouse capture on or off. |
 | `/log` | The last things that happened, and where the full log is. |
 | `/help` | Every key and command, in sections, a thing to a line. Type to narrow the list; Enter on a command puts it in the prompt. |
+| `/update` | Get the newest sprint without leaving it (what `sprint update` does). It tells you which version a restart will bring, or that you already have the newest. |
 | `/clear` (or `/new`), `/exit` | Start fresh, quit. |
 
 ## Settings and files
@@ -199,6 +202,7 @@ Known limits:
 - **Long files.** One reply can hold a file of a few hundred lines at 8K. Beyond that, ask for parts or raise the window with `/config ctx 16384`.
 - **Plan mode** did not help the 0.8B model in testing, which is why it is off by default.
 - **PDFs** are read roughly unless `pdftotext` is installed. Pictures need a model that can see.
+- **cmux, Ghostty, kitty and other terminals with their own description, on a Mac.** The curses library macOS ships garbles runs of one character (a box's bottom line, the dots of the context bar, the animation's track) when the terminal's description offers a "repeat" code. sprint therefore starts curses with the plain xterm description there; nothing else changes, and commands sprint runs still see the terminal's own.
 - **Windows.** Install Git for Windows: models write bash, and sprint uses Git Bash when it finds it. Without it, commands run in PowerShell, where common ones (`ls`, `cat`) work but bash syntax often does not. The terminal there does not mark pastes, so sprint treats keys that arrive together as one paste. Dragging with the mouse is untested there; a picture or PDF path dropped into the prompt still becomes a chip when you send.
 
 ## As a library

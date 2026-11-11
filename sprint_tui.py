@@ -6,6 +6,7 @@ import os
 import re
 import select
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -34,7 +35,7 @@ COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the 
             ("/compact", "fold the older conversation into a short summary to free room"), ("/sidebar", "show or hide the sidebar, or set its width"),
             ("/history", "show or hide the message list, or set its width"),
             ("/tools", "expand or collapse all tool windows"), ("/mouse", "mouse on or off, for selecting text"),
-            ("/help", "keys and commands"), ("/exit", "quit")]
+            ("/update", "get the newest sprint"), ("/help", "keys and commands"), ("/exit", "quit")]
 # /help: what you can type and press, a thing to a line; the commands above join it as its last section
 HELP = [("In a message", [("@path", "attach that file; tab completes the name"),
                           ("!command", "run the command yourself, without the model"),
@@ -151,6 +152,82 @@ def near(colour, seen={}):
         apart = lambda a, b: sum((x - y) ** 2 for x, y in zip(a, b))
         seen[colour] = min(PALETTE, key=lambda n: apart(PALETTE[n], want) + 2 * apart(tint(PALETTE[n]), tint(want)))
     return seen[colour]
+
+
+# A terminal keeps a margin round its grid of characters, in its own background colour, which nothing drawn can reach.
+# So a theme with a background gives it to the terminal itself while sprint runs (the standard code for that, which
+# every current terminal but Apple's takes), and hands the old one back on the way out. Apple's Terminal is asked
+# through the Terminal app itself; on Windows it is tried in Windows Terminal only, the one console that has a margin
+OSA = """on run argv
+  set want to {(item 2 of argv) as integer, (item 3 of argv) as integer, (item 4 of argv) as integer}
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is (item 1 of argv) then
+          set was to background color of t
+          set background color of t to want
+          return ((item 1 of was) as text) & " " & ((item 2 of was) as text) & " " & ((item 3 of was) as text)
+        end if
+      end repeat
+    end repeat
+  end tell
+  return ""
+end run"""
+
+
+def apple_script_window(tty, rgb):
+    """give the Terminal window showing this terminal a background (each colour counted to 65535, as that app does)
+    -> the one it had, or None if it could not be asked"""
+    try:
+        was = subprocess.run(["osascript", "-e", OSA, tty] + [str(v) for v in rgb], capture_output=True, text=True, timeout=5).stdout.split()
+        return tuple(int(float(v)) for v in was) if len(was) == 3 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+apple_window = apple_script_window  # the tests put a stand-in here: none of them may recolour a real window
+
+
+def windows_codes(on=[]):
+    """Windows: can escape codes be written to the console? Only tried in Windows Terminal, and only by switching the
+    console's own processing of them on (asked once); anywhere else a code would come out as stray characters"""
+    if not on:
+        ok = False
+        if sprint.WINDOWS and os.environ.get("WT_SESSION"):
+            try:
+                import ctypes
+                kernel, mode = ctypes.windll.kernel32, ctypes.c_uint32()
+                handle = kernel.GetStdHandle(-11)
+                ok = bool(kernel.GetConsoleMode(handle, ctypes.byref(mode)) and kernel.SetConsoleMode(handle, mode.value | 0x0004))
+            except Exception:
+                ok = False
+        on.append(ok)
+    return on[0]
+
+
+def has_repeat(term, change=None):
+    """does this terminal's description offer a code that repeats a character? Asked of the system's own tool, with
+    the environment changed as given (a name mapped to None is taken out); if it cannot be asked, no"""
+    env = {k: v for k, v in {**os.environ, **(change or {})}.items() if v is not None}
+    try:
+        return "rep=" in subprocess.run(["infocmp", "-1", term], capture_output=True, text=True, timeout=5, env=env).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def term_for_curses():
+    """what to change in the environment while curses starts, or None to leave it. The curses macOS ships (and any
+    before 6.1) sends a run of one character, where the terminal's description offers a "repeat" code, as one byte and
+    a count: right for a letter, garbage for ─ · ▱ and every other character beyond ASCII. Under cmux/Ghostty, kitty and
+    the like that left boxes without a bottom, and rubbish in the context bar and the animation. So curses is given
+    the plain xterm description, which these terminals all speak: the system's own copy if the terminal brought one
+    of its own that repeats too"""
+    old = tuple(getattr(curses, "ncurses_version", (0, 0))[:2]) < (6, 1)
+    if not (VT and old and has_repeat(os.environ.get("TERM", ""))):
+        return None
+    plain = {"TERM": "xterm-256color"}
+    return next((change for change in (plain, {**plain, "TERMINFO": None, "TERMINFO_DIRS": None})
+                 if not has_repeat(plain["TERM"], change)), None)
 
 
 def can_exact():
@@ -498,9 +575,13 @@ class Screen:
         self.newer = ""  # a newer published version, once the daily look has found one
         self.choice = 0  # which answer to an approval is highlighted: once, always, no
         self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
+        self.backdrop_want = self.backdrop_was = self.backdrop_job = None  # Apple's Terminal: the colour asked for, the window's own, the asking
+        self.backdrop_now, self.repaint = None, False  # the colour that window has taken from us; paint again, it has changed
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
+        self.plan_h, self.plan_edge, self.rows = None, None, 0  # rows you gave the plan; its top edge; the screen's
+        self.act = 8  # the row of the right-hand panel that "Activity" stands on
         self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -524,7 +605,54 @@ class Screen:
         self.theme = saved if saved in THEMES else "sprint"
         self.peek = kept["peek"] if isinstance(kept.get("peek"), int) and kept["peek"] > 0 else PEEK
         self.showthink = bool(kept.get("showthink", False))  # the model's reasoning in full, or one line saying it thought
+        self.plan_h = kept.get("plan_h")
         self.paint()
+
+    def backdrop(self, colour):
+        """give the terminal itself this background (None: its own back), so a theme reaches the window's edges. The
+        colour is the one the cells are really drawn in: the nearest of the 256 where that is what the screen shows"""
+        if not self.live:
+            return  # no real screen
+        rgb = self.shown_as(colour)
+        if VT or windows_codes():
+            sys.stdout.write("\033]111\007" if rgb is None else "\033]11;#%02x%02x%02x\007" % rgb)
+            sys.stdout.flush()
+        asking = bool(self.backdrop_job and self.backdrop_job.is_alive())  # (its answer will say what the window had)
+        if VT and os.environ.get("TERM_PROGRAM") == "Apple_Terminal" and (rgb or self.backdrop_was or asking):
+            self.backdrop_want = tuple(v * 257 for v in rgb) if rgb else None
+            if not asking and self.backdrop_want != self.backdrop_now:  # (it is not asked again for what it already has)
+                self.backdrop_job = threading.Thread(target=self.backdrop_apple, daemon=True)
+                self.backdrop_job.start()
+
+    def shown_as(self, colour):
+        """the colour a theme's background really comes out as on this screen: exact, or the nearest of the 256"""
+        return None if colour is None else RGB[SLOT[colour]] if self.exact else PALETTE[near(colour)]
+
+    def borrowed(self, colour):
+        """has the window itself taken this background (Apple's Terminal, once it has answered)? Then the cells use
+        the window's own instead of painting theirs. That app does not show a colour it is given through scripting
+        quite as it shows the same colour drawn in a cell, so painted cells and margin came out a shade apart on the
+        more colourful themes; borrowed, they are one colour whatever it makes of it"""
+        rgb = self.shown_as(colour)
+        return bool(self.live and rgb and self.backdrop_now == tuple(v * 257 for v in rgb))
+
+    def backdrop_apple(self):
+        """off the screen's back (the Terminal app takes a moment to answer): set the latest colour asked for, and
+        remember what the window had before the first, to give back"""
+        try:
+            tty = os.ttyname(2)
+        except OSError:
+            return
+        while True:
+            want = self.backdrop_want
+            if not (want or self.backdrop_was):
+                return  # asked to give back a window that was never changed
+            was = apple_window(tty, want or self.backdrop_was)
+            self.backdrop_was = self.backdrop_was or was
+            if was:  # it took it: the cells can now borrow the window's background rather than paint their own
+                self.backdrop_now, self.repaint = want, True
+            if want == self.backdrop_want:
+                return  # nothing newer was asked for meanwhile
 
     def ink(self, colour):
         """the terminal's number for a theme's colour: an exact one's own slot, or the nearest of the 256"""
@@ -535,6 +663,7 @@ class Screen:
         text, 10-19 the same on the panel shade, 230-237 on the band behind your own messages. With fewer than 256
         colours the screen stays the terminal's own"""
         self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
+        shown = None  # the background the terminal itself should take: the theme's, once it is known the screen shows it
         self.stale = True  # what is on the screen is in the old colours: the next frame sends every cell again (see draw)
         try:
             if not curses.has_colors():
@@ -552,6 +681,7 @@ class Screen:
                     pass  # it said it could and cannot: the nearest colours, then
             t, ink = THEMES[self.theme], self.ink
             bg, fg, panel = (ink(t.get("bg", -1)), ink(t.get("fg", -1)), ink(t.get("panel", 236))) if rich else (-1, -1, -1)
+            bg = -1 if rich and self.borrowed(t.get("bg")) else bg
             for i in range(8):
                 colour = ink(t.get(i, i)) if rich or self.theme == "mono" else i
                 if i:
@@ -565,11 +695,14 @@ class Screen:
             for i in range(8):
                 curses.init_pair(230 + i, ink(t.get(i, i)) if i else fg, ink(t.get("band", 238)))
             self.base = 8 if "bg" in t else 0
+            shown = t.get("bg")
             for n, other in enumerate(THEMES.values()):
                 for i in range(7):
                     curses.init_pair(20 + 7 * n + i, ink(other.get(i, i) if i else other.get("fg", -1)), ink(other.get("bg", -1)))
         except curses.error:
             pass  # no screen yet
+        finally:
+            self.backdrop(shown)
 
     # --- what the agent calls (from its worker thread)
 
@@ -612,7 +745,7 @@ class Screen:
     def choices(self):
         """what the question can be answered with, its key first. A deletion can be allowed once, never for ever"""
         c = self.pending
-        return ("y once", "n no") if c.tool == "shell" and sprint.deletes(c.body) else ("y once", "a always this", "n no")
+        return ("y once", "n no") if c.tool == "shell" and sprint.deletion(c.body) else ("y once", "a always this", "n no")
 
     def ask(self, call):
         """put a call to you. A question nobody answers must not hold the work up: after the wait (20 seconds unless
@@ -641,6 +774,43 @@ class Screen:
         else:
             self.items.append({"t": "plan", "steps": list(steps), "at": at})
 
+    def side_head(self, inner, h):
+        """the top of the right-hand panel, as rows inner wide: the context window, then the session. A tall screen gets
+        a legend of what fills the window and every figure; a shorter one says less, so that what the agent did, and
+        the plan, keep their room"""
+        a = self.agent
+        used, ctx = a.used(), a.ctx
+        pct = min(100, int(used * 100 // ctx))
+        loud = "err" if pct >= 85 else "warn" if pct >= 60 else "ok"  # the fuller the window, the louder the figure
+        cells = sprint.context_cells(a, inner * 2)
+        rows = [[("Context", "dim"), (f"{pct}%".rjust(inner - 7), loud)], cells[:inner], cells[inner:],
+                clip([(f"{kilo(int(used))} of {kilo(ctx)} tokens", "dim")], inner)]
+        switch = lambda on: ("on", "ok") if on else ("off", "dim")
+        if h < 32:  # a short screen: two lines, the speed and the model with what is switched on (the mode is by the prompt)
+            flags = [(name + "  ", "") for name, on in (("think", a.think), ("plan", self.plan)) if on]  # first: a long name must not push them off
+            return rows + [clip([(self.speed_text(), "dim")], inner), clip(flags + [(short(a.model), "dim")], inner)]
+        if h >= 44 and inner >= 28:  # what fills the window, two to a row, each in the colour it has up there
+            brief = lambda n: str(n) if n < 1000 else f"{n / 1000:.1f}k" if n < 10000 else f"{n // 1000}k"
+            parts, wide = dict(a.breakdown()), inner // 2
+            names = (("system", "system prompt"), ("tools", "tool definitions"), ("you", "your messages"), ("replies", "model replies"),
+                     ("results", "tool results"), ("reply", "reserved for the reply"))
+            cell = [[("▒ " if key.startswith("reserved") else "█ ", sprint.SHADE[key]), (f"{name:<{wide - 7}}{brief(parts[key]):>4} ", "dim")]
+                    for name, key in names]
+            rows += [cell[i] + cell[i + 1] for i in (0, 2, 4)]
+        tally = a.tally
+        calls = sum(tally["tools"].values())
+        told = [("model", [(short(a.model), "")]),
+                ("thinking", [switch(a.think)]), ("showthink", [switch(self.showthink)]), ("effort", [(a.effort, "")]),
+                ("plan", [switch(self.plan)]),
+                ("speed", [(f"{a.rate:.0f} tok/s", ""), (f" · {a.took:.1f}s last", "dim")] if a.rate else [("no reply yet", "dim")]),
+                ("tokens", [(f"↑ {sprint.human(tally['sent'])} ↓ {sprint.human(tally['written'])}", "")]),
+                ("tools", [(f"{calls} call{'s' * (calls != 1)}", "")] + ([(f" · {tally['failed']} failed", "err")] if tally["failed"] else [])),
+                ("time", [(sprint.clock(tally["secs"]), ""), (" answering", "dim")])]
+        if h < 44:  # the middle size: one line for thinking and effort, and no session clock
+            told = told[:1] + [("thinking", [(a.effort, "") if a.think else ("off", "dim")]), told[2]] + told[4:8]
+        rows += [[], [("Session", "dim"), (sprint.clock(time.time() - a.started).rjust(inner - 7), "dim")]]
+        return rows + [clip([(f"{label:<10}", "dim")] + value, inner) for label, value in told]
+
     def speed_text(self):
         a = self.agent
         return f"{a.rate:.0f} tok/s · {a.took:.1f}s last reply" if a.rate else ""
@@ -664,7 +834,7 @@ class Screen:
     def active(self):
         """is anything on the screen changing by itself? When nothing is, the loop sleeps instead of redrawing."""
         wave = not self.items and self.motion
-        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave or self.queue
+        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave or self.queue or self.repaint
                     or (self.job and self.job.is_alive()) or self.esc is not None or self.pasting is not None
                     or self.glow(self.flash[0]))
 
@@ -729,6 +899,15 @@ class Screen:
                       "mouse off: select text as usual; ctrl+o and pgup/pgdn still work")
         elif cmd == "/paste":
             self.paste_image()
+        elif cmd == "/update":
+            self.tell("updating sprint…")
+
+            def work():  # off the screen's back: it asks the network
+                ok, said = sprint.fetch_update()
+                self.newer = "" if ok else self.newer
+                self.tell(said) if ok else self.say(said, "err")
+
+            self.background(work)
         elif cmd == "/showthink":
             self.showthink = not self.showthink
             sprint.save_config(showthink=self.showthink)
@@ -1107,11 +1286,13 @@ class Screen:
         elif self.drag:
             if self.drag == "right":
                 self.side_w = max(20, min(w - lw - ROOM, w - 1 - x))
+            elif self.drag == "plan":  # the plan's top edge: the plan starts on the row under the mouse
+                self.plan_h = max(4, min(self.rows - self.act - 3, self.rows - 1 - y))
             else:
                 self.left_w = max(16, min(w - side - ROOM, x))
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
+                sprint.save_config(**({"plan_h": self.plan_h} if self.drag == "plan" else {"sidebar_w": self.side_w, "history_w": self.left_w}))
                 self.drag = None
-                sprint.save_config(sidebar_w=self.side_w, history_w=self.left_w)
         elif self.select is not None and not state & curses.BUTTON1_PRESSED:
             self.select["b"] = (y, x)
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
@@ -1122,6 +1303,8 @@ class Screen:
                 self.drag = "right"
             elif lw and abs(x - lw) <= 1:
                 self.drag = "left"
+            elif side and self.plan_edge == y and x > w - side:
+                self.drag = "plan"
             else:
                 self.select = {"a": (y, x), "b": (y, x), "area": self.area_at(x, y)}
 
@@ -1262,6 +1445,13 @@ class Screen:
             p["cursor"] = (1 + e["row"] - e["top"], e["col"] - shift)
             hint = " ctrl+s save · ctrl+r default · esc cancel "
             return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], None, None
+        if p.get("tabs"):  # a strip of pages under the title, the one on show marked
+            strip, p["tabs_at"] = [("│ ", "frame")], []
+            for n, (name, _) in enumerate(p["tabs"]):
+                at = len(flat(strip))
+                strip += [(f" {name} ", "chosen" if n == p["tab"] else "dim"), (" ", "")]
+                p["tabs_at"].append((at, at + len(name) + 2, n))
+            lines.append(clip(strip, w - 2) + [(" " * max(0, w - 2 - len(flat(strip))) + " │", "frame")])
         if p["field"]:
             field_at = len(lines)
             lines.append([("│ ", "frame")] + clip([(p["field"]["label"] + " ", "dim"), (p["field"]["text"], "")], w - 4) + [(" │", "frame")])
@@ -1276,7 +1466,7 @@ class Screen:
                 p["at"][len(lines)] = nth[id(r)]
             lines.append([("│ ", "frame")] + clip(r["s"], w - 4) + [(" │", "frame")])
         field = p["field"] or {}
-        hint = " " + " · ".join(x for x in ("↑↓ move" if len(can) > 1 else "", "type to filter" if field.get("filter") else "",
+        hint = " " + " · ".join(x for x in ("←→ pages" if p.get("tabs") else "", "↑↓ move" if len(can) > 1 else "", "type to filter" if field.get("filter") else "",
                                            "enter choose" if can and p["pick"] else "enter confirm" if field.get("submit") else "",
                                            "esc back" if p["back"] else "esc close") if x) + " "
         return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], sel_at, field_at
@@ -1304,6 +1494,8 @@ class Screen:
             return self.popup_to(p["sel"] - turn)
         if press and not inside:
             return self.popup_key("\x1b")
+        if press and p.get("tabs") and y == py + 1:  # a click on a page's name turns to it
+            return [self.popup_tab(n) for a, b, n in p.get("tabs_at", []) if px + a <= x < px + b] and None
         p["held"] = at if press or (held == at and not state & curses.BUTTON1_RELEASED) else None
         if at is not None:
             self.popup_to(at)
@@ -1322,6 +1514,10 @@ class Screen:
             self.popup = None
             if p["back"]:
                 p["back"]()
+        elif p.get("tabs") and k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):
+            self.popup_tab(p["tab"] + (1 if k in (curses.KEY_RIGHT, "\t") else -1))
+        elif p.get("tabs") and isinstance(k, str) and k.isdigit() and 1 <= int(k) <= len(p["tabs"]):
+            self.popup_tab(int(k) - 1)
         elif k in (curses.KEY_UP, curses.KEY_DOWN) and can:
             self.popup_to((p["sel"] + (1 if k == curses.KEY_DOWN else -1)) % len(can))
         elif k in (curses.KEY_PPAGE, curses.KEY_NPAGE) and can:
@@ -1411,7 +1607,7 @@ class Screen:
         return {"/systemprompt": self.prompt_popup, "/system": self.prompt_popup, "/theme": self.theme_popup,
                 "/directory": self.dir_popup, "/dir": self.dir_popup, "/cd": self.dir_popup,
                 "/log": lambda: self.pop("Log", [row(list(r)) for r in sprint.command(self.agent, "/log")]),
-                "/usage": lambda: self.pop("Usage", [row(list(r), n) for n, r in enumerate(sprint.command(self.agent, "/usage"))]),
+                "/usage": self.usage_popup,
                 "/race": self.race_popup, "/model": self.model_popup, "/mode": self.mode_popup,
                 "/permissions": lambda: self.mode_popup("Permissions"),
                 "/effort": self.effort_popup, "/context": self.context_popup, "/config": self.config_popup, "/help": self.help_popup}
@@ -1422,6 +1618,16 @@ class Screen:
         self.popup = None
         self.load_ui()
         self.tell(flat(rows[0]) if rows else "")
+
+    def usage_popup(self):
+        """/usage, a tab to a page: left and right (or tab, or its number, or a click) turn them, up and down scroll"""
+        tabs = [(name, [row(list(r), n) for n, r in enumerate(rows)]) for name, rows in sprint.usage_pages(self.agent)]
+        self.pop("Usage", tabs[0][1]).update(tabs=tabs, tab=0)
+
+    def popup_tab(self, n):
+        p = self.popup
+        p["tab"] = n % len(p["tabs"])
+        p["rows"], p["sel"], p["top"] = p["tabs"][p["tab"]][1], 0, 0
 
     def background(self, work):
         self.job = threading.Thread(target=work, daemon=True)
@@ -1703,8 +1909,14 @@ class Screen:
             [(f"  {held} waiting for you: /permissions", "warn")] * bool(held)
 
     def version_text(self):
-        """this version, and beside it a newer one when there is one to get"""
-        return [("sprint " + sprint.VERSION, "dim")] + ([(" · ", "dim"), (f"{self.newer} is out: sprint update", "warn")] if self.newer else [])
+        """this version: always there, bottom left"""
+        return [("sprint " + sprint.VERSION, "dim")]
+
+    def update_text(self, width):
+        """a newer version, when there is one to get: for the line above this one's, in a colour of its own, and said
+        as fully as the width allows. Nothing when this is the newest"""
+        said = [f"{self.newer} is out: /update", f"↑ {self.newer} /update", f"↑ {self.newer}"]
+        return [(next((s for s in said if len(s) <= width), said[-1])[:max(0, width)], "warn")] if self.newer else []
 
     def verb(self):
         """one or two words for what is happening right now"""
@@ -1753,7 +1965,8 @@ class Screen:
             if self.deadline:  # how long the question still waits before the call is set aside
                 keys += [(f"waits {max(0, round(self.deadline - time.time()))}s   ", "dim")]
             keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
-            why = [("  deletes: always asked", "err")] if len(self.choices()) == 2 else []
+            kind = sprint.deletion(c.body) if c.tool == "shell" else ""  # why this one is asked whatever the mode
+            why = [("  " + {"own": "deletes this very folder", "outside": "deletes outside this folder"}.get(kind, "deletes: cannot tell what"), "err")] * bool(kind)
             return [rule, clip([(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], max(8, bw - len(flat(why)))) + why,
                     keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
@@ -1926,7 +2139,7 @@ class Screen:
         for y in range(h):  # the whole screen takes the theme's background, a written cell at a time: the curses macOS
             self.put(scr, y, 0, " " * w)  # ships loses the colour of cells cleared to a window background (bkgdset)
         self.hits, self.screen, self.jump_to = {}, {}, None
-        self.grid, self.areas = [[" "] * w for _ in range(h)], {}
+        self.grid, self.areas, self.rows, self.plan_edge = [[" "] * w for _ in range(h)], {}, h, None
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")
             return scr.refresh()
@@ -1960,6 +2173,7 @@ class Screen:
             # bottom left: the version, and a newer one when there is one; a passing note takes its place while it lasts
             version = clip([(self.note_text(), "warn")], max(20, w // 2)) if self.note_text() else self.version_text()
             self.put(scr, h - 1, 2, version, width=w - 4)
+            self.put(scr, h - 2, 2, self.update_text(w - 4))  # a newer one: on the line above, in its own colour
             room = w - 8 - len(flat(version))
             if room >= 12:
                 where = where if len(where) <= room else "…" + where[-(room - 1):]  # the end of a long path says more
@@ -2009,32 +2223,38 @@ class Screen:
             elif self.scroll:
                 keys = [("end", "bold"), (" or click ↓ for the newest", "dim")]
             keys = keys if len(flat(keys)) < mw - len(flat(under)) - 2 else keys[:2] if len(keys) > 2 else clip(keys, max(4, mw - len(flat(under)) - 2))
+            if not lw:  # no message list to stand under: the version follows the mode, a newer one after it, where there is room
+                extra = [("  ", "")] + self.version_text()
+                room = mw - len(flat(under)) - len(flat(keys)) - 4 - len(flat(extra))
+                if room >= 0:
+                    newer = [(" · ", "dim")] + self.update_text(room - 3) if self.newer and room - 3 >= len(self.newer) + 2 else []
+                    under = under + extra + newer
             self.put(scr, h - 1, x0, under, width=mw)
             self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)
             if side:  # right panel: the context window in small, then what the agent has done
                 x, inner = w - side + 1, side - 3
                 self.areas["side"] = (x, w - 2, 0, h - 1)
-                cells = sprint.context_cells(a, inner * 2)
-                self.put(scr, 1, x, [("Context", "dim"), (f"{used}%".rjust(inner - 7), "")], width=inner)
-                self.put(scr, 2, x, cells[:inner])
-                self.put(scr, 3, x, cells[inner:])
-                self.put(scr, 4, x, [(f"{kilo(a.used())} of {kilo(a.ctx)} tokens", "dim")], width=inner)
-                self.put(scr, 5, x, [(self.speed_text(), "dim")], width=inner)
-                self.put(scr, 6, x, [(MODE_ICON[a.mode] + " " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
-                         width=inner)
-                self.put(scr, 8, x, [("Activity", "dim")], width=inner)
-                plan, half = self.plan_now(), h // 2
-                if plan:  # the bottom half is the plan: how far along, then its steps
+                top_rows = self.side_head(inner, h)
+                for i, spans in enumerate(top_rows):
+                    self.put(scr, 1 + i, x, spans, width=inner)
+                act = self.act = len(top_rows) + 2  # the row "Activity" stands on: under the head, wherever that ends
+                self.put(scr, act, x, [("Activity", "dim")], width=inner)
+                plan = self.plan_now() if self.plan else None  # /plan off puts the plan away too
+                half = max(act + 3, min(h - 4, h - self.plan_h if self.plan_h else max(h // 2, act + 6)))  # the bottom half, unless you dragged its edge
+                self.plan_edge = half - 1 if plan else None
+                if plan:  # a line to drag, how far along, then the steps
+                    held = self.drag == "plan"
+                    self.put(scr, half - 1, x, [(("━" if held else "─") * inner, a.mode if held else "frame")])
                     done = f"{min(plan['at'], len(plan['steps']))}/{len(plan['steps'])}"
                     self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
-                    for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 2 - half - 1))):
+                    for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 3 - half))):
                         self.put(scr, half + 1 + i, x, spans, width=inner)
-                log = self.activity()[-max(1, (half - 1 if plan else h - 3) - 9):]
+                log = self.activity()[-max(1, (half - 1 if plan else h - 3) - (act + 1)):]
                 for i, (item, spans) in enumerate(log):
-                    self.put(scr, 9 + i, x, spans, width=inner)
-                    self.hits[("side", 9 + i)] = item
+                    self.put(scr, act + 1 + i, x, spans, width=inner)
+                    self.hits[("side", act + 1 + i)] = item
                 if not log:
-                    self.put(scr, 9, x, [("nothing yet", "dim")])
+                    self.put(scr, act + 1, x, [("nothing yet", "dim")])
                 self.put(scr, h - 1, x, [(sprint.folder().replace(str(Path.home()), "~", 1), "dim")], width=inner)
                 for y in range(h):
                     self.put(scr, y, w - side - 1, [("┃" if self.drag == "right" else "│", a.mode if self.drag == "right" else "frame")])
@@ -2042,7 +2262,9 @@ class Screen:
                 rows = self.outline()
                 self.areas["left"] = (1, lw - 1, 0, h - 1)
                 self.put(scr, 1, 1, [("Messages", "dim")], width=lw - 3)
-                for i, (item, title, meta) in enumerate(rows[-max(1, (h - 4) // 2):]):
+                self.put(scr, h - 1, 1, self.version_text(), width=lw - 2)  # bottom left, always: the version,
+                self.put(scr, h - 2, 1, self.update_text(lw - 3))           # and over it a newer one when there is one
+                for i, (item, title, meta) in enumerate(rows[-max(1, (h - 7) // 2):]):  # the list stops a line short of them
                     latest = item is rows[-1][0]
                     self.put(scr, 3 + i * 2, 1, [(t, "bold" if latest and not r else r) for t, r in title], width=lw - 3)
                     self.put(scr, 4 + i * 2, 1, meta, width=lw - 3)
@@ -2121,6 +2343,7 @@ class Screen:
                 pass
 
     def loop(self, scr, first=""):
+        restore_env(getattr(self, "env_back", {}))  # curses has read its description: commands see the terminal's own again
         curses.raw()
         self.free_ctrl_j()
         self.live = True
@@ -2137,6 +2360,9 @@ class Screen:
         fresh = was = True
         while not self.quit:
             self.advance()
+            if self.repaint:  # the window has taken (or given back) its background: the pairs follow
+                self.repaint = False
+                self.paint()
             now = self.active()
             if fresh or now or was:  # one more frame after things settle, then leave the screen alone
                 self.draw(scr)
@@ -2155,14 +2381,27 @@ class Screen:
         sys.stdout.flush()
 
 
+def restore_env(names):
+    """set these environment names (None: take the name out)"""
+    for name, value in names.items():
+        os.environ.pop(name, None) if value is None else os.environ.__setitem__(name, value)
+
+
 def run(agent, first=""):
     locale.setlocale(locale.LC_ALL, "")
     os.environ.setdefault("ESCDELAY", "25")
     screen = Screen(agent)
     threading.Thread(target=lambda: setattr(screen, "newer", sprint.check_update()), daemon=True).start()  # once a day, off the screen's back
     back = route() if can_route() else None  # exact colours, where the terminal shows them
+    swap = term_for_curses() or {}
+    screen.env_back = {name: os.environ.get(name) for name in swap}  # put back as soon as curses has started (see loop)
+    restore_env(swap)
     try:
         curses.wrapper(screen.loop, first)
     finally:
+        restore_env(screen.env_back)
+        screen.backdrop(None)  # the terminal gets its own background back, however sprint ends
+        if screen.backdrop_job:
+            screen.backdrop_job.join(4)
         if back:
             back()

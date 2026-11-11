@@ -59,10 +59,10 @@ def test_the_screen_draws_on_after_the_working_folder_is_deleted(nest, monkeypat
     s.items = [{"t": "text", "text": "hello"}]
     s.sidebar = True
     s.draw(scr)  # and so does the side panel
-    assert os.path.samefile(os.getcwd(), nest) and "sprint" not in scr.text(29)[:10]  # in the conversation, not back at the start
+    assert os.path.samefile(os.getcwd(), nest) and "hello" in "".join(scr.text(y) for y in range(6))  # the conversation, drawn
 
 
-# ---------- a command that deletes is always put to you first ----------
+# ---------- deleting: files in the folder are fine, the folder itself and anything outside it are put to you ----------
 
 @pytest.mark.parametrize("cmd", ["rm notes.txt", "rm -rf build", "cd src && rm *.pyc", "sudo rm -rf /tmp/x", "/bin/rm x", "rmdir old",
                                  "ls | xargs rm", "find . -name '*.log' -delete", "git clean -fd", "unlink a", "shred -u key",
@@ -78,6 +78,47 @@ def test_and_ordinary_commands_are_not(cmd):
     assert not sprint.deletes(cmd)
 
 
+@pytest.fixture
+def proj(tmp_path, monkeypatch):
+    """tmp/proj, with sprint working in it, a file inside and one beside it"""
+    here = tmp_path / "proj"
+    (here / "build").mkdir(parents=True)
+    (here / "gone.txt").write_text("x")
+    (tmp_path / "gone.txt").write_text("x")
+    monkeypatch.chdir(here)
+    return here
+
+
+@pytest.mark.parametrize("cmd", ["rm notes.txt", "rm -rf build", "rm -f src/*.pyc", "rm ./a ./build/c", "rmdir build", "rm -- -odd", "unlink gone.txt",
+                                 "echo hi; rm gone.txt", "rm -rf build/*", "sudo rm -f gone.txt", "FORCE=1 rm gone.txt", "rm *.log"])
+def test_deleting_what_is_inside_the_folder_is_an_ordinary_command(proj, cmd):
+    assert sprint.deletion(cmd) == ""
+
+
+@pytest.mark.parametrize("cmd", ["rm -rf .", "rm -rf ./", "rm -rf $PWD", 'rm -rf "$PWD"', "rm -rf ../proj", "rm -rf *", "rm -rf ./*", "rm -rf ..",
+                                 "rm -rf /", "rmdir .", "rm -rf build . ", "rm -rf .* *", "rm -rf ${PWD}"])
+def test_deleting_the_folder_sprint_works_in_is_told_apart(proj, cmd):
+    assert sprint.deletion(cmd) == "own"
+    assert sprint.deletion(f"rm -rf {proj}") == "own" and sprint.deletion(f"rm -rf {proj.parent}") == "own"  # it, or what holds it
+
+
+@pytest.mark.parametrize("cmd", ["rm ../gone.txt", "rm -rf ../other", "rm /etc/hosts", "rm ~/notes.txt", "rm -rf $HOME/x", "rm -rf /tmp/zzz-not-here",
+                                 "rm -rf ../*", "rm gone.txt ../gone.txt"])
+def test_deleting_anything_outside_the_folder_is_told_apart(proj, cmd):
+    assert sprint.deletion(cmd) == "outside"
+
+
+@pytest.mark.parametrize("cmd", ["cd .. && rm -rf proj", "find . -delete", "git clean -fd", "ls | xargs rm", "rm -rf $TARGET", "rm $(cat list)",
+                                 "python3 -c 'import shutil; shutil.rmtree(\"x\")'", "Remove-Item x", "rm -rf `pwd`", "cd build && rm -rf x",
+                                 "rm 'unfinished"])
+def test_a_deletion_that_cannot_be_read_is_treated_as_one_to_ask_about(proj, cmd):
+    assert sprint.deletion(cmd) == "unknown"
+
+
+def test_a_command_that_deletes_nothing_is_no_deletion(proj):
+    assert sprint.deletion("ls -la") == "" and sprint.deletion("docker run --rm img") == ""
+
+
 def asking(answer, **kw):
     """an agent in auto mode whose every question is recorded and given this answer"""
     kw.setdefault("mode", "auto")
@@ -87,66 +128,71 @@ def asking(answer, **kw):
     return a
 
 
-def rm(path="gone.txt"):
+def rm(path="../gone.txt"):
     return sprint.Call("shell", "", f"rm {path}", 0, 0)
 
 
-def test_in_auto_mode_a_deletion_still_asks_and_nothing_else_does(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "gone.txt").write_text("x")
+def test_in_auto_mode_files_in_the_folder_go_without_a_question(proj):
+    a = asking(False)
+    a.do(rm("gone.txt"))
+    a.do(sprint.Call("shell", "", "rm -rf build", 0, 0))
+    assert a.asked == [] and not (proj / "gone.txt").exists() and not (proj / "build").exists()
+
+
+def test_in_auto_mode_a_deletion_outside_the_folder_still_asks(proj):
     a = asking(False)
     assert "hi" in a.do(sprint.Call("shell", "", "echo hi", 0, 0)) and a.asked == []
-    assert a.do(rm()).startswith("denied") and len(a.asked) == 1 and (tmp_path / "gone.txt").exists()
+    assert a.do(rm()).startswith("denied") and len(a.asked) == 1 and (proj.parent / "gone.txt").exists()
     a.ask = lambda call: True
     a.do(rm())
-    assert not (tmp_path / "gone.txt").exists()
+    assert not (proj.parent / "gone.txt").exists()
 
 
-def test_always_is_never_remembered_for_a_deletion_and_no_allow_rule_frees_one(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+def test_deleting_the_working_folder_always_asks_and_a_no_keeps_it(proj):
+    a = asking(False)
+    for cmd in ("rm -rf .", "rm -rf ../proj", "cd .. && rm -rf proj"):
+        assert a.do(sprint.Call("shell", "", cmd, 0, 0)).startswith("denied")
+    assert len(a.asked) == 3 and proj.is_dir() and (proj / "gone.txt").exists()
+
+
+def test_always_is_never_remembered_for_such_a_deletion_and_no_allow_rule_frees_one(proj, monkeypatch):
     saved = []
     monkeypatch.setattr(sprint, "save_config", lambda **kw: saved.append(kw))
     a = asking("always")
     a.do(rm())
     assert a.allow == [] and saved == []  # yes, this once
     a.allow = ["shell rm*", "shell *"]
-    a.do(rm("other.txt"))
+    a.do(rm("../other.txt"))
     assert len(a.asked) == 2  # asked again all the same
 
 
-def test_with_nobody_to_ask_a_deletion_is_refused_whatever_the_mode(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "gone.txt").write_text("x")
+def test_with_nobody_to_ask_such_a_deletion_is_refused_whatever_the_mode(proj, monkeypatch):
     a = Agent(chat=scripted(), out=io.StringIO(), mode="auto")
     monkeypatch.setattr(sprint.sys.stdin, "isatty", lambda: False, raising=False)
     said = a.do(rm())
-    assert said.startswith("denied") and "delet" in said and "-y" not in said and (tmp_path / "gone.txt").exists()
+    assert said.startswith("denied") and "delet" in said and "-y" not in said and (proj.parent / "gone.txt").exists()
 
 
 # ---------- a question nobody answers does not hold the work up ----------
 
-def test_an_unanswered_question_sets_the_call_aside_and_the_model_is_told_to_carry_on(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "gone.txt").write_text("x")
+def test_an_unanswered_question_sets_the_call_aside_and_the_model_is_told_to_carry_on(proj):
     a = asking("later")
     said = a.do(rm())
-    assert said.startswith("set aside") and "carry on" in said.lower() and (tmp_path / "gone.txt").exists()
-    assert [c.body for c in a.parked] == ["rm gone.txt"]
+    assert said.startswith("set aside") and "carry on" in said.lower() and (proj.parent / "gone.txt").exists()
+    assert [c.body for c in a.parked] == ["rm ../gone.txt"]
     a.do(rm())
     assert len(a.parked) == 1  # the same call waits once, however often it is tried
 
 
-def test_what_was_set_aside_runs_once_you_allow_it_the_next_time_the_model_asks(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "gone.txt").write_text("x")
+def test_what_was_set_aside_runs_once_you_allow_it_the_next_time_the_model_asks(proj):
     a = asking("later")
     a.do(rm())
-    assert "rm gone.txt" in a.approve(0) and a.parked == []
+    assert "rm ../gone.txt" in a.approve(0) and a.parked == []
     a.do(rm())
-    assert not (tmp_path / "gone.txt").exists() and len(a.asked) == 1  # it ran without a second question
-    (tmp_path / "gone.txt").write_text("x")
+    assert not (proj.parent / "gone.txt").exists() and len(a.asked) == 1  # it ran without a second question
+    (proj.parent / "gone.txt").write_text("x")
     a.do(rm())
-    assert len(a.asked) == 2 and (tmp_path / "gone.txt").exists()  # once only
+    assert len(a.asked) == 2 and (proj.parent / "gone.txt").exists()  # once only
 
 
 def test_how_long_a_question_waits_is_a_setting_twenty_seconds_unless_changed(tmp_path, monkeypatch):
@@ -235,7 +281,30 @@ def test_what_is_waiting_shows_under_the_prompt_and_in_permissions_where_enter_a
     assert "1 waiting" in flat(s.mode_row()) and "/permissions" in flat(s.mode_row())
     s.submit("/permissions")
     rows, can = s.shown()
-    assert any("rm gone.txt" in flat(r["s"]) for r in rows)
+    assert any("rm ../gone.txt" in flat(r["s"]) for r in rows)
     s.popup["sel"] = next(n for n, r in enumerate(can) if r["v"] == ("parked", 0))
     s.popup_key("\r")
-    assert s.agent.parked == [] and s.agent.passes == [("shell", "rm gone.txt")] and "allowed once" in s.note_text()
+    assert s.agent.parked == [] and s.agent.passes == [("shell", "rm ../gone.txt")] and "allowed once" in s.note_text()
+
+
+def test_the_question_says_what_kind_of_deletion_it_is():
+    s = waiting(rm())
+    s.pending, s.choice = rm(), 0
+    assert "outside this folder" in flat(s.input_rows(110)[0][1])
+    s.pending = sprint.Call("shell", "", "rm -rf .", 0, 0)
+    assert "this very folder" in flat(s.input_rows(110)[0][1]) and "always" not in flat(s.input_rows(110)[0][2])
+    s.pending = sprint.Call("shell", "", "rm notes.txt", 0, 0)  # in ask mode a file in the folder is asked about like anything else
+    assert "delete" not in flat(s.input_rows(110)[0][1]) and "always" in flat(s.input_rows(110)[0][2])
+
+
+# ---------- the mode you leave in is the mode you come back to ----------
+
+def test_changing_the_mode_is_remembered_and_starting_in_one_is_not(tmp_path):
+    a = Agent(chat=scripted(), out=io.StringIO(), mode="auto")  # sprint -y: for this run
+    assert "mode" not in sprint.load_config()
+    a.cycle()
+    assert sprint.load_config()["mode"] == a.mode == "ask"
+    sprint.command(a, "/mode edits")
+    assert sprint.load_config()["mode"] == "edits"
+    sprint.command(a, "/permissions auto")
+    assert sprint.load_config()["mode"] == "auto"
