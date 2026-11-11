@@ -51,13 +51,14 @@ Copy and paste
 Mouse
   drag the line beside either panel to resize it · click a message or an activity line to jump to it"""
 
-# the wordmark: "sprint" in a 5-row pixel font, shaded from light to solid, leaning forward
+# the wordmark: "sprint" in a 5-row pixel font, shaded from light to solid, one colour per shade, leaning forward
 WORD = "sprint"
 PIX = {"s": ["XXXX", "X   ", "XXXX", "   X", "XXXX"], "p": ["XXXX", "X  X", "XXXX", "X   ", "X   "],
        "r": ["XXXX", "X  X", "XXX ", "X X ", "X  X"], "i": ["X", "X", "X", "X", "X"],
        "n": ["X  X", "XX X", "X XX", "X  X", "X  X"], "t": ["XXXXX", "  X  ", "  X  ", "  X  ", "  X  "],
        "e": ["XXXX", "X   ", "XXX ", "X   ", "XXXX"]}
 STILL = (1, 1, 2, 3, 3, 4)  # shade of each letter when nothing moves: ░ ░ ▒ ▓ ▓ █
+SHADE = {"░": "yellow", "▒": "cyan", "▓": "magenta", "█": "bold"}  # each shade in its own colour, like the four bars of the logo
 LOGO_W = 60        # columns: two per pixel, two between letters, four of lean
 WAVE_SECONDS = 11  # how long the crest takes to cross the word and come round again
 
@@ -79,7 +80,7 @@ def logo_rows(t=None):
                     text += " ░▒▓█"[0 if px != "X" else STILL[i] if t is None else wave(x, t)]
                     x += 1
         text = (" " * (4 - r) + text).ljust(LOGO_W)
-        rows.append([(m.group(), {"░": "dim", "█": "bold"}.get(m.group()[0], "")) for m in re.finditer(r"(.)\1*", text)])
+        rows.append([(m.group(), SHADE.get(m.group()[0], "")) for m in re.finditer(r"(.)\1*", text)])
     return rows
 
 
@@ -1247,7 +1248,7 @@ class Screen:
         art = []
         if home:  # the wordmark, with its wave unless motion is off or there is no room for it
             art = logo_rows(time.time() if self.motion else None) if w >= LOGO_W + 6 and h >= 20 else \
-                [[("░", "dim"), ("▒▓", ""), ("█", "bold"), (" sprint", "bold")]]
+                [[(c, SHADE[c]) for c in "░▒▓█"] + [(" sprint", "bold")]]
         logo_h = len(art) + 2 if home else 0
         top = max(1, (h - logo_h - len(rows) - 3) // 2) + logo_h if home else h - 1 - len(rows)
         for i, r in enumerate(rows):

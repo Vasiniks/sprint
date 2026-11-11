@@ -256,6 +256,12 @@ def test_logo_is_five_equal_rows_of_shade_characters():
     assert set("".join(still)) <= set(" ░▒▓█")
 
 
+def test_each_logo_shade_has_its_own_colour():
+    for rows in (tui.logo_rows(), tui.logo_rows(3.0)):
+        seen = {text[0]: role for row in rows for text, role in row if text.strip()}
+        assert seen == {"░": "yellow", "▒": "cyan", "▓": "magenta", "█": "bold"}
+
+
 def test_logo_held_still_goes_from_light_shade_to_solid():
     top = letters(tui.logo_rows())[0].replace(" ", "")
     assert "".join(dict.fromkeys(top)) == "░▒▓█" and top[0] == "░" and top[-1] == "█"
