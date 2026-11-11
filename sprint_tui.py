@@ -760,9 +760,10 @@ class Screen:
         cells = sprint.context_cells(a, inner * 2)
         rows = [[("Context", "dim"), (f"{pct}%".rjust(inner - 7), loud)], cells[:inner], cells[inner:],
                 clip([(f"{kilo(int(used))} of {kilo(ctx)} tokens", "dim")], inner)]
-        mode = [(MODE_ICON[a.mode] + " " + a.mode, a.mode)] + ([("  plan", "dim")] if self.plan else [])
-        if h < 32:  # a short screen: the two lines it always had
-            return rows + [clip([(self.speed_text(), "dim")], inner), clip(mode + [("  " + short(a.model), "dim")], inner)]
+        switch = lambda on: ("on", "ok") if on else ("off", "dim")
+        if h < 32:  # a short screen: two lines, the speed and the model with what is switched on (the mode is by the prompt)
+            flags = [(name + "  ", "") for name, on in (("think", a.think), ("plan", self.plan)) if on]  # first: a long name must not push them off
+            return rows + [clip([(self.speed_text(), "dim")], inner), clip(flags + [(short(a.model), "dim")], inner)]
         if h >= 44 and inner >= 28:  # what fills the window, two to a row, each in the colour it has up there
             brief = lambda n: str(n) if n < 1000 else f"{n / 1000:.1f}k" if n < 10000 else f"{n // 1000}k"
             parts, wide = dict(a.breakdown()), inner // 2
@@ -773,14 +774,15 @@ class Screen:
             rows += [cell[i] + cell[i + 1] for i in (0, 2, 4)]
         tally = a.tally
         calls = sum(tally["tools"].values())
-        told = [("model", [(short(a.model), "")]), ("mode", mode),
-                ("thinking", [("on", "ok") if a.think else ("off", "dim")]), ("effort", [(a.effort, "")]),
+        told = [("model", [(short(a.model), "")]),
+                ("thinking", [switch(a.think)]), ("showthink", [switch(self.showthink)]), ("effort", [(a.effort, "")]),
+                ("plan", [switch(self.plan)]),
                 ("speed", [(f"{a.rate:.0f} tok/s", ""), (f" · {a.took:.1f}s last", "dim")] if a.rate else [("no reply yet", "dim")]),
                 ("tokens", [(f"↑ {sprint.human(tally['sent'])} ↓ {sprint.human(tally['written'])}", "")]),
                 ("tools", [(f"{calls} call{'s' * (calls != 1)}", "")] + ([(f" · {tally['failed']} failed", "err")] if tally["failed"] else [])),
                 ("time", [(sprint.clock(tally["secs"]), ""), (" answering", "dim")])]
         if h < 44:  # the middle size: one line for thinking and effort, and no session clock
-            told = told[:2] + [("thinking", [(a.effort, "") if a.think else ("off", "dim")])] + told[4:7]
+            told = told[:1] + [("thinking", [(a.effort, "") if a.think else ("off", "dim")]), told[2]] + told[4:8]
         rows += [[], [("Session", "dim"), (sprint.clock(time.time() - a.started).rjust(inner - 7), "dim")]]
         return rows + [clip([(f"{label:<10}", "dim")] + value, inner) for label, value in told]
 
