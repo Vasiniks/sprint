@@ -502,6 +502,7 @@ class Screen:
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
         self.plan_h, self.plan_edge, self.rows = None, None, 0  # rows you gave the plan; its top edge; the screen's
+        self.act = 8  # the row of the right-hand panel that "Activity" stands on
         self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -642,6 +643,41 @@ class Screen:
             last["at"] = at
         else:
             self.items.append({"t": "plan", "steps": list(steps), "at": at})
+
+    def side_head(self, inner, h):
+        """the top of the right-hand panel, as rows inner wide: the context window, then the session. A tall screen gets
+        a legend of what fills the window and every figure; a shorter one says less, so that what the agent did, and
+        the plan, keep their room"""
+        a = self.agent
+        used, ctx = a.used(), a.ctx
+        pct = min(100, int(used * 100 // ctx))
+        loud = "err" if pct >= 85 else "warn" if pct >= 60 else "ok"  # the fuller the window, the louder the figure
+        cells = sprint.context_cells(a, inner * 2)
+        rows = [[("Context", "dim"), (f"{pct}%".rjust(inner - 7), loud)], cells[:inner], cells[inner:],
+                clip([(f"{kilo(int(used))} of {kilo(ctx)} tokens", "dim")], inner)]
+        mode = [(MODE_ICON[a.mode] + " " + a.mode, a.mode)] + ([("  plan", "dim")] if self.plan else [])
+        if h < 32:  # a short screen: the two lines it always had
+            return rows + [clip([(self.speed_text(), "dim")], inner), clip(mode + [("  " + short(a.model), "dim")], inner)]
+        if h >= 44 and inner >= 28:  # what fills the window, two to a row, each in the colour it has up there
+            brief = lambda n: str(n) if n < 1000 else f"{n / 1000:.1f}k" if n < 10000 else f"{n // 1000}k"
+            parts, wide = dict(a.breakdown()), inner // 2
+            names = (("system", "system prompt"), ("tools", "tool definitions"), ("you", "your messages"), ("replies", "model replies"),
+                     ("results", "tool results"), ("reply", "reserved for the reply"))
+            cell = [[("▒ " if key.startswith("reserved") else "█ ", sprint.SHADE[key]), (f"{name:<{wide - 7}}{brief(parts[key]):>4} ", "dim")]
+                    for name, key in names]
+            rows += [cell[i] + cell[i + 1] for i in (0, 2, 4)]
+        tally = a.tally
+        calls = sum(tally["tools"].values())
+        told = [("model", [(short(a.model), "")]), ("mode", mode),
+                ("thinking", [("on", "ok") if a.think else ("off", "dim")]), ("effort", [(a.effort, "")]),
+                ("speed", [(f"{a.rate:.0f} tok/s", ""), (f" · {a.took:.1f}s last", "dim")] if a.rate else [("no reply yet", "dim")]),
+                ("tokens", [(f"↑ {sprint.human(tally['sent'])} ↓ {sprint.human(tally['written'])}", "")]),
+                ("tools", [(f"{calls} call{'s' * (calls != 1)}", "")] + ([(f" · {tally['failed']} failed", "err")] if tally["failed"] else [])),
+                ("time", [(sprint.clock(tally["secs"]), ""), (" answering", "dim")])]
+        if h < 44:  # the middle size: one line for thinking and effort, and no session clock
+            told = told[:2] + [("thinking", [(a.effort, "") if a.think else ("off", "dim")])] + told[4:7]
+        rows += [[], [("Session", "dim"), (sprint.clock(time.time() - a.started).rjust(inner - 7), "dim")]]
+        return rows + [clip([(f"{label:<10}", "dim")] + value, inner) for label, value in told]
 
     def speed_text(self):
         a = self.agent
@@ -1110,7 +1146,7 @@ class Screen:
             if self.drag == "right":
                 self.side_w = max(20, min(w - lw - ROOM, w - 1 - x))
             elif self.drag == "plan":  # the plan's top edge: the plan starts on the row under the mouse
-                self.plan_h = max(4, min(self.rows - 11, self.rows - 1 - y))
+                self.plan_h = max(4, min(self.rows - self.act - 3, self.rows - 1 - y))
             else:
                 self.left_w = max(16, min(w - side - ROOM, x))
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
@@ -2020,17 +2056,13 @@ class Screen:
             if side:  # right panel: the context window in small, then what the agent has done
                 x, inner = w - side + 1, side - 3
                 self.areas["side"] = (x, w - 2, 0, h - 1)
-                cells = sprint.context_cells(a, inner * 2)
-                self.put(scr, 1, x, [("Context", "dim"), (f"{used}%".rjust(inner - 7), "")], width=inner)
-                self.put(scr, 2, x, cells[:inner])
-                self.put(scr, 3, x, cells[inner:])
-                self.put(scr, 4, x, [(f"{kilo(a.used())} of {kilo(a.ctx)} tokens", "dim")], width=inner)
-                self.put(scr, 5, x, [(self.speed_text(), "dim")], width=inner)
-                self.put(scr, 6, x, [(MODE_ICON[a.mode] + " " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
-                         width=inner)
-                self.put(scr, 8, x, [("Activity", "dim")], width=inner)
+                top_rows = self.side_head(inner, h)
+                for i, spans in enumerate(top_rows):
+                    self.put(scr, 1 + i, x, spans, width=inner)
+                act = self.act = len(top_rows) + 2  # the row "Activity" stands on: under the head, wherever that ends
+                self.put(scr, act, x, [("Activity", "dim")], width=inner)
                 plan = self.plan_now() if self.plan else None  # /plan off puts the plan away too
-                half = max(11, min(h - 4, h - self.plan_h if self.plan_h else h // 2))  # the bottom half, unless you dragged its edge
+                half = max(act + 3, min(h - 4, h - self.plan_h if self.plan_h else max(h // 2, act + 6)))  # the bottom half, unless you dragged its edge
                 self.plan_edge = half - 1 if plan else None
                 if plan:  # a line to drag, how far along, then the steps
                     held = self.drag == "plan"
@@ -2039,12 +2071,12 @@ class Screen:
                     self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
                     for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 3 - half))):
                         self.put(scr, half + 1 + i, x, spans, width=inner)
-                log = self.activity()[-max(1, (half - 1 if plan else h - 3) - 9):]
+                log = self.activity()[-max(1, (half - 1 if plan else h - 3) - (act + 1)):]
                 for i, (item, spans) in enumerate(log):
-                    self.put(scr, 9 + i, x, spans, width=inner)
-                    self.hits[("side", 9 + i)] = item
+                    self.put(scr, act + 1 + i, x, spans, width=inner)
+                    self.hits[("side", act + 1 + i)] = item
                 if not log:
-                    self.put(scr, 9, x, [("nothing yet", "dim")])
+                    self.put(scr, act + 1, x, [("nothing yet", "dim")])
                 self.put(scr, h - 1, x, [(sprint.folder().replace(str(Path.home()), "~", 1), "dim")], width=inner)
                 for y in range(h):
                     self.put(scr, y, w - side - 1, [("┃" if self.drag == "right" else "│", a.mode if self.drag == "right" else "frame")])
