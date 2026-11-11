@@ -198,7 +198,8 @@ python -m pytest
 | `sprint_tui.py` | the full-screen interface (stdlib `curses`) |
 | `test_sprint.py`, `test_tui.py`, `test_prompt.py`, `test_popups.py`, `test_showthink.py` | tests; they use a scripted model and never touch your settings |
 | `test_windows.py` | the Windows-only paths, run on Windows in CI and skipped elsewhere |
-| `site/`, `wrangler.jsonc` | the website: static files, published to Cloudflare Pages with `npx wrangler pages deploy` |
+| `site/`, `wrangler.jsonc` | the website: static files, published to Cloudflare Pages with `npx wrangler pages deploy --branch site` |
+| `sitegen/` | what builds them: `python3 sitegen/gen.py site sitegen/page.html assets/logo.svg` |
 | `assets/logo.svg` | the logo as the opening screen, animated; drawn from the same pixel font as the app |
 
 ## License
