@@ -35,7 +35,7 @@ COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the 
             ("/compact", "fold the older conversation into a short summary to free room"), ("/sidebar", "show or hide the sidebar, or set its width"),
             ("/history", "show or hide the message list, or set its width"),
             ("/tools", "expand or collapse all tool windows"), ("/mouse", "mouse on or off, for selecting text"),
-            ("/help", "keys and commands"), ("/exit", "quit")]
+            ("/update", "get the newest sprint"), ("/help", "keys and commands"), ("/exit", "quit")]
 # /help: what you can type and press, a thing to a line; the commands above join it as its last section
 HELP = [("In a message", [("@path", "attach that file; tab completes the name"),
                           ("!command", "run the command yourself, without the model"),
@@ -874,6 +874,15 @@ class Screen:
                       "mouse off: select text as usual; ctrl+o and pgup/pgdn still work")
         elif cmd == "/paste":
             self.paste_image()
+        elif cmd == "/update":
+            self.tell("updating sprint…")
+
+            def work():  # off the screen's back: it asks the network
+                ok, said = sprint.fetch_update()
+                self.newer = "" if ok else self.newer
+                self.tell(said) if ok else self.say(said, "err")
+
+            self.background(work)
         elif cmd == "/showthink":
             self.showthink = not self.showthink
             sprint.save_config(showthink=self.showthink)
@@ -1858,7 +1867,7 @@ class Screen:
     def update_text(self, width):
         """a newer version, when there is one to get: for the line above this one's, in a colour of its own, and said
         as fully as the width allows. Nothing when this is the newest"""
-        said = [f"{self.newer} is out: sprint update", f"↑ {self.newer} sprint update", f"↑ {self.newer}"]
+        said = [f"{self.newer} is out: /update", f"↑ {self.newer} /update", f"↑ {self.newer}"]
         return [(next((s for s in said if len(s) <= width), said[-1])[:max(0, width)], "warn")] if self.newer else []
 
     def verb(self):

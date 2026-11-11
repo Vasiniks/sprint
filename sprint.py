@@ -1437,6 +1437,8 @@ def command(agent, line):
         except (OSError, ValueError, KeyError):
             return note("cannot list models: is Ollama running?")
         return note("installed models (switch with /model NAME):", *("  " + n + ("   ← current" if n == agent.model else "") for n in names))
+    if cmd == "/update":
+        return note(fetch_update()[1])
     if cmd == "/compact":
         before, kept, forgotten = agent.used(), agent.msgs, agent.forgotten
         folded = agent.compact() or agent.compact(everything=True)  # nothing older to fold: then the latest exchange as well
@@ -1569,7 +1571,7 @@ HELP = [("@file", "attach a file"), ("!command", "run the command yourself, with
         ("/directory [PATH]", "change the folder sprint works in"), ("/plan", "split each message into steps first, on or off"),
         ("/race MODEL MESSAGE", "one message, two models, side by side"),
         ("/systemprompt", "edit what the model is told at the start"), ("/config", "see or change saved settings"),
-        ("/clear", "clear the conversation and start fresh"), ("/bye", "quit")]
+        ("/update", "get the newest sprint"), ("/clear", "clear the conversation and start fresh"), ("/bye", "quit")]
 
 
 def help_rows():
@@ -1615,11 +1617,40 @@ def open_file(path):
         return False
 
 
-def update(home=None):
-    """get the newest sprint: pull if this copy is a git checkout, else reinstall with pip -> exit code"""
-    home = Path(home or Path(__file__).resolve().parent)
-    argv = ["git", "-C", str(home), "pull", "--ff-only"] if (home / ".git").exists() else \
+def update_argv(home):
+    """the command that gets the newest sprint: pull if this copy is a git checkout, else reinstall with pip"""
+    return ["git", "-C", str(home), "pull", "--ff-only"] if (home / ".git").exists() else \
         [sys.executable, "-m", "pip", "install", "--upgrade", f"git+https://github.com/{REPO}.git"]
+
+
+def fetch_update(home=None):
+    """/update, from inside sprint: get the newest without writing a thing to the screen -> (did it work, what to say).
+    What is on disk afterwards is read back, so it can say which version a restart will bring"""
+    home = Path(home or Path(__file__).resolve().parent)
+    try:
+        done = subprocess.run(update_argv(home), capture_output=True, text=True, errors="replace", timeout=300)
+        ok, out = done.returncode == 0, (done.stdout or "") + (done.stderr or "")
+    except (OSError, subprocess.SubprocessError) as e:
+        ok, out = False, str(e)
+    try:
+        update_file().unlink()  # look again for what is newest next time
+    except OSError:
+        pass
+    if not ok:
+        return False, "the update did not go through: " + (out.strip().splitlines() or ["no reason given"])[-1][:200]
+    try:
+        now = re.search(r'^VERSION = "([^"]+)"', (home / "sprint.py").read_text(encoding="utf-8"), re.M).group(1)
+    except (OSError, AttributeError):
+        now = ""
+    if now == VERSION:
+        return True, f"already the newest ({VERSION})"
+    return True, f"updated{' to ' + now if now else ''}: start sprint again to use it"
+
+
+def update(home=None):
+    """sprint update, from the shell: the same, with the command and its own output on show -> exit code"""
+    home = Path(home or Path(__file__).resolve().parent)
+    argv = update_argv(home)
     print("  " + " ".join(argv))
     try:
         ok = subprocess.run(argv).returncode == 0

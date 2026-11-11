@@ -37,7 +37,7 @@ Type a request and press Enter. In the default mode sprint asks before it runs a
 | `sprint update` | get the newest sprint: `git pull` for a checkout, `pip install --upgrade` otherwise |
 | `sprint --version` | the version |
 
-Once a day sprint looks at this repository for a newer version and, if there is one, says so on the line above the version, in a colour of its own. The version is always bottom left: on the opening screen, and under your messages once a conversation is going. The look sends nothing but the request itself; `/config update_check off` stops it.
+Once a day sprint looks at this repository for a newer version and, if there is one, says so on the line above the version, in a colour of its own (`/update` gets it). The version is always bottom left: on the opening screen, and under your messages once a conversation is going. The look sends nothing but the request itself; `/config update_check off` stops it.
 
 ## The screen
 
@@ -137,6 +137,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/tools`, `/mouse` | Expand or collapse all tool windows; turn mouse capture on or off. |
 | `/log` | The last things that happened, and where the full log is. |
 | `/help` | Every key and command, in sections, a thing to a line. Type to narrow the list; Enter on a command puts it in the prompt. |
+| `/update` | Get the newest sprint without leaving it (what `sprint update` does). It tells you which version a restart will bring, or that you already have the newest. |
 | `/clear` (or `/new`), `/exit` | Start fresh, quit. |
 
 ## Settings and files
