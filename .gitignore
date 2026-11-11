@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 .env
 models/
+*.egg-info/
+.pytest_cache/
+.serena/
+.mypy_cache/
+.ruff_cache/
+sprint-*.md

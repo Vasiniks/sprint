@@ -1,16 +1,18 @@
 [project]
 name = "sprint"
-version = "0.1.0"
-description = "tiny 8K harness for tiny agents + claude/opencode inspired TUI"
+version = "0.3.0"
+description = "a tiny terminal agent for tiny models with tiny contexts"
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.9"
-dependencies = ["httpx>=0.27", "rich>=13", "textual>=0.60", "psutil>=5.9"]
-
-[project.optional-dependencies]
-minimal = ["httpx>=0.27"]
+dependencies = ["windows-curses; platform_system == 'Windows'"]  # the full screen needs it there; nothing elsewhere
 
 [project.scripts]
-sprint = "sprint.cli:main"
+sprint = "sprint:main"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["sprint", "sprint_tui"]
