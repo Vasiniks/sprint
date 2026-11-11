@@ -80,3 +80,44 @@ def test_one_thought_can_be_opened_by_itself_and_showthink_is_a_listed_command()
     s.items[-1]["open"] = True
     assert "Check the tests first." in "\n".join(flat(spans) for _, spans, _ in s.window(s.items[-1], 70))
     assert "/showthink" in dict(tui.COMMANDS) and "/showthink" in tui.HELP
+
+
+# ---------- Windows details of pasting, found by reading the code against PDCurses ----------
+
+def test_a_temp_folder_with_an_apostrophe_does_not_break_the_windows_clipboard_command(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(sprint, "WINDOWS", True)
+    monkeypatch.setattr(sprint.tempfile, "gettempdir", lambda: str(tmp_path / "O'Brien"))
+    monkeypatch.setattr(sprint.shutil, "which", lambda name: name)
+    monkeypatch.setattr(sprint.subprocess, "run", lambda argv, **kw: seen.append(argv) or sprint.subprocess.CompletedProcess(argv, 1, b"", b""))
+    assert sprint.clipboard_image() == ""
+    assert "O''Brien" in seen[0][-1] and "O'Brien" not in seen[0][-1].replace("O''Brien", "")
+
+
+def test_a_held_key_is_not_gathered_into_a_paste():
+    """key repeat comes about every 30 ms; waiting less than that for the rest of a paste keeps the two apart"""
+    class Keys:
+        def __init__(self):
+            self.keys, self.waits = ["a", "a"], []
+
+        def timeout(self, ms):
+            self.waits.append(ms)
+
+        def get_wch(self):
+            if not self.keys:
+                raise tui.curses.error("no input")
+            return self.keys.pop(0)
+
+    keys = Keys()
+    screen().read_keys(keys)
+    assert keys.waits[0] == 0 and 0 < max(keys.waits) <= 12
+
+
+def test_alt_v_as_windows_reports_it_attaches_the_clipboard_picture(tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG....")
+    monkeypatch.setattr(sprint, "clipboard_image", lambda: str(shot))
+    monkeypatch.setattr(tui, "ALT_V", 0x1b6)
+    s = screen()
+    s.key(0x1b6)
+    assert s.buf == "[Image #1] "

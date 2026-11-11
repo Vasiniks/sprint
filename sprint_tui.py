@@ -105,6 +105,7 @@ MOUSE = (curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESS
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 # what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
 SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline"}
+ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 
 CODE = re.compile(
@@ -516,7 +517,7 @@ class Screen:
             self.toggle_all()
         elif k == "\x0c":  # ctrl+l
             self.submit("/clear")
-        elif k == "\x16":  # ctrl+v: the picture on the clipboard (text pastes come from the terminal itself)
+        elif k in ("\x16", ALT_V):  # ctrl+v, alt+v: the picture on the clipboard (text pastes come from the terminal)
             self.paste_image()
         elif k == "\x19":  # ctrl+y: copy the last answer
             self.tell(flat(sprint.command(self.agent, "/copy")[0]))
@@ -604,7 +605,7 @@ class Screen:
             while len(keys) < 500000:
                 keys.append(scr.get_wch())
                 if len(keys) == 2:
-                    scr.timeout(25)  # more is coming: give the rest of a paste a moment to arrive
+                    scr.timeout(10)  # more is coming: wait a moment for the rest, but less than a held key's repeat
         except curses.error:
             pass
         return keys

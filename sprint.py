@@ -1036,9 +1036,10 @@ def clipboard_image():
     file manager comes back as itself. A terminal cannot paste a picture, so sprint asks the system for it."""
     out = os.path.join(tempfile.gettempdir(), f"sprint-paste-{int(time.time() * 1000)}.png")
     if WINDOWS:
+        quoted = out.replace("'", "''")  # PowerShell's way to put an apostrophe inside '...'
         tries = [["powershell", "-NoProfile", "-STA", "-Command",
                   "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $i = [Windows.Forms.Clipboard]::GetImage(); "
-                  f"if ($i) {{ $i.Save('{out}', [Drawing.Imaging.ImageFormat]::Png) }} "
+                  f"if ($i) {{ $i.Save('{quoted}', [Drawing.Imaging.ImageFormat]::Png) }} "
                   "else { $f = [Windows.Forms.Clipboard]::GetFileDropList(); if ($f.Count) { $f[0] } }"]]
     elif sys.platform == "darwin":
         save = ['-e', f'set f to open for access POSIX file "{out}" with write permission', "-e", "write d to f", "-e", "close access f"]
