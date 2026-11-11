@@ -187,6 +187,7 @@ def test_an_unanswered_question_sets_the_call_aside_and_the_model_is_told_to_car
     a = asking("later")
     said = a.do(rm())
     assert said.startswith("set aside") and "carry on" in said.lower() and (proj.parent / "gone.txt").exists()
+    assert "not run" in said.lower() and "do not say it was done" in said.lower()  # a small model once reported it as executed
     assert [c.body for c in a.parked] == ["rm ../gone.txt"]
     a.do(rm())
     assert len(a.parked) == 1  # the same call waits once, however often it is tried

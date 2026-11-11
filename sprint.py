@@ -947,8 +947,9 @@ class Agent:
         if answer == "later":  # nobody answered in time: the work goes on without it, and it waits in /permissions
             if not any((p.tool, self.target(p)) == key for p in self.parked):
                 self.parked.append(c)
-            return ("set aside: this needs the user's say-so and they have not answered. It is waiting for them. "
-                    "Carry on with whatever does not depend on it, and do not repeat it now.")
+            return ("set aside, NOT run: this needs the user's say-so and they have not answered. It is waiting for them "
+                    "in /permissions. Tell them so; do not say it was done. Carry on with whatever does not depend on it, "
+                    "and do not repeat it now.")
         if answer == "always" and not risky:  # never ask about this one again (a deletion is never remembered)
             self.allow.append(self.rule_for(c))
             save_config(allow=self.allow)

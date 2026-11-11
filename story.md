@@ -1,3 +1,0 @@
-# Oakhaven's Tale
-
-Once upon a time, in a village called Oakhaven, there lived a gentle old man named Elias and his dog, Bop. They used to walk along the river when it rained, and they always shared stories of their lives. One rainy Tuesday, the villagers gathered under the oak tree for a special meeting. The storybook library was so full that no one could finish reading all books before sunset. But as the sun began to rise and cast long shadows across the village square, Elias's wise words about wisdom became louder than any bookshelf. He smiled at Bop and they both sat by the firelight, learning together.
