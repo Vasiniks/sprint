@@ -1,5 +1,6 @@
 """popups you can point at, themes with their own background, a sturdier wheel, and the flash on a jump"""
 import curses
+import re
 import io
 
 import pytest
@@ -193,7 +194,7 @@ def test_a_press_outside_the_popup_closes_it_like_escape():
     top = opened(s, "/theme")
     s.pointer(20, top + 3, MOVE)
     s.pointer(2, 1, PRESS)
-    assert s.popup is None and s.theme == "default" and "theme" not in sprint.load_config()
+    assert s.popup is None and s.theme == "sprint" and "theme" not in sprint.load_config()
     s.pointer(2, 1, RELEASE)  # the release that follows starts nothing
     assert s.select is None and s.drag is None
 
@@ -384,31 +385,88 @@ def test_without_256_colours_the_backdrop_is_dimmed(scr, tmp_path, monkeypatch):
 
 # ---------- themes ----------
 
-def test_every_theme_has_a_line_about_it_and_six_hues_from_the_256():
+def test_every_theme_has_a_line_about_it_and_ten_exact_colours():
     assert set(tui.THEME_ABOUT) == set(tui.THEMES) and len(tui.THEMES) >= 12
-    assert {"midnight", "cmyk", "matrix", "slate", "grape", "paper"} <= set(tui.THEMES)
+    assert list(tui.THEMES)[0] == "sprint" and {"sapphire", "sapphire-dim", "terminal", "mono", "paper"} <= set(tui.THEMES)
     for name, t in tui.THEMES.items():
-        assert len(tui.THEME_ABOUT[name]) <= 34, name
-        if name not in ("default", "mono"):
-            assert all(16 <= t[k] <= 255 for k in (1, 2, 3, 4, 5, 6, "bg", "fg", "panel", "ghost")), name
+        assert len(tui.THEME_ABOUT[name]) <= 36, name
+        if name not in ("terminal", "mono"):
+            assert all(re.fullmatch(r"#[0-9a-f]{6}", t[k]) for k in (1, 2, 3, 4, 5, 6, "bg", "fg", "panel", "ghost")), name
             assert len({t["bg"], t["fg"], t["panel"], t["ghost"]}) == 4, name
-    assert "bg" not in tui.THEMES["default"] and "bg" not in tui.THEMES["mono"]
-    assert 20 + 7 * len(tui.THEMES) <= 256  # older curses cannot name a pair past 255
+    assert "bg" not in tui.THEMES["terminal"] and "bg" not in tui.THEMES["mono"]
+    assert 20 + 7 * len(tui.THEMES) <= 230  # older curses cannot name a pair past 255, and the top ones are spoken for
+
+
+def test_the_sprint_theme_is_nearly_black_not_black_with_the_logos_colours():
+    t = tui.THEMES["sprint"]
+    r, g, b = (int(t["bg"][i:i + 2], 16) for i in (1, 3, 5))
+    assert 4 <= min(r, g, b) and max(r, g, b) <= 24  # a very dark grey: the whole screen takes it
+    assert t[3] == "#ffe100" and tui.near(t["bg"]) == 232 and t["fg"] != "#000000"
+
+
+def test_sapphire_carries_the_colours_of_the_theme_it_is_named_after():
+    for name, ground in (("sapphire", "#181e29"), ("sapphire-dim", "#080d14")):
+        t = tui.THEMES[name]
+        assert t["bg"] == ground and t["fg"] == "#efefef"
+        assert [t[i] for i in range(1, 7)] == ["#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"]
+
+
+def test_the_nearest_of_the_256_stands_in_for_an_exact_colour():
+    assert tui.near("#000000") == 16 and tui.near("#ffffff") == 231 and tui.near("#ff0000") == 196
+    assert tui.near("#808080") == 244 and tui.near("#0b0c0e") == 232 and tui.near("#181e29") in (234, 235)
+    assert len(set(tui.SLOT.values())) == len(tui.SLOT) and min(tui.SLOT.values()) >= 88 and max(tui.SLOT.values()) < 232
+
+
+def test_exact_colours_are_only_asked_of_a_terminal_that_shows_24_bit_colour(monkeypatch):
+    monkeypatch.setattr(tui.curses, "can_change_color", lambda: True, raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    assert tui.can_exact()
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")  # says it can change its palette, and then does not
+    assert not tui.can_exact()
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    monkeypatch.delenv("COLORTERM")
+    assert not tui.can_exact()
 
 
 def test_a_theme_paints_its_own_background_text_panel_and_ghost(monkeypatch):
     s, pairs = painted(monkeypatch, "paper")
-    t = tui.THEMES["paper"]
-    assert s.base == 8 and pairs[8] == (t["fg"], t["bg"])
+    t = {k: tui.near(v) for k, v in tui.THEMES["paper"].items()}  # this terminal cannot take exact colours
+    assert not s.exact and s.base == 8 and pairs[8] == (t["fg"], t["bg"])
     assert [pairs[i] for i in range(1, 7)] == [(t[i], t["bg"]) for i in range(1, 7)]
     assert pairs[10] == (t["fg"], t["panel"]) and pairs[13] == (t[3], t["panel"])
     assert pairs[9] == (t["ghost"], t["bg"]) and pairs[19] == (t["ghost"], t["panel"])
 
 
-def test_the_default_theme_keeps_the_terminals_own_colours(monkeypatch):
-    s, pairs = painted(monkeypatch, "default")
+def test_where_the_terminal_can_take_them_the_colours_are_exact(monkeypatch):
+    defined = {}
+    monkeypatch.setattr(tui, "can_exact", lambda: True)
+    monkeypatch.setattr(tui.curses, "init_color", lambda n, r, g, b: defined.__setitem__(n, (r, g, b)), raising=False)
+    s, pairs = painted(monkeypatch, "sapphire")
+    t = tui.THEMES["sapphire"]
+    assert s.exact and pairs[8] == (tui.SLOT[t["fg"]], tui.SLOT[t["bg"]]) and pairs[3][0] == tui.SLOT["#fff099"]
+    assert defined[tui.SLOT["#181e29"]] == (0x18 * 1000 // 255, 0x1e * 1000 // 255, 0x29 * 1000 // 255)
+    assert set(defined) == set(tui.SLOT.values())  # every theme's colours, so the theme list can show them all
+
+    def refuses(*a):
+        raise tui.curses.error("init_color() returned ERR")
+    monkeypatch.setattr(tui.curses, "init_color", refuses, raising=False)
+    s, pairs = painted(monkeypatch, "sapphire")
+    assert not s.exact and pairs[8] == (tui.near(t["fg"]), tui.near(t["bg"]))  # it said it could and cannot
+
+
+def test_the_terminal_theme_keeps_the_terminals_own_colours(monkeypatch):
+    s, pairs = painted(monkeypatch, "terminal")
     assert s.base == 0 and [pairs[i] for i in range(1, 7)] == [(i, -1) for i in range(1, 7)]
     assert pairs[10] == (-1, 236) and pairs[12] == (2, 236) and pairs[9][1] == -1 and pairs[19][1] == 236
+
+
+def test_sprint_is_the_theme_you_get_and_default_now_means_terminal():
+    assert screen().theme == "sprint"
+    sprint.save_config(theme="default")  # what the terminal's own colours used to be called
+    assert screen().theme == "terminal"
+    sprint.save_config(theme="cmyk")  # a theme that no longer exists
+    assert screen().theme == "sprint"
 
 
 def test_with_fewer_than_256_colours_a_theme_changes_nothing(monkeypatch):
@@ -420,11 +478,11 @@ def test_with_fewer_than_256_colours_a_theme_changes_nothing(monkeypatch):
 
 
 def test_every_theme_gets_sample_pairs_in_its_own_colours(monkeypatch):
-    s, pairs = painted(monkeypatch, "default")
+    s, pairs = painted(monkeypatch, "terminal")
     for name, t in tui.THEMES.items():
         text = tui.SAMPLE[f"{name}.0"]
-        assert text >= 20 and pairs[text] == (t.get("fg", -1), t.get("bg", -1)), name
-        assert [pairs[tui.SAMPLE[f"{name}.{i}"]] for i in range(1, 7)] == [(t.get(i, i), t.get("bg", -1)) for i in range(1, 7)], name
+        assert text >= 20 and pairs[text] == (s.ink(t.get("fg", -1)), s.ink(t.get("bg", -1))), name
+        assert [pairs[tui.SAMPLE[f"{name}.{i}"]] for i in range(1, 7)] == [(s.ink(t.get(i, i)), s.ink(t.get("bg", -1))) for i in range(1, 7)], name
     assert len(set(tui.SAMPLE.values())) == 7 * len(tui.THEMES)
 
 
@@ -465,7 +523,7 @@ def test_the_theme_popup_shows_each_theme_in_its_own_colours(scr):
     s.draw(scr)
     py, px, pw, ph = s.popup["box"]
     lit = [m for m in scr.marks if m[3] & curses.A_REVERSE]
-    assert len(lit) == 1 and lit[0][0] == py + 5 and lit[0][2] < 16  # the highlight stops short of the swatches
+    assert len(lit) == 1 and lit[0][0] == py + 5 and lit[0][2] < 20  # the highlight stops short of the swatches
     swatches = [x for x in range(px, px + pw) if scr.cells[(py + 5, x)][0] == "█"]
     assert len(swatches) == 12 and swatches[0] >= lit[0][1] + lit[0][2]
     name = list(tui.THEMES)[4]

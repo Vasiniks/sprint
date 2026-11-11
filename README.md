@@ -124,7 +124,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/export [file]` | Save the conversation as markdown. |
 | `/directory [path]` | Change the folder sprint works in, with a small folder browser. |
 | `/systemprompt` | Edit what the model is told at the start. |
-| `/theme` | default, mono, amber, forest, ocean, sunset, midnight, cmyk, matrix, slate, grape, paper. A theme sets the whole screen, background included; the list previews each in its own colours. |
+| `/theme` | sprint (the one you get: near-black with the logo's colours), terminal (your terminal's own colours), mono, sapphire, sapphire-dim, midnight, slate, ocean, forest, grape, sunset, amber, matrix, paper. A theme sets the whole screen, background included; the list previews each in its own colours. Terminals that show 24-bit colour get the exact colours; others, Apple's Terminal among them, get the nearest of their 256. Sapphire follows [Tyriar's Sapphire](https://marketplace.visualstudio.com/items?itemName=Tyriar.theme-sapphire) for VS Code. |
 | `/config [key value]` | Every setting in one list. |
 | `/sidebar`, `/history` | Hide, show or size the side panels. |
 | `/tools`, `/mouse` | Expand or collapse all tool windows; turn mouse capture on or off. |

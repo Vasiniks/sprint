@@ -117,27 +117,62 @@ ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame
 
 
 def theme(hues, bg, fg, panel, ghost):
-    """a theme, in the terminal's 256 colours: what red, green, yellow, blue, magenta and cyan become, the background of
-    the whole screen, plain text, the shade behind your messages and popups, and greyed-out text"""
+    """a theme, as exact colours: what red, green, yellow, blue, magenta and cyan become, the background of the whole
+    screen, plain text, the shade behind your messages and popups, and greyed-out text"""
     return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost}
 
 
-# default and mono leave the screen to the terminal; every other theme brings its own background
-THEMES = {"default": {}, "mono": {i: -1 for i in range(1, 8)},
-          "amber": theme((203, 178, 214, 172, 208, 220), 233, 222, 236, 94),
-          "forest": theme((167, 114, 185, 109, 150, 79), 234, 151, 237, 65),
-          "ocean": theme((204, 49, 80, 33, 105, 39), 17, 153, 19, 67),
-          "sunset": theme((203, 150, 221, 141, 205, 215), 52, 223, 53, 131),
-          "midnight": theme((203, 120, 227, 75, 213, 87), 16, 255, 235, 242),
-          "cmyk": theme((199, 51, 226, 45, 201, 51), 16, 231, 236, 244),
-          "matrix": theme((210, 46, 190, 35, 84, 120), 16, 40, 235, 28),
-          "slate": theme((210, 150, 222, 110, 182, 116), 237, 253, 235, 246),
-          "grape": theme((204, 156, 228, 111, 213, 123), 54, 189, 17, 103),
-          "paper": theme((124, 28, 130, 25, 127, 24), 230, 235, 187, 243)}
-THEME_ABOUT = {"default": "your terminal's own colours", "mono": "no colour, only bold and dim", "amber": "warm ambers, like an old monitor",
-               "forest": "soft greens on charcoal", "ocean": "blues and teals on deep navy", "sunset": "orange, pink and violet at dusk",
-               "midnight": "true black, bright colours", "cmyk": "black with cyan, magenta, yellow", "matrix": "green on black",
-               "slate": "soft pastels on grey", "grape": "purple, with candy colours", "paper": "light, with dark ink"}
+PALETTE = {16 + 36 * r + 6 * g + b: tuple((0, 95, 135, 175, 215, 255)[v] for v in (r, g, b))
+           for r in range(6) for g in range(6) for b in range(6)}
+PALETTE.update({232 + n: (8 + 10 * n,) * 3 for n in range(24)})  # the terminal's 256 colours, less the 16 a user may have restyled
+
+
+def near(colour, seen={}):
+    """the closest of the terminal's 256 colours to an exact one such as "#181e29". Closest in colour more than in
+    brightness: a dark green should stay green, not turn into the grey that happens to be as dark"""
+    if colour not in seen:
+        want = tuple(int(colour[i:i + 2], 16) for i in (1, 3, 5))
+        tint = lambda c: [v - sum(c) / 3 for v in c]  # how far each channel stands from the colour's own grey
+        apart = lambda a, b: sum((x - y) ** 2 for x, y in zip(a, b))
+        seen[colour] = min(PALETTE, key=lambda n: apart(PALETTE[n], want) + 2 * apart(tint(PALETTE[n]), tint(want)))
+    return seen[colour]
+
+
+def can_exact():
+    """can this terminal be given exact colours (by redefining spare slots of its palette)? Only where it says it
+    shows 24-bit colour; Apple's Terminal says it can and then does not"""
+    try:
+        return bool(os.environ.get("COLORTERM") in ("truecolor", "24bit") and os.environ.get("TERM_PROGRAM") != "Apple_Terminal"
+                    and curses.can_change_color())
+    except curses.error:
+        return False  # no screen to ask
+
+
+# sprint is the theme you get; terminal and mono leave the screen to the terminal; every other brings its own background
+THEMES = {
+    "sprint": theme(("#ff5c5c", "#3ddc7e", "#ffe100", "#5b9dff", "#ff3d9a", "#19c2ff"), "#0b0c0e", "#f2f2f2", "#1d2024", "#7d8086"),
+    "terminal": {}, "mono": {i: -1 for i in range(1, 8)},
+    "sapphire": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#181e29", "#efefef", "#28324a", "#7b8496"),
+    "sapphire-dim": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#080d14", "#efefef", "#141c2a", "#6b7386"),
+    "midnight": theme(("#ff5555", "#50fa7b", "#f1fa8c", "#6ea8ff", "#ff79c6", "#8be9fd"), "#000000", "#ffffff", "#181818", "#6e6e6e"),
+    "slate": theme(("#e88388", "#a8cc8c", "#dbab79", "#71bef2", "#d290e4", "#66c2cd"), "#262a33", "#e6e9ef", "#363c49", "#8a92a3"),
+    "ocean": theme(("#ff7a90", "#3ee6b0", "#ffd479", "#4aa8ff", "#a99bff", "#2fd6ff"), "#071a2b", "#d6ecff", "#10304d", "#5f86a8"),
+    "forest": theme(("#e06c5a", "#7fd88b", "#e3d27a", "#6fb3a8", "#d9a3c7", "#58d1b0"), "#0f1a14", "#d7e8d5", "#1d2e24", "#6f8a78"),
+    "grape": theme(("#ff7eb6", "#9cf0a8", "#ffe58a", "#9aa7ff", "#d48cff", "#7fe3ff"), "#1b1030", "#ece4ff", "#2e1c4e", "#8f7fb3"),
+    "sunset": theme(("#ff6b6b", "#c5e17a", "#ffc857", "#9d8cff", "#ff5fa2", "#ffa26b"), "#1f1020", "#ffe9d6", "#361c38", "#a07a8c"),
+    "amber": theme(("#ff6a3d", "#c8a400", "#ffd24a", "#d98c00", "#ff9248", "#ffe08a"), "#171000", "#ffb000", "#2b1f00", "#8a6a1a"),
+    "matrix": theme(("#ff5f5f", "#00ff41", "#b6ff00", "#00c896", "#7dffb0", "#39ffb0"), "#000a00", "#33ff66", "#0a2412", "#1f8f3a"),
+    "paper": theme(("#c0392b", "#2e7d32", "#a86400", "#1f5fbf", "#a0308c", "#0b7285"), "#f6f3ea", "#24262b", "#e2dccb", "#8b8778")}
+THEME_ABOUT = {"sprint": "near-black, with the logo's colours", "terminal": "your terminal's own colours",
+               "mono": "no colour, only bold and dim", "sapphire": "after Tyriar's Sapphire for VS Code",
+               "sapphire-dim": "Sapphire on a darker ground", "midnight": "true black, bright colours",
+               "slate": "soft colours on blue-grey", "ocean": "blues and teals on deep navy",
+               "forest": "greens on dark moss", "grape": "purple, with candy colours",
+               "sunset": "orange, pink and violet at dusk", "amber": "an old amber monitor",
+               "matrix": "green on black", "paper": "light, with dark ink"}
+# where the terminal can take exact colours, each one a theme names gets a spare slot of the palette (88 and up); elsewhere
+# the nearest of the 256 stands in for it
+SLOT = {c: 88 + n for n, c in enumerate(sorted({v for t in THEMES.values() for v in t.values() if isinstance(v, str)}))}
 # colour pairs from 20 up show every theme in its own colours, for the theme popup: "ocean.0" is its text, "ocean.1"-"ocean.6"
 # its hues, all on its background. (No pair goes past 255: older curses cannot name one.)
 SAMPLE = {f"{name}.{i}": 20 + 7 * n + i for n, name in enumerate(THEMES) for i in range(7)}
@@ -349,36 +384,48 @@ class Screen:
         self.sidebar, self.history = kept.get("sidebar", True), kept.get("history", True)
         self.side_w, self.left_w = kept.get("sidebar_w", SIDE), kept.get("history_w", 26)
         self.motion, self.plan = kept.get("motion", True), bool(kept.get("plan", False))
-        self.theme = kept.get("theme") if kept.get("theme") in THEMES else "default"
+        saved = kept.get("theme")  # "default" was the old name of the terminal's own colours
+        self.theme = saved if saved in THEMES else "terminal" if saved == "default" else "sprint"
         self.peek = kept["peek"] if isinstance(kept.get("peek"), int) and kept["peek"] > 0 else PEEK
         self.showthink = bool(kept.get("showthink", False))  # the model's reasoning in full, or one line saying it thought
         self.paint()
 
+    def ink(self, colour):
+        """the terminal's number for a theme's colour: an exact one's own slot, or the nearest of the 256"""
+        return colour if isinstance(colour, int) else SLOT[colour] if self.exact else near(colour)
+
     def paint(self):
         """(re)define the colour pairs for the current theme: 1-7 its hues on its background, 8 its plain text, 9 ghost
         text, 10-19 the same on the panel shade. With fewer than 256 colours the screen stays the terminal's own"""
-        self.base = 0  # the pair plain text is drawn in: 8 when the theme has a background, else the terminal's own
+        self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
         try:
             if not curses.has_colors():
                 return
             curses.use_default_colors()
             rich = self.rich = curses.COLORS >= 256
-            t = THEMES[self.theme]
-            bg, fg, panel = (t.get("bg", -1), t.get("fg", -1), t.get("panel", 236)) if rich else (-1, -1, -1)
+            if rich and can_exact():
+                try:
+                    for c, slot in SLOT.items():
+                        curses.init_color(slot, *(int(c[i:i + 2], 16) * 1000 // 255 for i in (1, 3, 5)))
+                    self.exact = True
+                except curses.error:
+                    pass  # it said it could and cannot: the nearest colours, then
+            t, ink = THEMES[self.theme], self.ink
+            bg, fg, panel = (ink(t.get("bg", -1)), ink(t.get("fg", -1)), ink(t.get("panel", 236))) if rich else (-1, -1, -1)
             for i in range(8):
-                colour = t.get(i, i) if rich or self.theme == "mono" else i
+                colour = ink(t.get(i, i)) if rich or self.theme == "mono" else i
                 if i:
                     curses.init_pair(i, colour, bg)
                 curses.init_pair(10 + i, colour if i else fg, panel)
             if not rich:
                 return
             curses.init_pair(8, fg, bg)
-            curses.init_pair(9, t.get("ghost", 244), bg)
-            curses.init_pair(19, t.get("ghost", 244), panel)
+            curses.init_pair(9, ink(t.get("ghost", 244)), bg)
+            curses.init_pair(19, ink(t.get("ghost", 244)), panel)
             self.base = 8 if "bg" in t else 0
             for n, other in enumerate(THEMES.values()):
                 for i in range(7):
-                    curses.init_pair(20 + 7 * n + i, other.get(i, i) if i else other.get("fg", -1), other.get("bg", -1))
+                    curses.init_pair(20 + 7 * n + i, ink(other.get(i, i) if i else other.get("fg", -1)), ink(other.get("bg", -1)))
         except curses.error:
             pass  # no screen yet
 
@@ -1121,9 +1168,9 @@ class Screen:
 
         # every row is a strip of its own theme: name, the six hues and a few words, on that theme's background.
         # The highlight covers only the mark and the name, so the hues of the chosen row stay in view
-        rows = [row([("● " if n == was else "  ", self.agent.mode), (f" {n:<9}", n + ".0")] + [("██", f"{n}.{i}") for i in range(1, 7)]
+        rows = [row([("● " if n == was else "  ", self.agent.mode), (f" {n:<13}", n + ".0")] + [("██", f"{n}.{i}") for i in range(1, 7)]
                     + [(f"  {THEME_ABOUT[n]:<34} ", n + ".0")], n) for n in THEMES]
-        self.pop("Theme", rows, pick=keep, move=show, back=lambda: show(was), sel=list(THEMES).index(was), lit=12)
+        self.pop("Theme", rows, pick=keep, move=show, back=lambda: show(was), sel=list(THEMES).index(was), lit=16)
 
     def popups(self):
         return {"/systemprompt": self.prompt_popup, "/system": self.prompt_popup, "/theme": self.theme_popup,
@@ -1762,7 +1809,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" if VT else "")
+        sys.stdout.write(("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * self.exact) if VT else "")  # and the palette back
         sys.stdout.flush()
 
 

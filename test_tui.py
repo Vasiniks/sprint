@@ -786,21 +786,21 @@ def test_theme_popup_previews_as_you_move_and_esc_puts_it_back():
     s = screen()
     s.submit("/theme")
     names = [n for n in tui.THEMES]
-    assert s.popup["title"] == "Theme" and names[0] == "default" and len(names) >= 5 and "mono" in names
+    assert s.popup["title"] == "Theme" and names[0] == "sprint" and len(names) >= 5 and "mono" in names
     s.key(curses.KEY_DOWN)
     assert s.theme == names[1]
     s.key("\x1b")
-    assert s.theme == "default" and "theme" not in sprint.load_config()
+    assert s.theme == "sprint" and "theme" not in sprint.load_config()
     s.submit("/theme")
     s.key(curses.KEY_DOWN)
     s.key("\n")
     assert s.theme == names[1] and sprint.load_config()["theme"] == names[1] and s.popup is None
 
 
-def test_an_unknown_theme_in_the_settings_file_falls_back_to_default():
+def test_an_unknown_theme_in_the_settings_file_falls_back_to_sprint():
     import sprint
     sprint.save_config(theme="nope")
-    assert screen().theme == "default"
+    assert screen().theme == "sprint"
 
 
 def test_settings_popup_offers_theme_peek_and_timeout(tmp_path, monkeypatch):
