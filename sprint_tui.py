@@ -117,10 +117,11 @@ ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame
         "ghost": (9, 0)}  # ghost: greyed out, for a placeholder and for the screen behind a popup; plain dim without 256 colours
 
 
-def theme(hues, bg, fg, panel, ghost):
+def theme(hues, bg, fg, panel, ghost, band=None):
     """a theme, as exact colours: what red, green, yellow, blue, magenta and cyan become, the background of the whole
-    screen, plain text, the shade behind your messages and popups, and greyed-out text"""
-    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost, "band": blend(panel, fg, 0.12)}
+    screen, plain text, the shade behind popups and tool windows, greyed-out text, and the band behind your own messages
+    (unless given, the panel a step nearer the text)"""
+    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost, "band": band or blend(panel, fg, 0.12)}
 
 
 def blend(a, b, part):
@@ -158,8 +159,8 @@ def can_exact():
 THEMES = {
     "sprint": theme(("#ff5c5c", "#3ddc7e", "#ffe100", "#5b9dff", "#ff3d9a", "#19c2ff"), "#0b0c0e", "#f2f2f2", "#1d2024", "#7d8086"),
     "terminal": {}, "mono": {i: -1 for i in range(1, 8)},
-    "sapphire": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#181e29", "#efefef", "#28324a", "#7b8496"),
-    "sapphire-dim": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#080d14", "#efefef", "#141c2a", "#6b7386"),
+    # Tyriar's Sapphire: its editor and terminal colours, its dropdowns for the panel, its line numbers, its selection
+    "sapphire": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#181e29", "#efefef", "#263041", "#5d6269", "#153958"),
     "midnight": theme(("#ff5555", "#50fa7b", "#f1fa8c", "#6ea8ff", "#ff79c6", "#8be9fd"), "#000000", "#ffffff", "#181818", "#6e6e6e"),
     "slate": theme(("#e88388", "#a8cc8c", "#dbab79", "#71bef2", "#d290e4", "#66c2cd"), "#262a33", "#e6e9ef", "#363c49", "#8a92a3"),
     "ocean": theme(("#ff7a90", "#3ee6b0", "#ffd479", "#4aa8ff", "#a99bff", "#2fd6ff"), "#071a2b", "#d6ecff", "#10304d", "#5f86a8"),
@@ -171,7 +172,7 @@ THEMES = {
     "paper": theme(("#c0392b", "#2e7d32", "#a86400", "#1f5fbf", "#a0308c", "#0b7285"), "#f6f3ea", "#24262b", "#e2dccb", "#8b8778")}
 THEME_ABOUT = {"sprint": "near-black, with the logo's colours", "terminal": "your terminal's own colours",
                "mono": "no colour, only bold and dim", "sapphire": "after Tyriar's Sapphire for VS Code",
-               "sapphire-dim": "Sapphire on a darker ground", "midnight": "true black, bright colours",
+               "midnight": "true black, bright colours",
                "slate": "soft colours on blue-grey", "ocean": "blues and teals on deep navy",
                "forest": "greens on dark moss", "grape": "purple, with candy colours",
                "sunset": "orange, pink and violet at dusk", "amber": "an old amber monitor",
@@ -499,8 +500,9 @@ class Screen:
         self.sidebar, self.history = kept.get("sidebar", True), kept.get("history", True)
         self.side_w, self.left_w = kept.get("sidebar_w", SIDE), kept.get("history_w", 26)
         self.motion, self.plan = kept.get("motion", True), bool(kept.get("plan", False))
-        saved = kept.get("theme")  # "default" was the old name of the terminal's own colours
-        self.theme = saved if saved in THEMES else "terminal" if saved == "default" else "sprint"
+        saved = kept.get("theme")  # names that are gone: the terminal's own colours were "default", and Sapphire came in two
+        saved = {"default": "terminal", "sapphire-dim": "sapphire"}.get(saved, saved)
+        self.theme = saved if saved in THEMES else "sprint"
         self.peek = kept["peek"] if isinstance(kept.get("peek"), int) and kept["peek"] > 0 else PEEK
         self.showthink = bool(kept.get("showthink", False))  # the model's reasoning in full, or one line saying it thought
         self.paint()

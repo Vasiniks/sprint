@@ -390,7 +390,7 @@ def test_without_256_colours_the_backdrop_is_dimmed(scr, tmp_path, monkeypatch):
 
 def test_every_theme_has_a_line_about_it_and_ten_exact_colours():
     assert set(tui.THEME_ABOUT) == set(tui.THEMES) and len(tui.THEMES) >= 12
-    assert list(tui.THEMES)[0] == "sprint" and {"sapphire", "sapphire-dim", "terminal", "mono", "paper"} <= set(tui.THEMES)
+    assert list(tui.THEMES)[0] == "sprint" and {"sapphire", "terminal", "mono", "paper"} <= set(tui.THEMES)
     for name, t in tui.THEMES.items():
         assert len(tui.THEME_ABOUT[name]) <= 36, name
         if name not in ("terminal", "mono"):
@@ -408,10 +408,18 @@ def test_the_sprint_theme_is_nearly_black_not_black_with_the_logos_colours():
 
 
 def test_sapphire_carries_the_colours_of_the_theme_it_is_named_after():
-    for name, ground in (("sapphire", "#181e29"), ("sapphire-dim", "#080d14")):
-        t = tui.THEMES[name]
-        assert t["bg"] == ground and t["fg"] == "#efefef"
-        assert [t[i] for i in range(1, 7)] == ["#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"]
+    """Tyriar's Sapphire for VS Code: its editor, its terminal colours, its dropdowns, its selection, its line numbers"""
+    t = tui.THEMES["sapphire"]
+    assert t["bg"] == "#181e29" and t["fg"] == "#efefef"
+    assert [t[i] for i in range(1, 7)] == ["#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"]
+    assert t["panel"] == "#263041" and t["band"] == "#153958"
+    assert t["ghost"] == tui.blend(t["bg"], "#ffffff", 0.3)  # its line numbers: white, three tenths strong
+
+
+def test_there_is_one_sapphire_and_a_saved_sapphire_dim_becomes_it(tmp_path, monkeypatch):
+    assert [name for name in tui.THEMES if "sapphire" in name] == ["sapphire"]
+    sprint.save_config(theme="sapphire-dim")
+    assert screen().theme == "sapphire"
 
 
 def test_the_nearest_of_the_256_stands_in_for_an_exact_colour():
