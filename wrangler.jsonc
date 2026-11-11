@@ -1,6 +1,6 @@
 // The website in site/ is a Cloudflare Pages project. Publish with: npx wrangler pages deploy
 {
-  "name": "sprint",
+  "name": "sprintai",
   "compatibility_date": "2026-11-01",
   "pages_build_output_dir": "./site"
 }
