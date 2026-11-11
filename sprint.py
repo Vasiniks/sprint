@@ -11,6 +11,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -952,21 +953,44 @@ class Agent:
 
 # ---------- terminal ----------
 
+def answers(url):
+    """is a model server answering at url?"""
+    try:
+        urllib.request.urlopen(url.rstrip("/") + "/api/version", timeout=2).close()
+    except urllib.error.HTTPError:
+        pass  # something answered, which is all we need to know
+    except OSError:
+        return False
+    return True
+
+
+def local(url):
+    return urllib.parse.urlparse(url).hostname in ("localhost", "127.0.0.1", "::1") and not url.rstrip("/").endswith("/v1")
+
+
+def stop_server(url):
+    """stop the Ollama on this machine -> did it stay down? (its own app or a service may start it again)"""
+    kills = [["taskkill", "/IM", "ollama app.exe", "/F"], ["taskkill", "/IM", "ollama.exe", "/F"]] if WINDOWS else \
+        ([["pkill", "-x", "Ollama"]] if sys.platform == "darwin" else []) + [["pkill", "-f", "ollama serve"]]
+    for argv in kills:
+        try:
+            subprocess.run(argv, capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    for _ in range(12):
+        if not answers(url):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def serve(url, note=lambda s: None):
     """make sure a model server answers at url, starting a local Ollama if need be"""
-    def up():
-        try:
-            urllib.request.urlopen(url.rstrip("/") + "/api/version", timeout=2).close()
-        except urllib.error.HTTPError:
-            pass  # something answered, which is all we need to know
-        except OSError:
-            return False
-        return True
-
+    up = lambda: answers(url)
     u = urllib.parse.urlparse(url)
     if up():
         return True
-    if url.rstrip("/").endswith("/v1") or u.hostname not in ("localhost", "127.0.0.1", "::1") or not shutil.which("ollama"):
+    if not local(url) or not shutil.which("ollama"):
         return False
     note("starting ollama")
     subprocess.Popen(["ollama", "serve"], env={**os.environ, "OLLAMA_HOST": u.netloc}, stdin=subprocess.DEVNULL,
@@ -992,7 +1016,8 @@ def config_dir(env=os.environ, windows=WINDOWS):
 CONFIG = config_dir() / "config.json"
 SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "think": bool, "effort": str,
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
-            "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool}
+            "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool,
+            "update_check": bool}
 SHADE = {"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
          "tool results": "yellow", "reserved for the reply": "dim", "free": "dim"}
 ANSI = {"": "", "dim": "2", "bold": "1", "blue": "34", "magenta": "35", "cyan": "36", "green": "32", "yellow": "33", "red": "31"}
@@ -1433,10 +1458,136 @@ HELP = ("@file attaches a file · !command runs it yourself · /model [NAME] · 
         "  /context · /usage · /compact · /copy [code|all] · /export [FILE] · /log · /directory [PATH] · /plan · /race MODEL MESSAGE\n"
         "  /systemprompt · /config · /clear · /bye")
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
+VERSION = "0.4.0"  # the same as in pyproject.toml
+REPO = "Vasiniks/sprint"
+USAGE = f"""sprint {VERSION} - a terminal coding agent for small local models
+
+  sprint                   open sprint in this folder
+  sprint "fix the typo"    open it with a first message
+  sprint help              this list (sprint --help lists the options)
+  sprint config            open the settings file in your editor
+  sprint serve             start the local Ollama server if it is not running
+  sprint serve stop        stop it
+  sprint serve status      say whether it is running
+  sprint update            get the newest sprint
+  sprint --version
+
+Inside sprint, /help lists the keys and commands."""
+
+
+def open_file(path):
+    """open a file for editing: in $VISUAL or $EDITOR if set, else in whatever the system opens text with"""
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    try:
+        if editor:
+            return subprocess.run(shlex.split(editor) + [path]).returncode == 0
+        if WINDOWS:
+            os.startfile(path)
+            return True
+        return subprocess.run(["open", "-t", path] if sys.platform == "darwin" else ["xdg-open", path], capture_output=True).returncode == 0
+    except (OSError, ValueError):
+        return False
+
+
+def update(home=None):
+    """get the newest sprint: pull if this copy is a git checkout, else reinstall with pip -> exit code"""
+    home = Path(home or Path(__file__).resolve().parent)
+    argv = ["git", "-C", str(home), "pull", "--ff-only"] if (home / ".git").exists() else \
+        [sys.executable, "-m", "pip", "install", "--upgrade", f"git+https://github.com/{REPO}.git"]
+    print("  " + " ".join(argv))
+    try:
+        ok = subprocess.run(argv).returncode == 0
+    except OSError:
+        ok = False
+    print("  done: start sprint again" if ok else "  the update did not go through; the command above is what was tried")
+    try:
+        update_file().unlink()  # look again for what is newest next time
+    except OSError:
+        pass
+    return 0 if ok else 1
+
+
+def update_file():
+    return CONFIG.with_name("update.json")  # the newest version seen, and when sprint last looked
+
+
+def newer(a, b):
+    try:
+        return tuple(int(x) for x in a.split(".")) > tuple(int(x) for x in b.split("."))
+    except ValueError:
+        return False
+
+
+def fetch_latest():
+    with urllib.request.urlopen(f"https://raw.githubusercontent.com/{REPO}/main/pyproject.toml", timeout=3) as r:
+        return re.search(r'^version\s*=\s*"([^"]+)"', r.read().decode(), re.M).group(1)
+
+
+def check_update():
+    """the newest published version if it is newer than this one, else "". Asks GitHub at most once a day, sends
+    nothing but the request, and /config update_check off stops it"""
+    if load_config().get("update_check") is False:
+        return ""
+    try:
+        kept = json.loads(update_file().read_text(encoding="utf-8"))
+        latest, checked = str(kept.get("latest", "")), float(kept.get("checked", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        latest, checked = "", 0.0
+    if abs(time.time() - checked) > 86400:
+        try:
+            latest = fetch_latest()
+        except Exception:
+            pass  # offline, or GitHub said no: keep what was known and try again tomorrow
+        try:
+            update_file().parent.mkdir(parents=True, exist_ok=True)
+            update_file().write_text(json.dumps({"latest": latest, "checked": time.time()}) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+    return latest if newer(latest, VERSION) else ""
+
+
+def cli(argv):
+    """the words sprint takes besides a message: help, config, serve, update -> exit code, or None to carry on"""
+    word, rest = (argv[0], argv[1:]) if argv else ("", [])
+    if word in ("--version", "version") and not rest:
+        print("sprint " + VERSION)
+    elif word == "help" and not rest:
+        print(USAGE)
+    elif word == "update" and not rest:
+        return update()
+    elif word == "config" and not rest:
+        CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        if not CONFIG.exists():
+            CONFIG.write_text("{}\n", encoding="utf-8")
+        print(f"  {CONFIG}")
+        if not open_file(str(CONFIG)):
+            print("  could not open an editor: open that file in any editor")
+    elif word == "serve" and rest in ([], ["stop"], ["status"]):
+        url = os.environ.get("SPRINT_URL") or load_config().get("url", "http://localhost:11434")
+        if rest == ["status"]:
+            up = answers(url)
+            print(f"  a model server is running at {url}" if up else f"  not running: nothing answers at {url}")
+            return 0 if up else 1
+        if rest == ["stop"]:
+            if not local(url):
+                print(f"  {url} is not on this machine: stop it there")
+                return 1
+            down = stop_server(url)
+            print("  ollama stopped" if down else f"  still answering at {url}: something starts it again (quit the Ollama app, or stop its service)")
+            return 0 if down else 1
+        up = serve(url, lambda s: print("  " + s) if s else None)
+        print(f"  a model server is running at {url}" if up else f"  could not start one at {url}: is Ollama installed?")
+        return 0 if up else 1
+    else:
+        return None
+    return 0
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="sprint", description=__doc__)
+    done = cli(sys.argv[1:])
+    if done is not None:
+        return done
+    ap = argparse.ArgumentParser(prog="sprint", description=__doc__, epilog="sprint help lists the other commands: config, serve, update")
     ap.add_argument("task", nargs="*", help="optional first message")
     ap.add_argument("-m", "--model", help="model name (default: the one used last, else Qwen 3.5 0.8B Q4_K_M)")
     ap.add_argument("-u", "--url", help="Ollama URL, or any OpenAI-compatible URL ending in /v1")

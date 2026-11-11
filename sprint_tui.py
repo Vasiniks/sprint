@@ -285,6 +285,7 @@ class Screen:
         self.popup, self.job, self.toast, self.details = None, None, ("", 0.0), {}  # open popup, its background work, brief note
         self.chips, self.esc, self.pasting = {}, None, None  # pasted files by chip label; a held escape; a paste in progress
         self.pastes = {}  # large pasted texts by their chip label
+        self.newer = ""  # a newer published version, once the daily look has found one
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -1331,6 +1332,10 @@ class Screen:
 
     # --- the input area
 
+    def version_text(self):
+        """this version, and beside it a newer one when there is one to get"""
+        return [("sprint " + sprint.VERSION, "dim")] + ([(" · ", "dim"), (f"{self.newer} is out: sprint update", "warn")] if self.newer else [])
+
     def trail(self):
         """the four shade cells that lead every prompt, in the mode colour. They hold still: the sprint above the bar
         is what moves while the agent works"""
@@ -1526,8 +1531,9 @@ class Screen:
             tips = [("tab", "bold"), (" mode   ", "dim"), ("/", "bold"), (" commands   ", "dim"),
                     ("ctrl+c", "bold"), (" quit", "dim")]
             self.put(scr, top + len(rows) + 1, (w - len(flat(tips))) // 2, tips)
-            self.put(scr, h - 1, 2, [(os.getcwd().replace(str(Path.home()), "~", 1), "dim")], width=w - 20)
-            self.put(scr, h - 1, w - 12, [("sprint 0.3", "dim")])
+            version = self.version_text()
+            self.put(scr, h - 1, 2, [(os.getcwd().replace(str(Path.home()), "~", 1), "dim")], width=w - len(flat(version)) - 8)
+            self.put(scr, h - 1, w - 2 - len(flat(version)), version)
         else:
             # conversation
             waiting = self.queue_rows()
@@ -1697,4 +1703,6 @@ class Screen:
 def run(agent, first=""):
     locale.setlocale(locale.LC_ALL, "")
     os.environ.setdefault("ESCDELAY", "25")
-    curses.wrapper(Screen(agent).loop, first)
+    screen = Screen(agent)
+    threading.Thread(target=lambda: setattr(screen, "newer", sprint.check_update()), daemon=True).start()  # once a day, off the screen's back
+    curses.wrapper(screen.loop, first)
