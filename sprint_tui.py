@@ -4,6 +4,7 @@ import json
 import locale
 import os
 import re
+import select
 import shlex
 import sys
 import threading
@@ -178,6 +179,85 @@ THEME_ABOUT = {"sprint": "near-black, with the logo's colours", "terminal": "you
 # where the terminal can take exact colours, each one a theme names gets a spare slot of the palette (88 and up); elsewhere
 # the nearest of the 256 stands in for it
 SLOT = {c: 88 + n for n, c in enumerate(sorted({v for t in THEMES.values() for v in t.values() if isinstance(v, str)}))}
+# Curses cannot name a colour outside the 256. So on a terminal that shows 24-bit colour, what curses writes goes through
+# a pipe on its way there, and the codes that set one of those slots leave as the exact colour instead: nothing in the
+# terminal's own palette is touched
+RGB = {n: tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c, n in SLOT.items()}
+SET256 = re.compile(rb"\x1b\[([34])8;5;(\d+)m")  # curses setting the text (3) or the background (4) to one of the 256
+CUT = re.compile(rb"\x1b(\[([34](8(;(5(;\d*)?)?)?)?)?)?\Z")  # the start of such a code, with the rest still to come
+ROUTED = False  # is what curses writes going through truecolour() now?
+
+
+def truecolour(data):
+    """what curses wrote, with each code for a theme slot turned into the exact colour the slot stands for"""
+    return SET256.sub(lambda m: b"\x1b[%c8;2;%d;%d;%dm" % (m[1], *RGB[int(m[2])]) if int(m[2]) in RGB else m[0], data)
+
+
+def whole(data):
+    """-> (what can go to the terminal now, an unfinished colour code at the very end that has to wait for its rest)"""
+    m = CUT.search(data)
+    return (data[:m.start()], data[m.start():]) if m else (data, b"")
+
+
+def can_route():
+    """should the screen go through truecolour()? Where the terminal says it shows 24-bit colour, and curses still has
+    a terminal (stderr) to ask about its size once stdout is a pipe. Not on Windows: curses there writes no codes"""
+    return bool(VT and os.environ.get("COLORTERM") in ("truecolor", "24bit") and os.isatty(1) and os.isatty(2))
+
+
+def speaks_256():
+    """does curses set a colour with the codes truecolour() looks for? (true of every xterm-like terminal description)"""
+    try:
+        return all(curses.tparm(curses.tigetstr(cap), 88) == b"\x1b[%d8;5;88m" % n for cap, n in (("setaf", 3), ("setab", 4)))
+    except (curses.error, TypeError, AttributeError):
+        return False
+
+
+def route(fd=1):
+    """send everything written to fd through truecolour() from now on -> a function that puts fd back as it was"""
+    global ROUTED
+    real, (r, w) = os.dup(fd), os.pipe()
+    os.dup2(w, fd)
+    os.close(w)
+    done = threading.Event()
+
+    def pump():
+        held = b""
+        while True:
+            if select.select([r], [], [], 0.05)[0]:
+                data = os.read(r, 65536)
+                ready, held = whole(held + data) if data else (held, b"")
+            elif done.is_set():
+                data, ready = b"", held
+            else:
+                data, (ready, held) = b"-", (held, b"")  # nothing followed it: not the start of a code after all
+            try:
+                ready = truecolour(ready)
+                while ready:
+                    ready = ready[os.write(real, ready):]
+            except OSError:
+                pass  # the terminal is gone; keep emptying the pipe so nothing writing to it ever blocks
+            if not data:
+                return
+
+    worker = threading.Thread(target=pump, daemon=True)
+    worker.start()
+    ROUTED = True
+
+    def back():
+        global ROUTED
+        try:
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
+        done.set()
+        worker.join(2)  # it stops once the pipe is empty
+        os.dup2(real, fd)
+        os.close(real)
+        os.close(r)
+        ROUTED = False
+
+    return back
 # colour pairs from 20 up show every theme in its own colours, for the theme popup: "ocean.0" is its text, "ocean.1"-"ocean.6"
 # its hues, all on its background. (No pair goes past 255: older curses cannot name one.)
 SAMPLE = {f"{name}.{i}": 20 + 7 * n + i for n, name in enumerate(THEMES) for i in range(7)}
@@ -440,7 +520,9 @@ class Screen:
                 return
             curses.use_default_colors()
             rich = self.rich = curses.COLORS >= 256
-            if rich and can_exact():
+            if rich and ROUTED and speaks_256():
+                self.exact = True  # the slots leave as exact colours on their way to the terminal
+            elif rich and can_exact():
                 try:
                     for c, slot in SLOT.items():
                         curses.init_color(slot, *(int(c[i:i + 2], 16) * 1000 // 255 for i in (1, 3, 5)))
@@ -1885,7 +1967,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write(("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * self.exact) if VT else "")  # and the palette back
+        sys.stdout.write(("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * (self.exact and not ROUTED)) if VT else "")  # and the palette back
         sys.stdout.flush()
 
 
@@ -1894,4 +1976,9 @@ def run(agent, first=""):
     os.environ.setdefault("ESCDELAY", "25")
     screen = Screen(agent)
     threading.Thread(target=lambda: setattr(screen, "newer", sprint.check_update()), daemon=True).start()  # once a day, off the screen's back
-    curses.wrapper(screen.loop, first)
+    back = route() if can_route() else None  # exact colours, where the terminal shows them
+    try:
+        curses.wrapper(screen.loop, first)
+    finally:
+        if back:
+            back()

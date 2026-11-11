@@ -441,6 +441,21 @@ def test_a_theme_paints_its_own_background_text_panel_and_ghost(monkeypatch):
     assert pairs[9] == (t["ghost"], t["bg"]) and pairs[19] == (t["ghost"], t["panel"])
 
 
+def test_routed_through_the_filter_the_colours_are_exact_and_the_palette_is_left_alone(monkeypatch):
+    def never(*a):
+        raise AssertionError("the palette was redefined")
+    monkeypatch.setattr(tui.curses, "init_color", never, raising=False)
+    monkeypatch.setattr(tui, "can_exact", lambda: False)
+    monkeypatch.setattr(tui, "speaks_256", lambda: True)
+    monkeypatch.setattr(tui, "ROUTED", True)
+    s, pairs = painted(monkeypatch, "sapphire")
+    t = tui.THEMES["sapphire"]
+    assert s.exact and pairs[8] == (tui.SLOT[t["fg"]], tui.SLOT[t["bg"]])
+    monkeypatch.setattr(tui, "speaks_256", lambda: False)  # a terminal description that sets colours some other way
+    s, pairs = painted(monkeypatch, "sapphire")
+    assert not s.exact and pairs[8] == (tui.near(t["fg"]), tui.near(t["bg"]))
+
+
 def test_where_the_terminal_can_take_them_the_colours_are_exact(monkeypatch):
     defined = {}
     monkeypatch.setattr(tui, "can_exact", lambda: True)
