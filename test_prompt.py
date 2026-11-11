@@ -237,7 +237,7 @@ def test_the_status_line_says_what_is_happening_for_how_long_and_how_much():
     s.began -= 12
     row = s.status_row()
     assert flat(row).startswith(" " + tui.ENDS[0]) and row[1][1] in tui.HUES  # the sprint leads it
-    assert f"{tui.ENDS[1]} thinking (12s · ↑ {tui.kilo(s.agent.used())} tokens · medium)" in flat(row)
+    assert f"{tui.ENDS[1]} working (12s · ↑ {tui.kilo(s.agent.used())} tokens · medium)" in flat(row)
     s.emit("x" * 35)  # the reply has begun: count what comes down, by the agent's own measure of a token
     assert "(12s · ↓ 10 tokens · medium)" in flat(s.status_row())
     s.show_thought("y" * 7000)
@@ -271,7 +271,7 @@ def test_while_a_turn_runs_the_status_is_above_the_bar_and_the_footer_is_free_fo
     assert chat.started.wait(5)
     s.tell("copied 12 characters")
     rows, c = drawn(s, monkeypatch)
-    assert rows[19].startswith("   " + tui.ENDS[0]) and "thinking (0s · ↑" in rows[19]  # where the blank row was
+    assert rows[19].startswith("   " + tui.ENDS[0]) and "working (0s · ↑" in rows[19]  # where the blank row was
     assert rows[20].startswith("  ───") and "Qwen3.5-0.8B" in rows[20]
     assert sorted(rows[21][2:6]) == sorted("░▒▓█") and "> Ask anything" in rows[21] and c.at == (21, 9)
     assert rows[22].startswith("  ── auto ───")
@@ -419,11 +419,11 @@ def test_queued_messages_are_listed_above_the_bar_three_at_most(monkeypatch):
     assert chat.started.wait(5)
     s.queue = ["then run the tests", "and\ncommit"]
     rows, _ = drawn(s, monkeypatch)
-    assert "thinking (" in rows[17] and rows[18:20] == ["    queued 1  then run the tests", "    queued 2  and …"]
+    assert "working (" in rows[17] and rows[18:20] == ["    queued 1  then run the tests", "    queued 2  and …"]
     assert "Qwen3.5-0.8B" in rows[20] and "enter run queued now  esc interrupt" in rows[23]
     s.queue += ["three", "four", "five"]
     rows, _ = drawn(s, monkeypatch)
-    assert "thinking (" in rows[15] and rows[18:20] == ["    queued 3  three", "    +2 more"] and "go" in rows[1]
+    assert "working (" in rows[15] and rows[18:20] == ["    queued 3  three", "    +2 more"] and "go" in rows[1]
     chat.go.set()
     finish(s)
 
