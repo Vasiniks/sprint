@@ -171,7 +171,7 @@ def test_every_role_that_prose_uses_is_known_and_themes_can_recolour_it():
             "deco", "kw", "func", "const", "number"} <= used
     assert used <= set(ROLE)
     assert all(ROLE[r][0] in (0, 1, 2, 3, 4, 5, 6, 9) for r in used)  # only the colours a theme remaps
-    assert all(set(range(1, 7)) <= set(t) for name, t in THEMES.items() if name != "default")
+    assert all(set(range(1, 7)) <= set(t) for name, t in THEMES.items() if name != "terminal")
 
 
 def test_the_marks_stay_in_the_text_and_nothing_is_lost():

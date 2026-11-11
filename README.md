@@ -62,6 +62,8 @@ Tool windows start collapsed to a few lines, and each says how long the call too
 ╰───────────────────────────────────────────────────────────────╯
 ```
 
+Answers are coloured by what they are, not just printed: **bold** and *italic* each in a colour of their own, three levels of heading, list numbers and bullets, task boxes, quotes behind a bar, labels such as `Note:` `Warning:` `Error:` `Done:`, and in code blocks keywords, strings, numbers, function names, decorators and constants. A paragraph of ordinary sentences stays plain. Every theme recolours all of it.
+
 Drag the line beside either side panel to resize it. A panel that would squeeze the conversation below 44 columns hides itself.
 
 ## Writing a message

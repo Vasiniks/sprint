@@ -1463,7 +1463,7 @@ HELP = ("@file attaches a file · !command runs it yourself · /model [NAME] · 
         "  /context · /usage · /compact · /copy [code|all] · /export [FILE] · /log · /directory [PATH] · /plan · /race MODEL MESSAGE\n"
         "  /systemprompt · /config · /clear · /bye")
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.4"  # the same as in pyproject.toml
+VERSION = "0.4.5"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 USAGE = f"""sprint {VERSION} - a terminal coding agent for small local models
 
