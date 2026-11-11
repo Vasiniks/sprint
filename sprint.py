@@ -317,6 +317,68 @@ def deletes(cmd):
     return bool(DELETES.search(cmd) or (WINDOWS and DELETES_WIN.search(cmd)))
 
 
+REMOVERS = ("rm", "rmdir", "unlink", "shred", "srm", "trash", "rimraf")  # commands whose arguments are what they delete
+PREFIXES = ("sudo", "command", "exec", "nohup", "time", "env")  # words that may stand before one
+EVERYTHING = ("*", ".*", "*.*", ".[!.]*", "..?*")  # a pattern that takes all there is in a folder
+
+
+def deletion(cmd, cwd=None):
+    """what kind of deletion a shell command is: "" none, or only inside the working folder (files and folders in it
+    are yours to let the model tidy); "own" the working folder itself, all that is in it, or a folder that holds it;
+    "outside" anything beyond it; "unknown" a deletion whose targets cannot be read (a cd first, a variable, find
+    -delete, a script). Anything but "" is always put to you, whatever the mode"""
+    if not deletes(cmd):
+        return ""
+    cwd, home = os.path.realpath(cwd or folder()), str(Path.home())
+    try:
+        lex = shlex.shlex(cmd.replace("\n", " ; "), posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        words = list(lex)
+    except ValueError:
+        return "unknown"  # quotes that never close
+    found, moved, rest, simple = set(), False, [], []
+    for word in words + [";"]:
+        if word and not word.strip(";&|()"):  # the end of one command: look at it
+            while simple and (simple[0] in PREFIXES or re.fullmatch(r"\w+=.*", simple[0])):
+                simple.pop(0)
+            name = os.path.basename(simple[0]) if simple else ""
+            if name in REMOVERS:
+                found.add("unknown" if moved else "")
+                dashes = simple.index("--") if "--" in simple else len(simple)
+                for arg in [a for a in simple[1:dashes] if not a.startswith("-")] + simple[dashes + 1:]:
+                    found.add(target_kind(arg, cwd, home))
+            else:
+                moved = moved or name in ("cd", "pushd", "popd")
+                rest += simple + [";"]
+            simple = []
+        else:
+            simple.append(word)
+    if deletes(" ".join(rest)):
+        found.add("unknown")  # something else in it deletes too, in a way that cannot be read
+    return next((kind for kind in ("own", "outside", "unknown") if kind in found), "")
+
+
+def target_kind(arg, cwd, home):
+    """where one thing to delete lies: "" inside the working folder, or own, outside, unknown (see deletion)"""
+    arg = re.sub(r"^~(?=/|$)", lambda m: home, arg)
+    arg = re.sub(r"\$\{?HOME\}?", lambda m: home, re.sub(r"\$\{?PWD\}?", lambda m: cwd, arg))
+    if re.search(r"[$`]", arg):
+        return "unknown"  # some other variable, or a command's output
+    parts, pattern = arg.rstrip("/").split("/") if arg.rstrip("/") else [""], None
+    for n, part in enumerate(parts):
+        if re.search(r"[*?\[{]", part):  # a pattern: it deletes within the folder before it
+            parts, pattern = parts[:n], part
+            break
+    at = os.path.realpath(os.path.join(cwd, "/".join(parts) or ("/" if arg.startswith("/") and not pattern else ".")))
+    if arg.startswith("/") and not parts[1:] and pattern:
+        at = "/"
+    if at == cwd:
+        return "own" if pattern is None or pattern in EVERYTHING else ""
+    if cwd.startswith(at.rstrip(os.sep) + os.sep):
+        return "own" if pattern is None else "outside"  # a folder that holds this one; or things beside it, up there
+    return "" if at.startswith(cwd + os.sep) else "outside"
+
+
 SEEN = [""]  # the last working folder known to exist
 
 
@@ -639,9 +701,15 @@ class Agent:
         self.busy = bool(s)
         self.out.flush()
 
+    def set_mode(self, mode):
+        """change the mode, and remember it: the mode you leave in is the one you come back to (starting with -y or
+        --mode is for that run only, and is not remembered)"""
+        self.mode = mode
+        save_config(mode=mode)
+        return mode
+
     def cycle(self):
-        self.mode = MODES[(MODES.index(self.mode) + 1) % len(MODES)]
-        return self.mode
+        return self.set_mode(MODES[(MODES.index(self.mode) + 1) % len(MODES)])
 
     def ask(self, call):
         if not sys.stdin.isatty():
@@ -866,7 +934,7 @@ class Agent:
         return f"allowed once: {c.tool} {self.target(c).splitlines()[0][:60]} (it runs when the model next asks for it)"
 
     def do(self, c):
-        key, risky = (c.tool, self.target(c)), c.tool == "shell" and deletes(c.body)  # a deletion is always put to you
+        key, risky = (c.tool, self.target(c)), c.tool == "shell" and deletion(c.body)  # of this folder, or beyond it: always put to you
         free = c.tool == "read" or self.mode == "auto" or (self.mode == "edits" and c.tool in ("write", "edit")) or self.allowed(c)
         if key in self.passes:  # set aside earlier, and since allowed by you
             self.passes.remove(key)
@@ -1429,7 +1497,7 @@ def command(agent, line):
         return rows
     if cmd in ("/mode", "/permissions"):
         if arg in MODES:
-            agent.mode = arg
+            agent.set_mode(arg)
         elif cmd == "/mode":
             agent.cycle()
         if cmd == "/mode" or arg:

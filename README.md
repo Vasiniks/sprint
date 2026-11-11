@@ -102,11 +102,13 @@ Drag over text to copy it: in the conversation, in the prompt, or in either side
 |---|---|
 | `ask` (default) | reading files |
 | `edits` | reading, writing and editing files |
-| `auto` | everything, except commands that delete |
+| `auto` | everything, except deleting the working folder or anything outside it |
+
+The mode you leave in is the mode you come back to (starting with `-y` or `--mode` is for that run only).
 
 When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One of the three is highlighted; left and right move it and Enter takes it. "Always" allows just that command or file from then on (a fetch allows the whole site). `/permissions` lists those rules, removes them, and adds patterns such as `shell git status*`.
 
-**Deleting always asks.** A command that deletes (`rm`, `rmdir`, `git clean`, `find -delete`, `Remove-Item`, a one-line script calling `rmtree` and the like) is put to you in every mode, `auto` included, and can be allowed once but never for ever; no allow rule covers it. If a command does remove the folder sprint is working in, sprint steps up to the nearest folder that still exists and tells the model.
+**Deleting beyond the folder's contents always asks.** Files and folders inside the folder sprint is working in are the model's to tidy, under the mode's ordinary rules. But a command that would delete that folder itself (or everything in it, or a folder that holds it), or anything outside it, is put to you in every mode, `auto` included, and so is a deletion sprint cannot read (a `cd` first, a variable, `find -delete`, `git clean`, a one-line script). Such a call can be allowed once but never for ever; no allow rule covers it. If a command does remove the working folder, sprint steps up to the nearest folder that still exists and tells the model.
 
 **A question nobody answers does not stall the work.** After 20 seconds (`/config ask_timeout N`; `0` waits for ever; any key starts the wait again) the call is set aside, not run: the model is told to carry on without it, and the prompt shows that something is waiting. `/permissions` lists what was set aside; Enter on one allows it once, and it runs the next time the model asks for it. (Plain mode, `--plain`, waits as long as it takes.)
 
