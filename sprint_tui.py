@@ -40,9 +40,12 @@ HELP = """In a message
   a large paste becomes a chip too, like [Pasted #1 +42 lines]; the model gets the full text
   ctrl+v, alt+v or /paste attaches the picture on the clipboard (a screenshot, or a copied file)
 Keys
-  enter send · tab switch mode (ask → edits → auto) · esc interrupt · ctrl+l clear · ctrl+c quit
+  enter send · shift+enter, ctrl+j, or a \\ before enter: new line
+  while it works: enter queues your message · enter on an empty prompt runs the queue now
+  esc interrupt (queued messages come back to the prompt) · ctrl+l clear · ctrl+c twice to quit
+  tab switch mode (ask → edits → auto) · up / down recall earlier messages
   ctrl+o expand or collapse all tool windows · click a window to toggle just that one
-  pgup / pgdn or the mouse wheel scroll · up / down recall earlier messages
+  the mouse wheel scrolls, and so do pgup / pgdn
 Commands
   /clear  /model [name]  /mode [ask|edits|auto]  /permissions  /think  /showthink  /effort [low|medium|high]
   /context  /config [key value]  /systemprompt  /theme  /sidebar [width]  /history [width]  /tools  /mouse
@@ -53,16 +56,21 @@ Copy and paste
 Mouse
   drag the line beside either panel to resize it · click a message or an activity line to jump to it"""
 
-# the wordmark: "sprint" in a 5-row pixel font, shaded from light to solid, one colour per shade, leaning forward
+# the wordmark: "sprint" in a 5-row pixel font, shaded from light to solid, leaning forward
 WORD = "sprint"
 PIX = {"s": ["XXXX", "X   ", "XXXX", "   X", "XXXX"], "p": ["XXXX", "X  X", "XXXX", "X   ", "X   "],
        "r": ["XXXX", "X  X", "XXX ", "X X ", "X  X"], "i": ["X", "X", "X", "X", "X"],
        "n": ["X  X", "XX X", "X XX", "X  X", "X  X"], "t": ["XXXXX", "  X  ", "  X  ", "  X  ", "  X  "],
        "e": ["XXXX", "X   ", "XXX ", "X   ", "XXXX"]}
 STILL = (1, 1, 2, 3, 3, 4)  # shade of each letter when nothing moves: ░ ░ ▒ ▓ ▓ █
-SHADE = {"░": "yellow", "▒": "cyan", "▓": "magenta", "█": "bold"}  # each shade in its own colour, like the four bars of the logo
-LOGO_W = 60        # columns: two per pixel, two between letters, four of lean
-WAVE_SECONDS = 11  # how long the crest takes to cross the word and come round again
+LOGO_W = 60          # columns: two per pixel, two between letters, four of lean
+WAVE_SECONDS = 11    # how long the crest takes to cross the word and come round again
+HUES = ("yellow", "cyan", "magenta")  # the colours that take turns: one per glint on the logo, one per lap of the dash
+GLINT_EVERY = 4      # seconds from one glint of colour to the next; the wave is plain in between
+GLINT_SECONDS = 1.0  # how long a glint takes to cross the word
+GLINT = 14           # columns a glint covers: about three letters
+RUN = 16             # cells of track the working animation sprints along
+LAP = 1.0            # seconds one lap of it takes
 
 
 def wave(x, t):
@@ -72,18 +80,30 @@ def wave(x, t):
 
 
 def logo_rows(t=None):
-    """the wordmark as 5 rows of spans; t in seconds runs the wave through it, None holds it still"""
-    rows = []
+    """the wordmark as 5 rows of spans; t in seconds runs the slow plain wave through it and, every few seconds,
+    a fast narrow glint over that, each in the next colour. None holds it still"""
+    glint, into = divmod(t, GLINT_EVERY) if t is not None else (0, GLINT_EVERY)
+    front, rows = int(into / GLINT_SECONDS * (LOGO_W - 4 + GLINT)), []  # the column the glint has reached
     for r in range(5):
-        text, x = "", 0
+        row, x = [(" " * (4 - r), "")], 0
         for i, ch in enumerate(WORD):
             for px in PIX[ch][r] + " ":
                 for _ in range(2):
-                    text += " ░▒▓█"[0 if px != "X" else STILL[i] if t is None else wave(x, t)]
+                    shade = " ░▒▓█"[0 if px != "X" else STILL[i] if t is None else wave(x, t)]
+                    lit = px == "X" and 0 <= front - x < GLINT  # the glint changes the colour, never the shade
+                    row.append((shade, HUES[int(glint) % 3] if lit else {"░": "dim", "█": "bold"}.get(shade, "")))
                     x += 1
-        text = (" " * (4 - r) + text).ljust(LOGO_W)
-        rows.append([(m.group(), SHADE.get(m.group()[0], "")) for m in re.finditer(r"(.)\1*", text)])
+        rows.append(wrap(row + [(" " * r, "")], LOGO_W)[0])  # one span per run of the same role
     return rows
+
+
+def dash(t=None):
+    """the working animation as spans: a comet with a shaded tail sprints along a slanted track, gathering speed,
+    and comes round again in the next colour. t in seconds; None holds it still on its mark"""
+    lap, into = divmod((t or 0) / LAP, 1)
+    head = 3 + int(into * into * RUN)  # the square of the time: slow off the line, then fast
+    track = "".join("█▓▒░"[head - x] if 0 <= head - x < 4 else " " for x in range(RUN))
+    return [(ENDS[0] + track + ENDS[1], HUES[int(lap) % 3])]
 
 
 # what each kind of text looks like: (colour, attribute). 0 = plain text, 1-6 the theme's hues, 9 its grey
@@ -128,9 +148,12 @@ MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSE
 FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 # what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
-SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline"}
+SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline",
+        "[27;5;13~": "newline", "[13;5u": "newline"}  # and ctrl+enter, which the same terminals report the same way
+MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports with its modifiers, whole or still arriving
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
+ENDS = "◢◤" if VT else "//"  # the slanted ends of the working animation; Windows console fonts lack the triangles
 
 CODE = re.compile(
     r"(?P<comment>#.*|//.*)|(?P<string>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|(?P<number>\b\d+(?:\.\d+)?\b)"
@@ -265,6 +288,9 @@ class Screen:
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
         self.flash = (None, 0.0)  # the item last jumped to and when, so it can light up and fade
+        self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
+        self.began, self.got, self.down = 0.0, 0, False  # this turn: when it started, characters of reply, is one arriving?
+        self.queue, self.leave = [], 0.0  # messages sent while the agent worked; until when a second ctrl+c quits
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -311,13 +337,14 @@ class Screen:
     # --- what the agent calls (from its worker thread)
 
     def emit(self, s, style=""):
+        self.got, self.down = self.got + len(s), self.down or bool(s.strip())
         if self.items and self.items[-1]["t"] == "text":
             self.items[-1]["text"] += s
         elif s.strip():
             self.items.append({"t": "text", "text": s})
 
     def status(self, s):
-        self.note = s
+        self.note, self.down = s, self.down and s != "thinking"  # "thinking": the conversation is going up again
 
     def say(self, text, role="dim"):
         self.items.append({"t": "note", "text": text, "role": role})
@@ -327,6 +354,7 @@ class Screen:
                            "old": c.tool == "write" and os.path.isfile(os.path.expanduser(c.arg))})
 
     def show_thought(self, text):
+        self.got, self.down = self.got + len(text), True
         self.items.append({"t": "tool", "call": sprint.Call("think", "", "", 0, 0), "result": text, "state": "done",
                            "open": False, "old": False})
 
@@ -373,7 +401,7 @@ class Screen:
     def active(self):
         """is anything on the screen changing by itself? When nothing is, the loop sleeps instead of redrawing."""
         wave = not self.items and self.motion
-        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave
+        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave or self.queue
                     or (self.job and self.job.is_alive()) or self.esc is not None or self.pasting is not None
                     or self.glow(self.flash[0]))
 
@@ -386,6 +414,19 @@ class Screen:
             self.answer = False
             self.gate.set()
 
+    def halt(self):
+        """stop the turn and hand the queued messages back to the prompt, ahead of what is typed there: nothing
+        is lost, and nothing runs by surprise"""
+        self.interrupt()
+        if self.queue:
+            self.buf, self.queue = "\n".join(self.queue + [self.buf] * bool(self.buf)), []
+            self.cur = len(self.buf)
+
+    def advance(self):
+        """start the next queued message once nothing is running"""
+        if self.queue and not self.busy() and not self.pending:
+            self.submit(self.queue.pop(0))
+
     # --- input
 
     def submit(self, line):
@@ -394,6 +435,7 @@ class Screen:
         if cmd in ("/exit", "/quit", "/bye"):
             self.quit = True
         elif cmd in ("/new", "/clear"):
+            self.queue = []
             if not self.busy():
                 a.reset()
                 self.items, self.cache, self.scroll = [], {}, 0
@@ -445,6 +487,7 @@ class Screen:
                     full = full.replace(label, sprint.clip(text, self.agent.cap * 2))
                 self.pastes = {}
                 self.items.append({"t": "user", "text": line})
+                self.began, self.got, self.down = time.time(), 0, False
                 self.worker = threading.Thread(target=self.bang if mine else self.work, args=(mine,) if mine else (full, chips), daemon=True)
                 self.worker.start()
 
@@ -512,24 +555,35 @@ class Screen:
         self.cur, self.pick = len(self.buf), 0
 
     def key(self, k):
+        if self.leave and k != "\x03":  # any other key takes back the offer to quit, and the note that made it
+            self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
         if self.pending:  # only the approval keys count while a call waits
             if k in ("y", "Y", "\n", "\r", "a", "A"):
                 self.answer = "always" if k in ("a", "A") else True
                 self.gate.set()
             elif k in ("n", "N", "\x1b", "\x03"):
-                self.interrupt() if k in ("\x1b", "\x03") else (setattr(self, "answer", False), self.gate.set())
+                self.halt() if k in ("\x1b", "\x03") else (setattr(self, "answer", False), self.gate.set())
             return
         if self.popup:
             return self.popup_key(k)
         opts, n = self.options(), len(self.buf)
-        if k in ("\n", "\r", curses.KEY_ENTER):
+        if k in ("\n", "\r", curses.KEY_ENTER) and self.buf[:self.cur].endswith("\\"):  # a backslash, then Enter:
+            self.buf = self.buf[:self.cur - 1] + "\n" + self.buf[self.cur:]              # a new line instead of a send
+        elif k == "\n" and self.nl:  # ctrl+j, now that Enter arrives as "\r"
+            self.newline()
+        elif k in ("\n", "\r", curses.KEY_ENTER):
             if opts:
                 self.complete(opts)
             line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
-            if line and not (opts and self.buf.endswith(" ")) and (line.startswith("/") or not self.busy()):
+            if not line and self.queue and self.busy():  # nothing typed, messages waiting: stop, so they start now
+                self.interrupt()
+            elif line and not (opts and self.buf.endswith(" ")):
                 self.past.append(line)
                 self.buf, self.cur, self.at, self.scroll = "", 0, len(self.past), 0
-                self.submit(line)
+                if (self.busy() or self.queue) and not line.startswith("/"):  # the agent is working: it waits its turn
+                    self.queue.append(line)
+                else:
+                    self.submit(line)
         elif k == "\t":
             self.complete(opts) if opts else self.agent.cycle()
         elif k == curses.KEY_BTAB:
@@ -552,10 +606,10 @@ class Screen:
             self.buf = self.buf[:self.cur] + self.buf[self.cur + 1:]
         elif k in (curses.KEY_LEFT, curses.KEY_RIGHT):
             self.cur = max(0, min(n, self.cur + (1 if k == curses.KEY_RIGHT else -1)))
-        elif k in (curses.KEY_HOME, "\x01"):
-            self.cur = 0
+        elif k in (curses.KEY_HOME, "\x01"):  # to the start of this line, and the end of it
+            self.cur = self.buf.rfind("\n", 0, self.cur) + 1
         elif k in (curses.KEY_END, "\x05"):
-            self.cur = n
+            self.cur = self.buf.find("\n", self.cur) % (n + 1)  # no line break ahead: -1 becomes the very end
         elif k == "\x15":  # ctrl+u
             self.buf, self.cur = "", 0
         elif k == "\x17":  # ctrl+w
@@ -574,14 +628,17 @@ class Screen:
         elif k == curses.KEY_MOUSE:
             self.mouse()
         elif k == "\x1b":
-            self.interrupt() if self.busy() else None
-        elif k == "\x03":  # ctrl+c: clear the line, else stop the turn, else leave
+            self.halt() if self.busy() or self.queue else None
+        elif k == "\x03":  # ctrl+c: clear the line, else stop the turn, else leave once it is pressed again
             if self.buf:
                 self.buf, self.cur = "", 0
-            elif self.busy():
-                self.interrupt()
-            else:
+            elif self.busy() or self.queue:
+                self.halt()
+            elif time.time() < self.leave:
                 self.quit = True
+            else:
+                self.leave = time.time() + 2
+                self.toast = ("press ctrl+c again to quit", self.leave)
         elif k == "\x04" and not self.buf:
             self.quit = True
         elif isinstance(k, str) and k.isprintable():
@@ -671,7 +728,8 @@ class Screen:
 
     def take(self, k):
         """every key comes through here: a terminal paste is collected whole, and a lone escape is held one beat
-        until it is clear it does not start a longer key (a marked paste, alt+v, alt+enter, shift+enter)"""
+        until it is clear it does not start a longer key (a marked paste, alt+v, alt+enter, shift+enter, or some
+        other key reported with its modifiers, which is dropped)"""
         if self.pasting is not None:
             if isinstance(k, str):
                 self.pasting += k
@@ -681,9 +739,9 @@ class Screen:
             return
         if self.esc is not None:
             held = self.esc + k if isinstance(k, str) else None
-            if held and any(seq.startswith(held) for seq in SEQS):
+            if held and (any(seq.startswith(held) for seq in SEQS) or MODIFIED.fullmatch(held)):
                 self.esc, what = held, SEQS.get(held)
-                if what:
+                if what or held[-1] in "~u":  # a whole key: one sprint knows, or a modified key it has no use for
                     self.esc = None
                     self.pasting = "" if what == "paste" else None
                     self.paste_image() if what == "image" else self.newline() if what == "newline" else None
@@ -1276,21 +1334,46 @@ class Screen:
         k = int(time.time() * 8) if self.motion and self.busy() else 0
         return [("".join("░▒▓█"[(i - k) % 4] for i in range(4)), self.agent.mode)]
 
+    def status_row(self):
+        """the line above the bar while a turn runs: the sprint, what is happening, then for how long, how many
+        tokens are going up (the conversation) or coming down (the reply so far), and the effort"""
+        a, secs = self.agent, int(time.time() - self.began)
+        doing = "waiting for you" if self.pending else self.note or "working"
+        took = f"{secs // 60}m {secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+        flow = f"↓ {kilo(int(self.got / a.cpt))}" if self.down else f"↑ {kilo(a.used())}"
+        return [(" ", "")] + dash(time.time() - self.began if self.motion else None) + \
+            [(f" {doing} ", ""), (f"({took} · {flow} tokens · {a.effort})", "dim")]
+
+    def queue_rows(self):
+        """the messages sent while the agent worked, in the order they will run: three at most, then how many more"""
+        rows = [[(f"  queued {n}  ", "dim"), (q.split("\n")[0] + (" …" if "\n" in q else ""), "")]
+                for n, q in enumerate(self.queue[:3], 1)]
+        return rows + [[(f"  +{len(self.queue) - 3} more", "dim")]] * (len(self.queue) > 3)
+
     def input_rows(self, bw, used=0, side=0):
-        """a rule carrying the mode and model, then the prompt (or the approval question) -> (rows, typed lines)"""
-        a, tw = self.agent, bw - 5
-        typed = [self.buf[i:i + tw] for i in range(0, len(self.buf) + 1, tw)][-5:]
-        left = [("── ", "frame"), (a.mode, a.mode), (" ", "")]
+        """the bar: a rule carrying the model, the prompt (or the approval question), a rule carrying the mode
+        -> (rows, the typed lines on show). Where the cursor belongs is left in self.caret"""
+        a, tw = self.agent, bw - 7
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
-        rule = left + [("─" * max(0, bw - len(flat(left)) - len(right) - 2), "frame"), (right, "dim"), ("──", "frame")]
+        rule = [("─" * max(0, bw - len(right) - 2), "frame"), (right, "dim"), ("──", "frame")]
+        foot = [("── ", "frame"), (a.mode, a.mode), (" " + "─" * max(0, bw - len(a.mode) - 4), "frame")]
         if self.pending:
             c = self.pending
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
             keys = [("     y", "bold"), (" once   ", "dim"), ("a", "bold"), (" always this   ", "dim"), ("n", "bold"), (" no   ", "dim"),
                     ("esc", "bold"), (" stop", "dim")]
-            return [rule, self.trail() + [(" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys], typed
-        body = [[(t, "")] for t in typed] if self.buf else [[("Ask anything…  / for commands", "dim")]]
-        return [rule] + [(self.trail() if n == 0 else [("    ", "")]) + [(" ", "")] + r for n, r in enumerate(body)], typed
+            return [rule, self.trail() + [(" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
+        typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
+        for line in self.buf.split("\n"):
+            if start <= self.cur <= start + len(line):
+                at, col = len(typed) + (self.cur - start) // tw, (self.cur - start) % tw
+            typed += [line[i:i + tw] for i in range(0, len(line) + 1, tw)]
+            start += len(line) + 1
+        first = min(at, max(0, len(typed) - 6))  # six lines at most: the last ones, or from the cursor's line down
+        typed, self.caret = typed[first:first + 6], (1 + at - first, 7 + col)
+        body = [[(t, "")] for t in typed] if self.buf else [[("Ask anything…  / for commands", "ghost")]]
+        lead = self.trail() + [(" ", ""), (">", a.mode), (" ", "")]
+        return [rule] + [(lead if n == 0 else [(" " * 7, "")]) + r for n, r in enumerate(body)] + [foot], typed
 
     # --- conversation -> lines of (kind, spans, item)
 
@@ -1418,7 +1501,7 @@ class Screen:
         art = []
         if home:  # the wordmark, with its wave unless motion is off or there is no room for it
             art = logo_rows(time.time() if self.motion else None) if w >= LOGO_W + 6 and h >= 20 else \
-                [[(c, SHADE[c]) for c in "░▒▓█"] + [(" sprint", "bold")]]
+                [[("░", "dim"), ("▒▓", ""), ("█", "bold"), (" sprint", "bold")]]
         logo_h = len(art) + 2 if home else 0
         top = max(1, (h - logo_h - len(rows) - 3) // 2) + logo_h if home else h - 1 - len(rows)
         for i, r in enumerate(rows):
@@ -1434,7 +1517,8 @@ class Screen:
             self.put(scr, h - 1, w - 12, [("sprint 0.3", "dim")])
         else:
             # conversation
-            mw, vh = w - side - lw - 4, top - 2  # a blank row above and below the conversation
+            waiting = self.queue_rows()
+            mw, vh = w - side - lw - 4, top - 2 - len(waiting)  # a blank row above and below the conversation
             self.page = max(1, vh - 2)
             lines = self.lines(mw)
             if self.jump is not None:  # a click in a side panel: bring that item to the top
@@ -1461,14 +1545,15 @@ class Screen:
                     right = min(x0 + mw - 1, xb) if y == yb else x0 + mw - 1
                     if right >= left:
                         self.mark(scr, y, left, right - left + 1, curses.A_REVERSE)
-            # status line and footer
-            keys = [("tab", "bold"), (" mode  ", "dim"), ("ctrl+o", "bold"), (" tools  ", "dim"),
-                    ("pgup/pgdn", "bold"), (" scroll  ", "dim"), ("/help", "bold")]
+            # the status line, on the blank row above the bar; what is queued, between the two; and the footer
+            keys = [("tab", "bold"), (" mode  ", "dim"), ("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
+            for i, r in enumerate(waiting):
+                self.put(scr, top - len(waiting) + i, x0, r, width=mw)
             if self.busy():
-                doing = "waiting for you" if self.pending else self.note or "working"  # the trail on the prompt is the spinner
-                self.put(scr, h - 1, x0, [(doing, "dim")], width=max(10, mw // 2 - 2))
-                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys[:4]
-            elif self.scroll:
+                self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
+                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys[2:]
+                keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + keys
+            if self.scroll:
                 self.put(scr, h - 1, x0, [("↓ newer messages below", "warn")])
             keys = keys if len(flat(keys)) < mw - 24 else keys[:4]
             self.put(scr, h - 1, max(x0, w - side - 2 - len(flat(keys))), keys)
@@ -1503,7 +1588,7 @@ class Screen:
                 for y in range(h):
                     self.put(scr, y, lw, [("┃" if self.drag == "left" else "│", a.mode if self.drag == "left" else "frame")])
 
-        if self.note_text() and not self.busy():
+        if self.note_text():
             self.put(scr, h - 1, 2 if home else x0, [(self.note_text(), "warn")], width=max(20, (w - side - lw) // 2))
 
         # completion popup, drawn over whatever is above the input
@@ -1546,17 +1631,16 @@ class Screen:
             curses.curs_set(0)
         else:
             curses.curs_set(1)
-            tw = bw - 5
-            row = len(typed) - 1 if self.cur >= (len(typed) - 1) * tw else self.cur // tw
-            col = self.cur - (len(self.buf) // tw - (len(typed) - 1) + row) * tw
             try:
-                scr.move(top + 1 + row, bx + 5 + max(0, min(col, tw)))
+                scr.move(top + self.caret[0], bx + self.caret[1])
             except curses.error:
                 pass
         scr.refresh()
 
     def loop(self, scr, first=""):
         curses.raw()
+        curses.nonl()  # Enter now arrives as "\r", which leaves ctrl+j ("\n") free to mean a new line
+        self.nl = True
         scr.keypad(True)
         scr.timeout(80)
         self.colors = curses.has_colors()
@@ -1564,15 +1648,17 @@ class Screen:
         self.set_mouse()
         if first:
             self.submit(first)
-        if VT:
-            sys.stdout.write("\033[?2004h")  # ask the terminal to mark pastes, so a dropped file can become a chip
+        if VT:  # ask the terminal to mark pastes, so a dropped file can become a chip, and to report shift+enter
+            sys.stdout.write("\033[?2004h\033[>4;1m")
             sys.stdout.flush()
         fresh = was = True
         while not self.quit:
+            self.advance()
             now = self.active()
             if fresh or now or was:  # one more frame after things settle, then leave the screen alone
                 self.draw(scr)
             quick = self.busy() or self.pending or self.drag or self.select or self.esc is not None or self.pasting is not None
+            quick = quick or (self.motion and not self.items)  # the logo's glint is too fast for the slower beat
             scr.timeout(80 if quick else 160 if now else 1000)
             was = now
             try:
@@ -1582,7 +1668,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write("\033[?1003l\033[?1002l\033[?2004l" if VT else "")
+        sys.stdout.write("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" if VT else "")
         sys.stdout.flush()
 
 

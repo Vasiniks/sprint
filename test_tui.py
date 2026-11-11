@@ -259,10 +259,22 @@ def test_logo_is_five_equal_rows_of_shade_characters():
     assert set("".join(still)) <= set(" ░▒▓█")
 
 
-def test_each_logo_shade_has_its_own_colour():
-    for rows in (tui.logo_rows(), tui.logo_rows(3.0)):
-        seen = {text[0]: role for row in rows for text, role in row if text.strip()}
-        assert seen == {"░": "yellow", "▒": "cyan", "▓": "magenta", "█": "bold"}
+def cells(row):
+    """one (character, role) per column of a row of spans"""
+    return [(ch, role) for text, role in row for ch in text]
+
+
+def lit(t, r=0):
+    """the columns of logo row r that the glint of colour covers at time t"""
+    return [x for x, (_, role) in enumerate(cells(tui.logo_rows(t)[r])) if role in tui.HUES]
+
+
+MONO = {"░": "dim", "▒": "", "▓": "", "█": "bold", " ": ""}  # what each shade looks like with no colour on it
+
+
+def test_logo_held_still_has_no_colour():
+    seen = {ch: role for row in tui.logo_rows() for ch, role in cells(row) if ch != " "}
+    assert seen == {"░": "dim", "▒": "", "▓": "", "█": "bold"}
 
 
 def test_logo_held_still_goes_from_light_shade_to_solid():
@@ -284,6 +296,30 @@ def test_wave_is_slow():
     assert tui.WAVE_SECONDS >= 10
     start = letters(tui.logo_rows(0.0))
     assert letters(tui.logo_rows(tui.WAVE_SECONDS)) == start and letters(tui.logo_rows(tui.WAVE_SECONDS / 2)) != start
+
+
+def test_a_glint_is_narrow_and_crosses_the_logo_quickly_from_left_to_right():
+    assert tui.GLINT <= 16 and tui.GLINT_SECONDS <= 1.2
+    frames = [lit(i * 0.08) for i in range(1, 12)]  # the first glint, at the screen's redraw rate
+    assert all(frames) and all(f[-1] - f[0] < tui.GLINT for f in frames)
+    assert all(a[0] <= b[0] and a[-1] <= b[-1] for a, b in zip(frames, frames[1:]))  # it only ever moves right
+    assert frames[0][0] < 10 and frames[-1][-1] > tui.LOGO_W - 10
+    assert not lit(tui.GLINT_SECONDS + 0.1)  # and then it is gone
+    assert tui.logo_rows(0.5) == tui.logo_rows(0.5)  # nothing but the time decides the picture
+
+
+def test_glints_come_seconds_apart_in_yellow_then_cyan_then_magenta():
+    assert 3 <= tui.GLINT_EVERY <= 6 and tui.HUES == ("yellow", "cyan", "magenta")
+    hues = [{role for row in tui.logo_rows(n * tui.GLINT_EVERY + 0.5) for _, role in row if role in tui.HUES} for n in range(4)]
+    assert hues == [{"yellow"}, {"cyan"}, {"magenta"}, {"yellow"}]
+
+
+def test_between_glints_every_cell_is_plain_and_a_glint_only_colours_the_wave():
+    quiet = [n * tui.GLINT_EVERY + tui.GLINT_SECONDS + t / 4 for n in range(3) for t in range(1, 4 * (tui.GLINT_EVERY - 1))]
+    assert all(role == MONO[ch] for t in quiet for row in tui.logo_rows(t) for ch, role in cells(row))
+    for t in (0.3, 0.6, tui.GLINT_EVERY + 0.5):  # under a glint the shades are the wave's own; around it, plain
+        assert all(role in tui.HUES or role == MONO[ch] for row in tui.logo_rows(t) for ch, role in cells(row))
+        assert [" ░▒▓█".index(ch) for ch in letters(tui.logo_rows(t))[4][:8]] == [tui.wave(x, t) for x in range(8)]
 
 
 def test_motion_can_be_switched_off_in_settings():
@@ -488,9 +524,9 @@ def test_input_area_is_a_titled_rule_and_a_trail_prompt_not_a_box():
     s.buf = "make it so"
     rows, typed = s.input_rows(60, used=7)
     text = [flat(r) for r in rows]
-    assert len(rows) == 2 and len(text[0]) == 60
-    assert "ask" in text[0] and "Qwen3.5-0.8B" in text[0] and "7%" in text[0]
-    assert text[1].startswith("░▒▓█ make it so") and "┃" not in "".join(text)
+    assert len(rows) == 3 and len(text[0]) == len(text[2]) == 60  # a rule above and a rule below
+    assert "Qwen3.5-0.8B" in text[0] and "7%" in text[0] and "ask" in text[2]
+    assert text[1].startswith("░▒▓█ > make it so") and "┃" not in "".join(text)
 
 
 def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
@@ -499,7 +535,7 @@ def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
     assert "Ask anything" in flat(rows[1])
     s.buf = "x" * 50
     rows, typed = s.input_rows(40)
-    assert len(typed) == 2 and flat(rows[2]).startswith("     x")
+    assert len(typed) == 2 and flat(rows[2]).startswith("       x")
 
 
 def test_permission_prompt_names_the_call_and_the_keys(tmp_path, monkeypatch):
