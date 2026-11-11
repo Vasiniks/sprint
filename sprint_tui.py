@@ -551,6 +551,7 @@ class Screen:
         self.choice = 0  # which answer to an approval is highlighted: once, always, no
         self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
         self.backdrop_want = self.backdrop_was = self.backdrop_job = None  # Apple's Terminal: the colour asked for, the window's own, the asking
+        self.backdrop_now, self.repaint = None, False  # the colour that window has taken from us; paint again, it has changed
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
@@ -587,16 +588,28 @@ class Screen:
         colour is the one the cells are really drawn in: the nearest of the 256 where that is what the screen shows"""
         if not self.live:
             return  # no real screen
-        rgb = None if colour is None else RGB[SLOT[colour]] if self.exact else PALETTE[near(colour)]
+        rgb = self.shown_as(colour)
         if VT or windows_codes():
             sys.stdout.write("\033]111\007" if rgb is None else "\033]11;#%02x%02x%02x\007" % rgb)
             sys.stdout.flush()
         asking = bool(self.backdrop_job and self.backdrop_job.is_alive())  # (its answer will say what the window had)
         if VT and os.environ.get("TERM_PROGRAM") == "Apple_Terminal" and (rgb or self.backdrop_was or asking):
             self.backdrop_want = tuple(v * 257 for v in rgb) if rgb else None
-            if not asking:
+            if not asking and self.backdrop_want != self.backdrop_now:  # (it is not asked again for what it already has)
                 self.backdrop_job = threading.Thread(target=self.backdrop_apple, daemon=True)
                 self.backdrop_job.start()
+
+    def shown_as(self, colour):
+        """the colour a theme's background really comes out as on this screen: exact, or the nearest of the 256"""
+        return None if colour is None else RGB[SLOT[colour]] if self.exact else PALETTE[near(colour)]
+
+    def borrowed(self, colour):
+        """has the window itself taken this background (Apple's Terminal, once it has answered)? Then the cells use
+        the window's own instead of painting theirs. That app does not show a colour it is given through scripting
+        quite as it shows the same colour drawn in a cell, so painted cells and margin came out a shade apart on the
+        more colourful themes; borrowed, they are one colour whatever it makes of it"""
+        rgb = self.shown_as(colour)
+        return bool(self.live and rgb and self.backdrop_now == tuple(v * 257 for v in rgb))
 
     def backdrop_apple(self):
         """off the screen's back (the Terminal app takes a moment to answer): set the latest colour asked for, and
@@ -611,6 +624,8 @@ class Screen:
                 return  # asked to give back a window that was never changed
             was = apple_window(tty, want or self.backdrop_was)
             self.backdrop_was = self.backdrop_was or was
+            if was:  # it took it: the cells can now borrow the window's background rather than paint their own
+                self.backdrop_now, self.repaint = want, True
             if want == self.backdrop_want:
                 return  # nothing newer was asked for meanwhile
 
@@ -641,6 +656,7 @@ class Screen:
                     pass  # it said it could and cannot: the nearest colours, then
             t, ink = THEMES[self.theme], self.ink
             bg, fg, panel = (ink(t.get("bg", -1)), ink(t.get("fg", -1)), ink(t.get("panel", 236))) if rich else (-1, -1, -1)
+            bg = -1 if rich and self.borrowed(t.get("bg")) else bg
             for i in range(8):
                 colour = ink(t.get(i, i)) if rich or self.theme == "mono" else i
                 if i:
@@ -791,7 +807,7 @@ class Screen:
     def active(self):
         """is anything on the screen changing by itself? When nothing is, the loop sleeps instead of redrawing."""
         wave = not self.items and self.motion
-        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave or self.queue
+        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave or self.queue or self.repaint
                     or (self.job and self.job.is_alive()) or self.esc is not None or self.pasting is not None
                     or self.glow(self.flash[0]))
 
@@ -2283,6 +2299,9 @@ class Screen:
         fresh = was = True
         while not self.quit:
             self.advance()
+            if self.repaint:  # the window has taken (or given back) its background: the pairs follow
+                self.repaint = False
+                self.paint()
             now = self.active()
             if fresh or now or was:  # one more frame after things settle, then leave the screen alone
                 self.draw(scr)

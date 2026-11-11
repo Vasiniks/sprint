@@ -148,3 +148,54 @@ def test_on_windows_it_is_tried_only_in_windows_terminal_and_only_if_codes_can_b
     monkeypatch.setattr(tui, "windows_codes", lambda: True)
     shown(monkeypatch, "sapphire")
     assert "\033]11;" in capsys.readouterr().out
+
+
+# ---------- on Apple's Terminal the cells then use the window's own background, so the two cannot differ ----------
+# (that app does not show a colour it is given through scripting quite as it shows the same colour drawn in a cell: on
+# the more colourful themes the margin came out a shade off the screen)
+
+def test_once_the_window_has_the_colour_the_cells_borrow_it_instead_of_painting_their_own(apple, monkeypatch):
+    pairs = {}
+    s = shown(monkeypatch, "sapphire")
+    monkeypatch.setattr(tui.curses, "init_pair", lambda n, fg, bg: pairs.__setitem__(n, (fg, bg)))
+    settle(s)
+    assert s.repaint  # the window answered: the screen is to be painted again
+    s.paint()
+    settle(s)
+    assert pairs[8][1] == -1 and pairs[1][1] == -1 and pairs[9][1] == -1  # plain text, the hues, greyed text: on the window's own
+    assert pairs[10][1] != -1 and pairs[230][1] != -1  # the panel and the band keep their own shades
+    assert len(apple) == 1  # and the window is not asked again for what it already has
+
+
+def test_a_new_theme_is_painted_in_full_until_the_window_has_followed(apple, monkeypatch):
+    pairs = {}
+    s = shown(monkeypatch, "sapphire")
+    settle(s)
+    s.paint()
+    monkeypatch.setattr(tui.curses, "init_pair", lambda n, fg, bg: pairs.__setitem__(n, (fg, bg)))
+    hold = []
+    monkeypatch.setattr(tui, "apple_window", lambda tty, rgb: hold.append(rgb) and None)  # the window is slow to answer, or cannot
+    s.theme = "paper"
+    s.paint()
+    settle(s)
+    assert pairs[8][1] != -1  # paper's own background, in every cell
+    s.paint()
+    assert pairs[8][1] != -1  # and it stays so while the window has not taken it
+
+
+def test_a_window_that_cannot_be_asked_leaves_the_cells_painted(apple, monkeypatch):
+    pairs = {}
+    monkeypatch.setattr(tui, "apple_window", lambda tty, rgb: None)
+    s = shown(monkeypatch, "sapphire")
+    monkeypatch.setattr(tui.curses, "init_pair", lambda n, fg, bg: pairs.__setitem__(n, (fg, bg)))
+    settle(s)
+    s.paint()
+    assert pairs[8][1] != -1 and not s.repaint
+
+
+def test_other_terminals_keep_painting_every_cell(live, monkeypatch):
+    pairs = {}
+    s = shown(monkeypatch, "sapphire")
+    monkeypatch.setattr(tui.curses, "init_pair", lambda n, fg, bg: pairs.__setitem__(n, (fg, bg)))
+    s.paint()
+    assert pairs[8][1] != -1
