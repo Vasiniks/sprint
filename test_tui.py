@@ -345,7 +345,7 @@ def test_user_message_leads_with_the_trail_and_prose_is_indented():
     s.submit("hello there")
     finish(s)
     lines = s.lines(40)
-    assert lines[0][0] == "user" and flat(lines[0][1]) == "░▒▓█ hello there"
+    assert lines[0][0] == "user" and flat(lines[0][1]) == "> hello there"
     assert "┃" not in "".join(flat(spans) for _, spans, _ in lines)
     assert any(flat(spans) == "  Sure thing." for _, spans, _ in lines)
 
@@ -526,7 +526,7 @@ def test_input_area_is_a_titled_rule_and_a_trail_prompt_not_a_box():
     text = [flat(r) for r in rows]
     assert len(rows) == 3 and len(text[0]) == len(text[2]) == 60  # a rule above and a rule below
     assert "Qwen3.5-0.8B" in text[0] and "7%" in text[0] and "ask" in text[2]
-    assert text[1].startswith("░▒▓█ > make it so") and "┃" not in "".join(text)
+    assert text[1].startswith("> make it so") and "┃" not in "".join(text)
 
 
 def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
@@ -535,7 +535,7 @@ def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
     assert "Ask anything" in flat(rows[1])
     s.buf = "x" * 50
     rows, typed = s.input_rows(40)
-    assert len(typed) == 2 and flat(rows[2]).startswith("       x")
+    assert len(typed) == 2 and flat(rows[2]).startswith("  x")
 
 
 def test_permission_prompt_names_the_call_and_the_keys(tmp_path, monkeypatch):
@@ -550,15 +550,6 @@ def test_permission_prompt_names_the_call_and_the_keys(tmp_path, monkeypatch):
     assert "allow" in text and "shell" in text and "echo 1" in text and "always" in text and "┃" not in text
     s.key("n")
     finish(s)
-
-
-def test_the_prompt_trail_holds_still_even_while_working(monkeypatch):
-    s = screen()
-    assert flat(s.trail()) == "░▒▓█"
-    monkeypatch.setattr(s, "busy", lambda: True)
-    for tick in range(8):  # the sprint above the bar is the one animation now
-        monkeypatch.setattr(tui.time, "time", lambda tick=tick: tick / 8)
-        assert flat(s.trail()) == "░▒▓█"
 
 
 
