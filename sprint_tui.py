@@ -500,6 +500,7 @@ class Screen:
         self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
+        self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
         self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -507,6 +508,7 @@ class Screen:
         self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
         self.began, self.got, self.down = 0.0, 0, False  # this turn: when it started, characters of reply, is one arriving?
         self.queue, self.leave = [], 0.0  # messages sent while the agent worked; until when a second ctrl+c quits
+        self.halted = None  # the turn ctrl+c has already told to stop: pressed again while it still runs, it is about leaving
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -804,6 +806,21 @@ class Screen:
         pool = [(m, "") for m in self.installed()] if cmd == "/model" else pool or []
         return [(o, d) for o, d in pool if o.startswith(arg) and o != arg]
 
+    def state_of(self, cmd, choice=None):
+        """what a command stands at now, for the far right of its row and of the prompt: on or off for a switch, the
+        value for a setting, nothing for the rest -> (text, role). With a choice: whether that one is the one in force"""
+        a = self.agent
+        now = {"/think": a.think, "/showthink": self.showthink, "/plan": self.plan, "/sidebar": self.sidebar, "/history": self.history,
+               "/mouse": self.mouse_on, "/mode": a.mode, "/permissions": a.mode, "/effort": a.effort, "/theme": self.theme,
+               "/model": a.model}.get(cmd)
+        if choice is not None:
+            return ("current", "ok") if choice == now else None
+        if now is None:
+            return None
+        if isinstance(now, bool):
+            return ("on", "ok") if now else ("off", "dim")
+        return (short(now), "dim") if cmd == "/model" else (now, now if now in MODES else "code")
+
     def complete(self, opts):
         choice = opts[min(self.pick, len(opts) - 1)][0]
         if self.mention() is not None:  # swap the @word at the cursor for the chosen file
@@ -904,7 +921,8 @@ class Screen:
         elif k == "\x03":  # ctrl+c: clear the line, else stop the turn, else leave once it is pressed again
             if self.buf:
                 self.buf, self.cur = "", 0
-            elif self.busy() or self.queue:
+            elif self.queue or (self.busy() and self.halted is not self.worker):
+                self.halted = self.worker  # told once. A turn that will not stop must never be what keeps you in
                 self.halt()
             elif time.time() < self.leave:
                 self.quit = True
@@ -1753,6 +1771,10 @@ class Screen:
         if cmd and cmd.group() in dict(COMMANDS) and typed[0].startswith(cmd.group()):  # a command, once it is one: it lights up
             body[0] = [(cmd.group(), "kw")] + marks(typed[0][cmd.end():], ATTACHED)
         lead = [("!" if shell else MARK, tone), (" ", "")]
+        state = self.state_of(cmd.group()) if cmd and cmd.group() in dict(COMMANDS) else None
+        gap = bw - 2 - len(flat(body[0])) - len(state[0]) if state else 0
+        if gap >= 2:  # a command typed in full: what it stands at now, at the far right, so you know what enter changes
+            body[0] = body[0] + [(" " * gap, ""), state]
         return [rule] + [(lead if n == 0 else [("  ", "")]) + r for n, r in enumerate(body)] + [foot], typed
 
     # --- conversation -> lines of (kind, spans, item)
@@ -1809,9 +1831,28 @@ class Screen:
         return [("", top, it)] + [("", [("│ ", "frame")] + clip(r, inner) + [(" │", "frame")], it) for r in rows] + \
                [("", foot, it)]
 
+    def plan_now(self):
+        """the checklist of the message in hand, if plan mode made one for it"""
+        last = next((i for i in reversed(self.items) if i["t"] in ("plan", "user")), None)
+        return last if last and last["t"] == "plan" else None
+
+    def plan_rows(self, plan, w, room):
+        """the plan for the right-hand panel: every step wrapped to its width, done / in hand / still to do, and as many
+        rows as there is room for, kept around the step in hand"""
+        at, rows, first = plan["at"], [], 0
+        for n, step in enumerate(plan["steps"]):
+            first = len(rows) if n == at else first
+            mark, role = ("✓ ", "green") if n < at else ("▸ ", self.agent.mode) if n == at else ("· ", "dim")
+            for k, r in enumerate(wrap([(step, "bold" if n == at else "dim")], max(8, w - 2))):
+                rows.append([(mark if k == 0 else "  ", role)] + r)
+        start = max(0, min(first - 1, len(rows) - room))
+        return rows[start:start + room]
+
     def lines(self, w):
         out = []
         for it in self.items:
+            if it["t"] == "plan" and self.aside:
+                continue  # it is on show in the right-hand panel instead
             key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
                    self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""))  # a thought grows
             if self.cache.get(id(it), (None,))[0] != key:
@@ -1928,6 +1969,7 @@ class Screen:
             waiting = self.queue_rows()
             mw, vh = w - side - lw - 4, top - 2 - len(waiting)  # a blank row above and below the conversation
             self.page = max(1, vh - 2)
+            self.aside = bool(side)
             lines = self.lines(mw)
             if self.jump is not None:  # a click in a side panel: bring that item to the top
                 at = next((i for i, row in enumerate(lines) if row[2] is self.jump), None)
@@ -1981,7 +2023,13 @@ class Screen:
                 self.put(scr, 6, x, [(MODE_ICON[a.mode] + " " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
                          width=inner)
                 self.put(scr, 8, x, [("Activity", "dim")], width=inner)
-                log = self.activity()[-max(1, h - 12):]
+                plan, half = self.plan_now(), h // 2
+                if plan:  # the bottom half is the plan: how far along, then its steps
+                    done = f"{min(plan['at'], len(plan['steps']))}/{len(plan['steps'])}"
+                    self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
+                    for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 2 - half - 1))):
+                        self.put(scr, half + 1 + i, x, spans, width=inner)
+                log = self.activity()[-max(1, (half - 1 if plan else h - 3) - 9):]
                 for i, (item, spans) in enumerate(log):
                     self.put(scr, 9 + i, x, spans, width=inner)
                     self.hits[("side", 9 + i)] = item
@@ -2016,9 +2064,14 @@ class Screen:
         chosen = min(self.pick, len(every) - 1)
         start = max(0, min(chosen - 3, len(every) - 8))  # eight at a time, kept around the chosen one
         opts = every[start:start + 8]
+        asked = self.buf.partition(" ")[0] if " " in self.buf else None  # the command whose choices these are, if they are
         for i, (name, about) in enumerate(opts):
             on = start + i == chosen
-            self.put(scr, top - len(opts) + i, bx, [(f"     {name:<24}", "bold" if on else ""), (about, "dim")], width=bw)
+            state = self.state_of(asked, name) if asked else self.state_of(name)  # what it stands at now, at the far right
+            room = bw - (len(state[0]) + 2 if state else 0)
+            self.put(scr, top - len(opts) + i, bx, [(f"     {name:<24}", "bold" if on else ""), (about, "dim")], width=room)
+            if state:
+                self.put(scr, top - len(opts) + i, bx + room, [(" " + state[0] + " ", state[1])])
             if on:
                 self.mark(scr, top - len(opts) + i, bx + 3, bw - 3, curses.A_REVERSE)
 

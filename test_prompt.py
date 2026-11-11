@@ -758,7 +758,7 @@ def bar(s, text, w=60):
 def test_a_command_you_have_typed_in_full_lights_up_in_the_prompt():
     s = screen()
     row = bar(s, "/model qwen")[0]
-    assert flat(row) == f"{tui.MARK} /model qwen" and ("/model", "kw") in row and (" qwen", "") in row
+    assert flat(row).startswith(f"{tui.MARK} /model qwen ") and ("/model", "kw") in row and (" qwen", "") in row
     assert ("/theme", "kw") in bar(s, "/theme")[0]
     for text in ("/mod", "/modelx", "see /model", " /model"):  # not a command yet, not one at all, or not at the start
         assert all(role != "kw" for _, role in bar(s, text)[0]), text

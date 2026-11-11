@@ -919,13 +919,26 @@ class Agent:
             self.msgs.append({"role": "user", "content": user, "human": human})
 
     def plan(self, task):
-        """ask the model, without tools, for a short numbered plan -> its steps, or [] when there is nothing to split"""
-        self.bare = True
+        """ask the model, without tools, for a short numbered plan -> its steps, or [] when there is nothing to split.
+        It is a reply like any other: it says what it is doing and it can be stopped (it used to be a blind spot that
+        nothing reached, and with it running there was no leaving sprint). A list of steps needs no long reasoning,
+        so it is asked for without any and with a small budget: seconds, where full effort took a minute or more"""
+        was, kept = self.think, self.limit
+        self.bare, self.cancel, self.think, self.limit = True, False, False, min(self.max_out, 400)
+        self.thread, text = threading.get_ident(), ""  # so stop() can hang up on it
+        self.status("planning")
+        stream = self.chat([{"role": "system", "content": PLAN}, {"role": "user", "content": task}])
         try:
-            text = unthink("".join(c for c in self.chat([{"role": "system", "content": PLAN}, {"role": "user", "content": task}])
-                                   if isinstance(c, str)))
+            for c in stream:
+                if self.cancel:
+                    raise KeyboardInterrupt
+                text += c if isinstance(c, str) else ""
         finally:
-            self.bare = False
+            getattr(stream, "close", lambda: None)()
+            SOCKETS.pop(self.thread, None)
+            self.bare, self.think, self.limit = False, was, kept
+            self.status("")
+        text = unthink(text)
         steps = [m.group(1).strip() for m in re.finditer(r"^\s*(?:\d+[.)]|[-*•])\s+(.+)$", text, re.M)]
         return steps[:6] if len(steps) > 1 else []
 
@@ -1567,7 +1580,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.10"  # the same as in pyproject.toml
+VERSION = "0.4.11"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),

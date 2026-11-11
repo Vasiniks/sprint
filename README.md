@@ -45,7 +45,7 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 |---|---|
 | Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. |
 | Conversation (middle) | Your messages on a bright band with a bar down the side in the mode's colour, the model's replies, and one window per tool call. Under each answer, what the message cost: tokens up and down, and the time. |
-| Sidebar (right) | The context window in small, the model's speed, then a log of every tool call and how it ended. |
+| Sidebar (right) | The context window in small, the model's speed, then a log of every tool call and how it ended. In plan mode its bottom half is the plan: how far along it is, and each step ticked, in hand, or still to do. |
 | Prompt (bottom) | The line you type on, between two rules, with the model and context on the upper one. Under it, the mode with its icon (`▰▱▱` ask, `▰▰▱` edits, `▰▰▰` auto: fuller, the more runs without asking) and a reminder that Tab cycles it. |
 | Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. |
 
@@ -71,7 +71,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | you type | what happens |
 |---|---|
 | `@notes.txt` | That file is attached to the message, so the model doesn't have to go and read it. Tab completes the name. |
-| `/model` | A command, typed in full, lights up in the prompt, as do the files you attach and the chips of pasted things. |
+| `/model` | A command, typed in full, lights up in the prompt, as do the files you attach and the chips of pasted things. One that switches or sets something also shows what it stands at now, at the far right (`/showthink` … `off`), and so does its row in the list of commands. |
 | `!git status` | Shell mode: the prompt's `❯` becomes `!` and the bar takes the shell colour (green in most themes; ask, edits, auto and shell each have their own, in every theme). The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |
@@ -92,7 +92,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | `ctrl+l` | clear the conversation |
 | mouse wheel, `pgup`, `pgdn` | scroll. Scrolled up, a `↓ jump to bottom` button appears at the foot of the conversation: click it, or press `end` on an empty prompt. |
 | `up`, `down` | recall earlier messages |
-| `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit |
+| `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit. If a turn will not stop, pressing on offers the way out all the same: nothing can keep you in. |
 
 Drag over text to copy it: in the conversation, in the prompt, or in either side panel (a drag stays in the part of the screen it began in). `/mouse` hands the mouse back to the terminal if you prefer its own selection.
 
@@ -122,7 +122,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/think` | Let the model reason before answering. Its reasoning shows as it is written: a line that counts the words and shows the newest ones. |
 | `/showthink` | Show that reasoning in full, growing as it arrives, in a dashed frame of its own so it never looks like an action. Otherwise it is one line; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
-| `/plan` | Split each message into a short list of steps first. Off by default. |
+| `/plan` | Split each message into a short list of steps first. Off by default. The steps show in the bottom half of the sidebar (in the conversation when the sidebar is hidden). The plan itself is asked for without reasoning and with a small budget, so it comes in seconds, and it can be stopped like any reply. |
 | `/context` | What is filling the context window, as a coloured grid. |
 | `/usage` | Tokens sent, written and spent on reasoning, time, speed and tool calls: for this session, per day for the last two weeks, per model, and for all time. |
 | `/compact` | Fold the conversation into a short summary, at any time: everything before the latest exchange, or that exchange too when there is nothing older. sprint also does this by itself when room runs out. |
