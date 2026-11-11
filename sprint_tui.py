@@ -6,6 +6,7 @@ import os
 import re
 import select
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -151,6 +152,57 @@ def near(colour, seen={}):
         apart = lambda a, b: sum((x - y) ** 2 for x, y in zip(a, b))
         seen[colour] = min(PALETTE, key=lambda n: apart(PALETTE[n], want) + 2 * apart(tint(PALETTE[n]), tint(want)))
     return seen[colour]
+
+
+# A terminal keeps a margin round its grid of characters, in its own background colour, which nothing drawn can reach.
+# So a theme with a background gives it to the terminal itself while sprint runs (the standard code for that, which
+# every current terminal but Apple's takes), and hands the old one back on the way out. Apple's Terminal is asked
+# through the Terminal app itself; on Windows it is tried in Windows Terminal only, the one console that has a margin
+OSA = """on run argv
+  set want to {(item 2 of argv) as integer, (item 3 of argv) as integer, (item 4 of argv) as integer}
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is (item 1 of argv) then
+          set was to background color of t
+          set background color of t to want
+          return ((item 1 of was) as text) & " " & ((item 2 of was) as text) & " " & ((item 3 of was) as text)
+        end if
+      end repeat
+    end repeat
+  end tell
+  return ""
+end run"""
+
+
+def apple_script_window(tty, rgb):
+    """give the Terminal window showing this terminal a background (each colour counted to 65535, as that app does)
+    -> the one it had, or None if it could not be asked"""
+    try:
+        was = subprocess.run(["osascript", "-e", OSA, tty] + [str(v) for v in rgb], capture_output=True, text=True, timeout=5).stdout.split()
+        return tuple(int(float(v)) for v in was) if len(was) == 3 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+apple_window = apple_script_window  # the tests put a stand-in here: none of them may recolour a real window
+
+
+def windows_codes(on=[]):
+    """Windows: can escape codes be written to the console? Only tried in Windows Terminal, and only by switching the
+    console's own processing of them on (asked once); anywhere else a code would come out as stray characters"""
+    if not on:
+        ok = False
+        if sprint.WINDOWS and os.environ.get("WT_SESSION"):
+            try:
+                import ctypes
+                kernel, mode = ctypes.windll.kernel32, ctypes.c_uint32()
+                handle = kernel.GetStdHandle(-11)
+                ok = bool(kernel.GetConsoleMode(handle, ctypes.byref(mode)) and kernel.SetConsoleMode(handle, mode.value | 0x0004))
+            except Exception:
+                ok = False
+        on.append(ok)
+    return on[0]
 
 
 def can_exact():
@@ -498,6 +550,7 @@ class Screen:
         self.newer = ""  # a newer published version, once the daily look has found one
         self.choice = 0  # which answer to an approval is highlighted: once, always, no
         self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
+        self.backdrop_want = self.backdrop_was = self.backdrop_job = None  # Apple's Terminal: the colour asked for, the window's own, the asking
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
@@ -529,6 +582,38 @@ class Screen:
         self.plan_h = kept.get("plan_h")
         self.paint()
 
+    def backdrop(self, colour):
+        """give the terminal itself this background (None: its own back), so a theme reaches the window's edges. The
+        colour is the one the cells are really drawn in: the nearest of the 256 where that is what the screen shows"""
+        if not self.live:
+            return  # no real screen
+        rgb = None if colour is None else RGB[SLOT[colour]] if self.exact else PALETTE[near(colour)]
+        if VT or windows_codes():
+            sys.stdout.write("\033]111\007" if rgb is None else "\033]11;#%02x%02x%02x\007" % rgb)
+            sys.stdout.flush()
+        asking = bool(self.backdrop_job and self.backdrop_job.is_alive())  # (its answer will say what the window had)
+        if VT and os.environ.get("TERM_PROGRAM") == "Apple_Terminal" and (rgb or self.backdrop_was or asking):
+            self.backdrop_want = tuple(v * 257 for v in rgb) if rgb else None
+            if not asking:
+                self.backdrop_job = threading.Thread(target=self.backdrop_apple, daemon=True)
+                self.backdrop_job.start()
+
+    def backdrop_apple(self):
+        """off the screen's back (the Terminal app takes a moment to answer): set the latest colour asked for, and
+        remember what the window had before the first, to give back"""
+        try:
+            tty = os.ttyname(2)
+        except OSError:
+            return
+        while True:
+            want = self.backdrop_want
+            if not (want or self.backdrop_was):
+                return  # asked to give back a window that was never changed
+            was = apple_window(tty, want or self.backdrop_was)
+            self.backdrop_was = self.backdrop_was or was
+            if want == self.backdrop_want:
+                return  # nothing newer was asked for meanwhile
+
     def ink(self, colour):
         """the terminal's number for a theme's colour: an exact one's own slot, or the nearest of the 256"""
         return colour if isinstance(colour, int) else SLOT[colour] if self.exact else near(colour)
@@ -538,6 +623,7 @@ class Screen:
         text, 10-19 the same on the panel shade, 230-237 on the band behind your own messages. With fewer than 256
         colours the screen stays the terminal's own"""
         self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
+        shown = None  # the background the terminal itself should take: the theme's, once it is known the screen shows it
         self.stale = True  # what is on the screen is in the old colours: the next frame sends every cell again (see draw)
         try:
             if not curses.has_colors():
@@ -568,11 +654,14 @@ class Screen:
             for i in range(8):
                 curses.init_pair(230 + i, ink(t.get(i, i)) if i else fg, ink(t.get("band", 238)))
             self.base = 8 if "bg" in t else 0
+            shown = t.get("bg")
             for n, other in enumerate(THEMES.values()):
                 for i in range(7):
                     curses.init_pair(20 + 7 * n + i, ink(other.get(i, i) if i else other.get("fg", -1)), ink(other.get("bg", -1)))
         except curses.error:
             pass  # no screen yet
+        finally:
+            self.backdrop(shown)
 
     # --- what the agent calls (from its worker thread)
 
@@ -2221,5 +2310,8 @@ def run(agent, first=""):
     try:
         curses.wrapper(screen.loop, first)
     finally:
+        screen.backdrop(None)  # the terminal gets its own background back, however sprint ends
+        if screen.backdrop_job:
+            screen.backdrop_job.join(4)
         if back:
             back()
