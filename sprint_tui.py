@@ -75,7 +75,8 @@ GLINT_EVERY = 4      # seconds from one glint of colour to the next; the wave is
 GLINT_SECONDS = 1.0  # how long a glint takes to cross the word
 GLINT = 14           # columns a glint covers: about three letters
 RUN = 14             # cells of track the working animation sprints along
-LAP = 1.0            # seconds one lap of it takes
+LAP = 1.2            # seconds one lap of it takes
+PACE = 0.4           # how much of its speed the runner has from the first moment; the rest it gathers
 
 
 def wave(x, t):
@@ -106,7 +107,10 @@ def dash(t=None):
     """the working animation as spans: a track of slanted cells along which four filled ones sprint, gathering
     speed, and come round again in the next colour. t in seconds; None holds them still on their mark"""
     lap, into = divmod((t or 0) / LAP, 1)
-    head, hue = 3 + int(into * into * RUN), HUES[int(lap) % 3]  # the square of the time: slow off the line, then fast
+    # It comes in over the left edge and leaves over the right, so one colour is gone as the next sets off. Already
+    # moving as it enters, then faster and faster: a runner that waited on its mark made every change of colour stutter
+    head = 3 if t is None else int((PACE * into + (1 - PACE) * into * into) * (RUN + 3))
+    hue = HUES[int(lap) % 3]
     fade = (hue + ".bold", hue, hue + ".dim", hue + ".dim")  # the head, then a tail that fades behind it
     return [(CELLS[0], fade[head - x]) if 0 <= head - x < 4 else (CELLS[1], "ghost") for x in range(RUN)]
 
@@ -1813,9 +1817,14 @@ class Screen:
             tips = [("/", "bold"), (" commands   ", "dim"), ("ctrl+c", "bold"), (" quit", "dim")]
             self.put(scr, top + len(rows), bx, self.mode_row(), width=bw - len(flat(tips)) - 2)
             self.put(scr, top + len(rows), bx + bw - len(flat(tips)), tips)
-            version = self.version_text()
-            self.put(scr, h - 1, 2, [(os.getcwd().replace(str(Path.home()), "~", 1), "dim")], width=w - len(flat(version)) - 8)
-            self.put(scr, h - 1, w - 2 - len(flat(version)), version)
+            where = os.getcwd().replace(str(Path.home()), "~", 1)
+            # bottom left: the version, and a newer one when there is one; a passing note takes its place while it lasts
+            version = clip([(self.note_text(), "warn")], max(20, w // 2)) if self.note_text() else self.version_text()
+            self.put(scr, h - 1, 2, version, width=w - 4)
+            room = w - 8 - len(flat(version))
+            if room >= 12:
+                where = where if len(where) <= room else "…" + where[-(room - 1):]  # the end of a long path says more
+                self.put(scr, h - 1, w - 2 - len(where), [(where, "dim")])
         else:
             # conversation
             waiting = self.queue_rows()
@@ -1899,8 +1908,6 @@ class Screen:
                 for y in range(h):
                     self.put(scr, y, lw, [("┃" if self.drag == "left" else "│", a.mode if self.drag == "left" else "frame")])
 
-        if self.note_text() and home:
-            self.put(scr, h - 1, 2, [(self.note_text(), "warn")], width=max(20, w // 2))
 
         # completion popup, drawn over whatever is above the input
         every = [] if self.pending or self.popup else self.options()
