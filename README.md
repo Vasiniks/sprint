@@ -37,7 +37,7 @@ Type a request and press Enter. In the default mode sprint asks before it runs a
 | `sprint update` | get the newest sprint: `git pull` for a checkout, `pip install --upgrade` otherwise |
 | `sprint --version` | the version |
 
-Once a day sprint looks at this repository for a newer version and, if there is one, says so beside the version on the opening screen. The look sends nothing but the request itself; `/config update_check off` stops it.
+Once a day sprint looks at this repository for a newer version and, if there is one, says so beside the version, bottom left on the opening screen. The look sends nothing but the request itself; `/config update_check off` stops it.
 
 ## The screen
 
@@ -71,6 +71,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | you type | what happens |
 |---|---|
 | `@notes.txt` | That file is attached to the message, so the model doesn't have to go and read it. Tab completes the name. |
+| `/model` | A command, typed in full, lights up in the prompt, as do the files you attach and the chips of pasted things. |
 | `!git status` | Shell mode: the prompt's `❯` becomes `!` and the bar takes the shell colour (green in most themes; ask, edits, auto and shell each have their own, in every theme). The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |
@@ -93,7 +94,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | `up`, `down` | recall earlier messages |
 | `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit |
 
-Drag over text in the conversation to copy it. `/mouse` hands the mouse back to the terminal if you prefer its own selection.
+Drag over text to copy it: in the conversation, in the prompt, or in either side panel (a drag stays in the part of the screen it began in). `/mouse` hands the mouse back to the terminal if you prefer its own selection.
 
 ## Modes and permissions
 
@@ -120,7 +121,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/plan` | Split each message into a short list of steps first. Off by default. |
 | `/context` | What is filling the context window, as a coloured grid. |
 | `/usage` | Tokens sent, written and spent on reasoning, time, speed and tool calls: for this session, per day for the last two weeks, per model, and for all time. |
-| `/compact` | Fold the older conversation into a short summary. sprint also does this by itself. |
+| `/compact` | Fold the conversation into a short summary, at any time: everything before the latest exchange, or that exchange too when there is nothing older. sprint also does this by itself when room runs out. |
 | `/copy [code\|all]` | Copy the last answer, the last code block, or everything. |
 | `/paste` | Attach the picture on the clipboard. |
 | `/export [file]` | Save the conversation as markdown. |
