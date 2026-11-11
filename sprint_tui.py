@@ -508,6 +508,7 @@ class Screen:
         self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
         self.began, self.got, self.down = 0.0, 0, False  # this turn: when it started, characters of reply, is one arriving?
         self.queue, self.leave = [], 0.0  # messages sent while the agent worked; until when a second ctrl+c quits
+        self.halted = None  # the turn ctrl+c has already told to stop: pressed again while it still runs, it is about leaving
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -920,7 +921,8 @@ class Screen:
         elif k == "\x03":  # ctrl+c: clear the line, else stop the turn, else leave once it is pressed again
             if self.buf:
                 self.buf, self.cur = "", 0
-            elif self.busy() or self.queue:
+            elif self.queue or (self.busy() and self.halted is not self.worker):
+                self.halted = self.worker  # told once. A turn that will not stop must never be what keeps you in
                 self.halt()
             elif time.time() < self.leave:
                 self.quit = True

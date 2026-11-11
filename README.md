@@ -92,7 +92,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | `ctrl+l` | clear the conversation |
 | mouse wheel, `pgup`, `pgdn` | scroll. Scrolled up, a `↓ jump to bottom` button appears at the foot of the conversation: click it, or press `end` on an empty prompt. |
 | `up`, `down` | recall earlier messages |
-| `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit |
+| `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit. If a turn will not stop, pressing on offers the way out all the same: nothing can keep you in. |
 
 Drag over text to copy it: in the conversation, in the prompt, or in either side panel (a drag stays in the part of the screen it began in). `/mouse` hands the mouse back to the terminal if you prefer its own selection.
 
@@ -122,7 +122,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/think` | Let the model reason before answering. Its reasoning shows as it is written: a line that counts the words and shows the newest ones. |
 | `/showthink` | Show that reasoning in full, growing as it arrives, in a dashed frame of its own so it never looks like an action. Otherwise it is one line; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
-| `/plan` | Split each message into a short list of steps first. Off by default. The steps show in the bottom half of the sidebar (in the conversation when the sidebar is hidden). |
+| `/plan` | Split each message into a short list of steps first. Off by default. The steps show in the bottom half of the sidebar (in the conversation when the sidebar is hidden). The plan itself is asked for without reasoning and with a small budget, so it comes in seconds, and it can be stopped like any reply. |
 | `/context` | What is filling the context window, as a coloured grid. |
 | `/usage` | Tokens sent, written and spent on reasoning, time, speed and tool calls: for this session, per day for the last two weeks, per model, and for all time. |
 | `/compact` | Fold the conversation into a short summary, at any time: everything before the latest exchange, or that exchange too when there is nothing older. sprint also does this by itself when room runs out. |
