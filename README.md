@@ -115,7 +115,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/race [model message]` | Send one message to two models and compare answers, time and speed. They may read files but change nothing. |
 | `/mode`, `/permissions` | Change the mode; manage the always-allowed list. |
 | `/think` | Let the model reason before answering. |
-| `/showthink` | Show that reasoning in full. Otherwise it is one line saying the model thought; click one to open it. |
+| `/showthink` | Show that reasoning in full, in a dashed frame of its own so it never looks like an action. Otherwise it is one line saying the model thought; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
 | `/plan` | Split each message into a short list of steps first. Off by default. |
 | `/context` | What is filling the context window, as a coloured grid. |
