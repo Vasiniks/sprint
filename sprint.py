@@ -268,10 +268,27 @@ def shell_argv(cmd, tmp):
     return [new or shutil.which("powershell") or "powershell", "-NoProfile", "-NonInteractive", "-Command", script]
 
 
+def job_for(p):
+    """Windows: put a command in a job object, the one thing that reliably ends everything it started
+    (Git Bash's children slip out of the process tree that taskkill follows)"""
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.CreateJobObjectW.restype = ctypes.c_void_p
+        k.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        job = k.CreateJobObjectW(None, None)
+        return job if job and k.AssignProcessToJobObject(job, int(p._handle)) else None
+    except (AttributeError, ImportError, OSError):
+        return None
+
+
 def kill_tree(p):
     """stop a command and everything it started"""
     try:
         if WINDOWS:
+            if getattr(p, "job", None):
+                import ctypes
+                ctypes.windll.kernel32.TerminateJobObject(ctypes.c_void_p(p.job), 1)
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
         else:
             os.killpg(p.pid, signal.SIGKILL)
@@ -289,6 +306,7 @@ def shell(cmd, cap=4000, timeout=60):
     os.close(fd)
     p = subprocess.Popen(shell_argv(cmd, tmp), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          text=True, encoding="utf-8", errors="replace", **own_group())
+    p.job = job_for(p) if WINDOWS else None
     RUNNING.append(p)
     note = ""
     try:
@@ -298,7 +316,11 @@ def shell(cmd, cap=4000, timeout=60):
             os.chdir(cwd)
     except (subprocess.TimeoutExpired, KeyboardInterrupt) as e:
         kill_tree(p)
-        out, note = p.communicate()[0], f"\n[timed out after {timeout}s]"
+        try:
+            out = p.communicate(timeout=5)[0]
+        except subprocess.TimeoutExpired:  # something still holds its output open: do not wait for it
+            out = ""
+        note = f"\n[timed out after {timeout}s]"
         if isinstance(e, KeyboardInterrupt):
             raise
     finally:
