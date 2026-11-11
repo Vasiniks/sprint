@@ -265,15 +265,16 @@ def cells(row):
 
 
 def lit(t, r=0):
-    """the columns of logo row r that the coloured crest covers at time t"""
+    """the columns of logo row r that the glint of colour covers at time t"""
     return [x for x, (_, role) in enumerate(cells(tui.logo_rows(t)[r])) if role in tui.HUES]
 
 
-def test_logo_at_rest_is_monochrome():
-    for rows in (tui.logo_rows(), tui.logo_rows(3.0)):  # held still, and between two sweeps
-        seen = {ch: role for row in rows for ch, role in cells(row) if ch != " "}
-        assert seen == {"░": "dim", "▒": "", "▓": "", "█": "bold"}
-    assert letters(tui.logo_rows(3.0)) == letters(tui.logo_rows())
+MONO = {"░": "dim", "▒": "", "▓": "", "█": "bold", " ": ""}  # what each shade looks like with no colour on it
+
+
+def test_logo_held_still_has_no_colour():
+    seen = {ch: role for row in tui.logo_rows() for ch, role in cells(row) if ch != " "}
+    assert seen == {"░": "dim", "▒": "", "▓": "", "█": "bold"}
 
 
 def test_logo_held_still_goes_from_light_shade_to_solid():
@@ -281,31 +282,44 @@ def test_logo_held_still_goes_from_light_shade_to_solid():
     assert "".join(dict.fromkeys(top)) == "░▒▓█" and top[0] == "░" and top[-1] == "█"
 
 
-def test_a_narrow_crest_crosses_the_logo_quickly_from_left_to_right():
-    assert tui.CREST <= 16 and tui.SWEEP_SECONDS <= 1.5
-    frames = [lit(i * 0.08) for i in range(1, 15)]  # the first sweep, at the screen's redraw rate
-    assert all(frames) and all(f[-1] - f[0] < tui.CREST for f in frames)
+def test_wave_moves_smoothly_one_shade_step_at_a_time():
+    level = " ░▒▓█".index
+    frames = [letters(tui.logo_rows(t * 0.08)) for t in range(400)]  # 32 seconds at the screen's redraw rate
+    for before, after in zip(frames, frames[1:]):
+        assert all(abs(level(a) - level(b)) <= 1 for ra, rb in zip(before, after) for a, b in zip(ra, rb))
+    assert len({tuple(f) for f in frames}) == tui.LOGO_W  # it really moves: one new picture per column the crest crosses
+    first = [f[0].split()[0][0] for f in frames]
+    assert "█" in first and "░" in first  # every letter gets its turn at solid and at faint
+
+
+def test_wave_is_slow():
+    assert tui.WAVE_SECONDS >= 10
+    start = letters(tui.logo_rows(0.0))
+    assert letters(tui.logo_rows(tui.WAVE_SECONDS)) == start and letters(tui.logo_rows(tui.WAVE_SECONDS / 2)) != start
+
+
+def test_a_glint_is_narrow_and_crosses_the_logo_quickly_from_left_to_right():
+    assert tui.GLINT <= 16 and tui.GLINT_SECONDS <= 1.2
+    frames = [lit(i * 0.08) for i in range(1, 12)]  # the first glint, at the screen's redraw rate
+    assert all(frames) and all(f[-1] - f[0] < tui.GLINT for f in frames)
     assert all(a[0] <= b[0] and a[-1] <= b[-1] for a, b in zip(frames, frames[1:]))  # it only ever moves right
     assert frames[0][0] < 10 and frames[-1][-1] > tui.LOGO_W - 10
-    assert not lit(tui.SWEEP_SECONDS + 0.1)  # and then it is gone
-
-
-def test_the_crest_brightens_what_it_passes_and_never_dims_it():
-    level = " ░▒▓█".index
-    rest, now = tui.logo_rows(), tui.logo_rows(tui.SWEEP_SECONDS / 2)
-    pairs = [(a, b) for ra, rb in zip(rest, now) for a, b in zip(cells(ra), cells(rb))]
-    inside = [(a[0], b[0]) for a, b in pairs if b[1] in tui.HUES]
-    assert all(level(b) >= level(a) for a, b in inside) and {b for _, b in inside} >= {"▒", "▓", "█"}
-    assert all(a == b for a, b in pairs if b[1] not in tui.HUES)  # the rest of the word is as it was
+    assert not lit(tui.GLINT_SECONDS + 0.1)  # and then it is gone
     assert tui.logo_rows(0.5) == tui.logo_rows(0.5)  # nothing but the time decides the picture
 
 
-def test_sweeps_are_seconds_apart_and_take_yellow_cyan_and_magenta_in_turn():
-    assert tui.SWEEP_EVERY >= 5 and tui.HUES == ("yellow", "cyan", "magenta")
-    hues = [{role for row in tui.logo_rows(n * tui.SWEEP_EVERY + 0.5) for _, role in row if role in tui.HUES} for n in range(4)]
+def test_glints_come_seconds_apart_in_yellow_then_cyan_then_magenta():
+    assert 3 <= tui.GLINT_EVERY <= 6 and tui.HUES == ("yellow", "cyan", "magenta")
+    hues = [{role for row in tui.logo_rows(n * tui.GLINT_EVERY + 0.5) for _, role in row if role in tui.HUES} for n in range(4)]
     assert hues == [{"yellow"}, {"cyan"}, {"magenta"}, {"yellow"}]
-    quiet = [t / 4 for t in range(4 * 2, 4 * tui.SWEEP_EVERY)]  # from two seconds in until the next sweep
-    assert not any(lit(t, r) for t in quiet for r in range(5))
+
+
+def test_between_glints_every_cell_is_plain_and_a_glint_only_colours_the_wave():
+    quiet = [n * tui.GLINT_EVERY + tui.GLINT_SECONDS + t / 4 for n in range(3) for t in range(1, 4 * (tui.GLINT_EVERY - 1))]
+    assert all(role == MONO[ch] for t in quiet for row in tui.logo_rows(t) for ch, role in cells(row))
+    for t in (0.3, 0.6, tui.GLINT_EVERY + 0.5):  # under a glint the shades are the wave's own; around it, plain
+        assert all(role in tui.HUES or role == MONO[ch] for row in tui.logo_rows(t) for ch, role in cells(row))
+        assert [" ░▒▓█".index(ch) for ch in letters(tui.logo_rows(t))[4][:8]] == [tui.wave(x, t) for x in range(8)]
 
 
 def test_motion_can_be_switched_off_in_settings():

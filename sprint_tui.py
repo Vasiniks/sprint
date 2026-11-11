@@ -60,28 +60,35 @@ PIX = {"s": ["XXXX", "X   ", "XXXX", "   X", "XXXX"], "p": ["XXXX", "X  X", "XXX
        "e": ["XXXX", "X   ", "XXX ", "X   ", "XXXX"]}
 STILL = (1, 1, 2, 3, 3, 4)  # shade of each letter when nothing moves: ░ ░ ▒ ▓ ▓ █
 LOGO_W = 60          # columns: two per pixel, two between letters, four of lean
-HUES = ("yellow", "cyan", "magenta")  # the colours that take turns: one per sweep of the logo, one per lap of the dash
-SWEEP_EVERY = 6      # seconds from one coloured crest to the next; the word is plain in between
-SWEEP_SECONDS = 1.2  # how long a crest takes to cross the word
-CREST = 14           # columns of crest, front to tail: about three letters, stepping ▓ █ █ ▓ ▓ ▒ ▒ two columns at a time
+WAVE_SECONDS = 11    # how long the crest takes to cross the word and come round again
+HUES = ("yellow", "cyan", "magenta")  # the colours that take turns: one per glint on the logo, one per lap of the dash
+GLINT_EVERY = 4      # seconds from one glint of colour to the next; the wave is plain in between
+GLINT_SECONDS = 1.0  # how long a glint takes to cross the word
+GLINT = 14           # columns a glint covers: about three letters
 RUN = 16             # cells of track the working animation sprints along
 LAP = 1.0            # seconds one lap of it takes
 
 
+def wave(x, t):
+    """shade (1-4) of column x at time t: a solid crest with a long fading tail, one soft step at a time"""
+    d = (t * LOGO_W / WAVE_SECONDS - x) % LOGO_W
+    return 4 if d < 6 else 3 if d < 14 else 2 if d < 25 else 1 if d < LOGO_W - 6 else 2 if d < LOGO_W - 3 else 3
+
+
 def logo_rows(t=None):
-    """the wordmark as 5 rows of spans, plain at rest; t in seconds sends a narrow crest through it every few
-    seconds, each in the next colour, that brightens what it passes. None holds the word still"""
-    sweep, into = divmod(t, SWEEP_EVERY) if t is not None else (0, SWEEP_EVERY)
-    front, rows = int(into / SWEEP_SECONDS * (LOGO_W - 4 + CREST)), []  # the column the crest has reached
+    """the wordmark as 5 rows of spans; t in seconds runs the slow plain wave through it and, every few seconds,
+    a fast narrow glint over that, each in the next colour. None holds it still"""
+    glint, into = divmod(t, GLINT_EVERY) if t is not None else (0, GLINT_EVERY)
+    front, rows = int(into / GLINT_SECONDS * (LOGO_W - 4 + GLINT)), []  # the column the glint has reached
     for r in range(5):
         row, x = [(" " * (4 - r), "")], 0
         for i, ch in enumerate(WORD):
             for px in PIX[ch][r] + " ":
                 for _ in range(2):
-                    back, x = front - x, x + 1  # how far behind the front this column is
-                    wet = px == "X" and 0 <= back < CREST
-                    shade = " ░▒▓█"[0 if px != "X" else max(STILL[i], (3, 4, 4, 3, 3, 2, 2)[back // 2]) if wet else STILL[i]]
-                    row.append((shade, HUES[int(sweep) % 3] if wet else {"░": "dim", "█": "bold"}.get(shade, "")))
+                    shade = " ░▒▓█"[0 if px != "X" else STILL[i] if t is None else wave(x, t)]
+                    lit = px == "X" and 0 <= front - x < GLINT  # the glint changes the colour, never the shade
+                    row.append((shade, HUES[int(glint) % 3] if lit else {"░": "dim", "█": "bold"}.get(shade, "")))
+                    x += 1
         rows.append(wrap(row + [(" " * r, "")], LOGO_W)[0])  # one span per run of the same role
     return rows
 
@@ -1469,6 +1476,7 @@ class Screen:
             if fresh or now or was:  # one more frame after things settle, then leave the screen alone
                 self.draw(scr)
             quick = self.busy() or self.pending or self.drag or self.select or self.esc is not None or self.pasting is not None
+            quick = quick or (self.motion and not self.items)  # the logo's glint is too fast for the slower beat
             scr.timeout(80 if quick else 160 if now else 1000)
             was = now
             try:
