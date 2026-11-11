@@ -1,5 +1,6 @@
 """popups you can point at, themes with their own background, a sturdier wheel, and the flash on a jump"""
 import curses
+import itertools
 import re
 import io
 
@@ -398,6 +399,27 @@ def test_every_theme_has_a_line_about_it_and_ten_exact_colours():
             assert len({t["bg"], t["fg"], t["panel"], t["ghost"]}) == 4, name
     assert "bg" not in tui.THEMES["terminal"] and "bg" not in tui.THEMES["mono"]
     assert 20 + 7 * len(tui.THEMES) <= 230  # older curses cannot name a pair past 255, and the top ones are spoken for
+
+
+def lab(colour):
+    """a colour such as "#181e29" as lightness, green-red and blue-yellow: distances there match what the eye tells apart"""
+    rgb = [int(colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    r, g, b = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
+    f = lambda v: v ** (1 / 3) if v > 0.008856 else 7.787 * v + 16 / 116
+    x, y, z = f((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047), f(0.2126 * r + 0.7152 * g + 0.0722 * b), f((0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883)
+    return 116 * y - 16, 500 * (x - y), 200 * (y - z)
+
+
+def test_ask_edits_auto_and_shell_have_four_colours_no_theme_lets_you_mistake():
+    hues = {mode: tui.ROLE[mode][0] for mode in ("ask", "edits", "auto", "shell")}
+    assert len(set(hues.values())) == 4  # shell mode used to borrow the yellow of edits
+    for name, t in tui.THEMES.items():
+        if "bg" not in t:
+            continue  # the terminal's own colours, or none at all
+        for a, b in itertools.combinations(hues, 2):
+            apart = sum((p - q) ** 2 for p, q in zip(lab(t[hues[a]]), lab(t[hues[b]]))) ** 0.5
+            assert apart >= 30, f"{name}: {a} and {b} are only {apart:.0f} apart"
+        assert len({tui.near(t[h]) for h in hues.values()}) == 4, name  # and still four where only 256 colours can be shown
 
 
 def test_the_sprint_theme_is_nearly_black_not_black_with_the_logos_colours():

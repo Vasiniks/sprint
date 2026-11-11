@@ -112,7 +112,7 @@ ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame
         "title": (3, curses.A_BOLD), "code": (6, 0), "path": (5, 0), "url": (4, curses.A_UNDERLINE),
         "bullet": (6, 0), "kw": (5, 0), "string": (2, 0), "comment": (0, curses.A_DIM), "number": (3, 0),
         "add": (2, 0), "del": (1, 0), "err": (1, 0), "ok": (2, 0), "warn": (3, 0),
-        "ask": (6, curses.A_BOLD), "edits": (3, curses.A_BOLD), "auto": (5, curses.A_BOLD),
+        "ask": (6, curses.A_BOLD), "edits": (3, curses.A_BOLD), "auto": (5, curses.A_BOLD), "shell": (2, curses.A_BOLD),
         "red": (1, 0), "green": (2, 0), "yellow": (3, 0), "blue": (4, 0), "magenta": (5, 0), "cyan": (6, 0),
         "ghost": (9, 0)}  # ghost: greyed out, for a placeholder and for the screen behind a popup; plain dim without 256 colours
 
@@ -164,11 +164,11 @@ THEMES = {
     "midnight": theme(("#ff5555", "#50fa7b", "#f1fa8c", "#6ea8ff", "#ff79c6", "#8be9fd"), "#000000", "#ffffff", "#181818", "#6e6e6e"),
     "slate": theme(("#e88388", "#a8cc8c", "#dbab79", "#71bef2", "#d290e4", "#66c2cd"), "#262a33", "#e6e9ef", "#363c49", "#8a92a3"),
     "ocean": theme(("#ff7a90", "#3ee6b0", "#ffd479", "#4aa8ff", "#a99bff", "#2fd6ff"), "#071a2b", "#d6ecff", "#10304d", "#5f86a8"),
-    "forest": theme(("#e06c5a", "#7fd88b", "#e3d27a", "#6fb3a8", "#d9a3c7", "#58d1b0"), "#0f1a14", "#d7e8d5", "#1d2e24", "#6f8a78"),
+    "forest": theme(("#e06c5a", "#7fd88b", "#e3d27a", "#5b9bd5", "#d9a3c7", "#4fd0d0"), "#0f1a14", "#d7e8d5", "#1d2e24", "#6f8a78"),
     "grape": theme(("#ff7eb6", "#9cf0a8", "#ffe58a", "#9aa7ff", "#d48cff", "#7fe3ff"), "#1b1030", "#ece4ff", "#2e1c4e", "#8f7fb3"),
     "sunset": theme(("#ff6b6b", "#c5e17a", "#ffc857", "#9d8cff", "#ff5fa2", "#ffa26b"), "#1f1020", "#ffe9d6", "#361c38", "#a07a8c"),
-    "amber": theme(("#ff6a3d", "#c8a400", "#ffd24a", "#d98c00", "#ff9248", "#ffe08a"), "#171000", "#ffb000", "#2b1f00", "#8a6a1a"),
-    "matrix": theme(("#ff5f5f", "#00ff41", "#b6ff00", "#00c896", "#7dffb0", "#39ffb0"), "#000a00", "#33ff66", "#0a2412", "#1f8f3a"),
+    "amber": theme(("#ff5a36", "#9fb000", "#ffc400", "#c97a00", "#ff8a3c", "#fff1c9"), "#171000", "#ffb000", "#2b1f00", "#8a6a1a"),
+    "matrix": theme(("#ff5f5f", "#00ff41", "#e4ff00", "#00a878", "#c8ffd0", "#00e0e0"), "#000a00", "#33ff66", "#0a2412", "#1f8f3a"),
     "paper": theme(("#c0392b", "#2e7d32", "#a86400", "#1f5fbf", "#a0308c", "#0b7285"), "#f6f3ea", "#24262b", "#e2dccb", "#8b8778")}
 THEME_ABOUT = {"sprint": "near-black, with the logo's colours", "terminal": "your terminal's own colours",
                "mono": "no colour, only bold and dim", "sapphire": "after Tyriar's Sapphire for VS Code",
@@ -1571,7 +1571,7 @@ class Screen:
     def mode_row(self):
         """what sits under the bar: the mode's icon and name, and how to change it; or that this line is a command"""
         if self.buf.startswith("!") and not self.pending:
-            return [("!", "yellow"), (" shell", "yellow"), (" (runs it yourself, no model)", "dim")]
+            return [("!", "shell"), (" shell", "shell"), (" (runs it yourself, no model)", "dim")]
         mode = self.agent.mode
         return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")]
 
@@ -1612,7 +1612,7 @@ class Screen:
         A line that starts with ! is shell mode: the mark becomes !, and the rules take the shell colour"""
         a, tw = self.agent, bw - 2
         shell = self.buf.startswith("!") and not self.pending
-        tone, line_role = ("yellow", "yellow") if shell else (a.mode, "frame")
+        tone, line_role = ("shell", "shell") if shell else (a.mode, "frame")
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
         foot = [("─" * bw, line_role)]
@@ -1701,7 +1701,7 @@ class Screen:
                     rows = self.window(it, w)
                 elif it["t"] == "user":
                     mine = it["text"].startswith("!")  # a command you ran yourself keeps its mark
-                    tone = "yellow" if mine else self.agent.mode  # a bar down the side, then the mark, then what you said
+                    tone = "shell" if mine else self.agent.mode  # a bar down the side, then the mark, then what you said
                     rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 4)]
                     rows = [("user", [("▌", tone), (" ", "")] + ([("!" if mine else MARK, tone), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
