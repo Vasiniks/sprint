@@ -202,6 +202,7 @@ Known limits:
 - **Long files.** One reply can hold a file of a few hundred lines at 8K. Beyond that, ask for parts or raise the window with `/config ctx 16384`.
 - **Plan mode** did not help the 0.8B model in testing, which is why it is off by default.
 - **PDFs** are read roughly unless `pdftotext` is installed. Pictures need a model that can see.
+- **cmux, Ghostty, kitty and other terminals with their own description, on a Mac.** The curses library macOS ships garbles runs of one character (a box's bottom line, the dots of the context bar, the animation's track) when the terminal's description offers a "repeat" code. sprint therefore starts curses with the plain xterm description there; nothing else changes, and commands sprint runs still see the terminal's own.
 - **Windows.** Install Git for Windows: models write bash, and sprint uses Git Bash when it finds it. Without it, commands run in PowerShell, where common ones (`ls`, `cat`) work but bash syntax often does not. The terminal there does not mark pastes, so sprint treats keys that arrive together as one paste. Dragging with the mouse is untested there; a picture or PDF path dropped into the prompt still becomes a chip when you send.
 
 ## As a library

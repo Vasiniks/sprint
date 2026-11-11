@@ -1,6 +1,6 @@
 [project]
 name = "sprint"
-version = "0.4.11"
+version = "0.4.12"
 description = "a tiny terminal agent for tiny models with tiny contexts"
 readme = "README.md"
 license = {text = "MIT"}

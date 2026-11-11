@@ -205,6 +205,31 @@ def windows_codes(on=[]):
     return on[0]
 
 
+def has_repeat(term, change=None):
+    """does this terminal's description offer a code that repeats a character? Asked of the system's own tool, with
+    the environment changed as given (a name mapped to None is taken out); if it cannot be asked, no"""
+    env = {k: v for k, v in {**os.environ, **(change or {})}.items() if v is not None}
+    try:
+        return "rep=" in subprocess.run(["infocmp", "-1", term], capture_output=True, text=True, timeout=5, env=env).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def term_for_curses():
+    """what to change in the environment while curses starts, or None to leave it. The curses macOS ships (and any
+    before 6.1) sends a run of one character, where the terminal's description offers a "repeat" code, as one byte and
+    a count: right for a letter, garbage for ─ · ▱ and every other character beyond ASCII. Under cmux/Ghostty, kitty and
+    the like that left boxes without a bottom, and rubbish in the context bar and the animation. So curses is given
+    the plain xterm description, which these terminals all speak: the system's own copy if the terminal brought one
+    of its own that repeats too"""
+    old = tuple(getattr(curses, "ncurses_version", (0, 0))[:2]) < (6, 1)
+    if not (VT and old and has_repeat(os.environ.get("TERM", ""))):
+        return None
+    plain = {"TERM": "xterm-256color"}
+    return next((change for change in (plain, {**plain, "TERMINFO": None, "TERMINFO_DIRS": None})
+                 if not has_repeat(plain["TERM"], change)), None)
+
+
 def can_exact():
     """can this terminal be given exact colours (by redefining spare slots of its palette)? Only where it says it
     shows 24-bit colour; Apple's Terminal says it can and then does not"""
@@ -2318,6 +2343,7 @@ class Screen:
                 pass
 
     def loop(self, scr, first=""):
+        restore_env(getattr(self, "env_back", {}))  # curses has read its description: commands see the terminal's own again
         curses.raw()
         self.free_ctrl_j()
         self.live = True
@@ -2355,15 +2381,25 @@ class Screen:
         sys.stdout.flush()
 
 
+def restore_env(names):
+    """set these environment names (None: take the name out)"""
+    for name, value in names.items():
+        os.environ.pop(name, None) if value is None else os.environ.__setitem__(name, value)
+
+
 def run(agent, first=""):
     locale.setlocale(locale.LC_ALL, "")
     os.environ.setdefault("ESCDELAY", "25")
     screen = Screen(agent)
     threading.Thread(target=lambda: setattr(screen, "newer", sprint.check_update()), daemon=True).start()  # once a day, off the screen's back
     back = route() if can_route() else None  # exact colours, where the terminal shows them
+    swap = term_for_curses() or {}
+    screen.env_back = {name: os.environ.get(name) for name in swap}  # put back as soon as curses has started (see loop)
+    restore_env(swap)
     try:
         curses.wrapper(screen.loop, first)
     finally:
+        restore_env(screen.env_back)
         screen.backdrop(None)  # the terminal gets its own background back, however sprint ends
         if screen.backdrop_job:
             screen.backdrop_job.join(4)
