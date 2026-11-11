@@ -1117,7 +1117,7 @@ CONFIG = config_dir() / "config.json"
 SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "think": bool, "effort": str,
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
             "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool,
-            "update_check": bool, "ask_timeout": int}
+            "update_check": bool, "ask_timeout": int, "plan_h": int}
 SHADE = {"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
          "tool results": "yellow", "reserved for the reply": "dim", "free": "dim"}
 ANSI = {"": "", "dim": "2", "bold": "1", "blue": "34", "magenta": "35", "cyan": "36", "green": "32", "yellow": "33", "red": "31"}

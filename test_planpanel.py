@@ -78,3 +78,76 @@ def test_a_new_message_without_a_plan_clears_the_panel_of_the_old_one(planned, s
     planned.items.append({"t": "user", "text": "thanks"})
     side, _ = panel(planned, scr)
     assert not any(row.startswith("Plan") for row in side)
+
+
+# ---------- the plan's top edge can be dragged, and /plan off puts the plan away ----------
+
+PRESS, MOVE, RELEASE = tui.curses.BUTTON1_PRESSED, tui.MOVED, tui.curses.BUTTON1_RELEASED
+
+
+def head_of(side):
+    return next((y for y, row in enumerate(side) if row.startswith("Plan")), None)
+
+
+def test_switching_plan_mode_off_puts_the_plan_away_and_on_brings_it_back(planned, scr):
+    planned.plan = False
+    side, main = panel(planned, scr)
+    assert head_of(side) is None and not any("─" * 8 in row for row in side[9:])  # no plan, and no edge left behind
+    assert not any("Make the file" in row for row in main)  # nor does it spill back into the conversation
+    planned.plan = True
+    side, _ = panel(planned, scr)
+    assert head_of(side) == scr.h // 2
+
+
+def test_a_line_you_can_take_hold_of_sits_above_the_plan(planned, scr):
+    side, _ = panel(planned, scr)
+    head = head_of(side)
+    assert set(side[head - 1]) == {"─"} and len(side[head - 1]) >= 20
+    assert planned.plan_edge == head - 1
+
+
+def test_dragging_that_line_up_gives_the_plan_more_of_the_panel(planned, scr):
+    saved = []
+    tui.sprint.save_config = lambda **kw: saved.append(kw)
+    side, _ = panel(planned, scr)
+    w, lw, sw = planned.geo
+    x, edge = w - sw + 8, planned.plan_edge
+    planned.pointer(x, edge, PRESS)
+    assert planned.drag == "plan" and planned.select is None
+    planned.pointer(x, edge - 4, MOVE, exact=True)
+    side, _ = panel(planned, scr)
+    assert head_of(side) == edge - 3 and set(side[edge - 4]) == {"━"}  # the line follows, and shows it is held
+    planned.pointer(x, edge - 4, RELEASE)
+    assert planned.drag is None and saved[-1] == {"plan_h": scr.h - (edge - 3)}
+    side, _ = panel(planned, scr)
+    assert head_of(side) == edge - 3 and set(side[edge - 4]) == {"─"}
+
+
+def test_the_line_stops_short_of_squeezing_out_the_activity_or_the_plan(planned, scr):
+    panel(planned, scr)
+    w, lw, sw = planned.geo
+    x = w - sw + 8
+    planned.pointer(x, planned.plan_edge, PRESS)
+    planned.pointer(x, 0, MOVE, exact=True)
+    side, _ = panel(planned, scr)
+    assert head_of(side) == 11 and side[9].startswith("✓")  # one line of what it did is always left
+    planned.pointer(x, scr.h - 1, MOVE, exact=True)
+    side, _ = panel(planned, scr)
+    assert head_of(side) == scr.h - 4 and side[scr.h - 3].startswith(("✓", "▸", "·"))  # and one step of the plan
+    planned.pointer(x, scr.h - 1, RELEASE)
+
+
+def test_the_size_you_gave_the_plan_is_kept(tmp_path, monkeypatch, scr):
+    monkeypatch.chdir(tmp_path)
+    s = screen("1. Make the file\n2. Show it", "```write a.txt\nhi\n```", "Made.", "```shell\ncat a.txt\n```", "Shown.")
+    s.plan = s.sidebar = True
+    s.submit("make a.txt and show it")
+    finish(s)
+    panel(s, scr)
+    w, lw, sw = s.geo
+    s.pointer(w - sw + 8, s.plan_edge, PRESS)
+    s.pointer(w - sw + 8, 19, MOVE, exact=True)
+    s.pointer(w - sw + 8, 19, RELEASE)
+    assert tui.sprint.load_config()["plan_h"] == scr.h - 20 and tui.sprint.SETTINGS["plan_h"] is int
+    again = screen()
+    assert again.plan_h == scr.h - 20

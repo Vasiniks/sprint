@@ -501,6 +501,7 @@ class Screen:
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
+        self.plan_h, self.plan_edge, self.rows = None, None, 0  # rows you gave the plan; its top edge; the screen's
         self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -524,6 +525,7 @@ class Screen:
         self.theme = saved if saved in THEMES else "sprint"
         self.peek = kept["peek"] if isinstance(kept.get("peek"), int) and kept["peek"] > 0 else PEEK
         self.showthink = bool(kept.get("showthink", False))  # the model's reasoning in full, or one line saying it thought
+        self.plan_h = kept.get("plan_h")
         self.paint()
 
     def ink(self, colour):
@@ -1107,11 +1109,13 @@ class Screen:
         elif self.drag:
             if self.drag == "right":
                 self.side_w = max(20, min(w - lw - ROOM, w - 1 - x))
+            elif self.drag == "plan":  # the plan's top edge: the plan starts on the row under the mouse
+                self.plan_h = max(4, min(self.rows - 11, self.rows - 1 - y))
             else:
                 self.left_w = max(16, min(w - side - ROOM, x))
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
+                sprint.save_config(**({"plan_h": self.plan_h} if self.drag == "plan" else {"sidebar_w": self.side_w, "history_w": self.left_w}))
                 self.drag = None
-                sprint.save_config(sidebar_w=self.side_w, history_w=self.left_w)
         elif self.select is not None and not state & curses.BUTTON1_PRESSED:
             self.select["b"] = (y, x)
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
@@ -1122,6 +1126,8 @@ class Screen:
                 self.drag = "right"
             elif lw and abs(x - lw) <= 1:
                 self.drag = "left"
+            elif side and self.plan_edge == y and x > w - side:
+                self.drag = "plan"
             else:
                 self.select = {"a": (y, x), "b": (y, x), "area": self.area_at(x, y)}
 
@@ -1926,7 +1932,7 @@ class Screen:
         for y in range(h):  # the whole screen takes the theme's background, a written cell at a time: the curses macOS
             self.put(scr, y, 0, " " * w)  # ships loses the colour of cells cleared to a window background (bkgdset)
         self.hits, self.screen, self.jump_to = {}, {}, None
-        self.grid, self.areas = [[" "] * w for _ in range(h)], {}
+        self.grid, self.areas, self.rows, self.plan_edge = [[" "] * w for _ in range(h)], {}, h, None
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")
             return scr.refresh()
@@ -2023,11 +2029,15 @@ class Screen:
                 self.put(scr, 6, x, [(MODE_ICON[a.mode] + " " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
                          width=inner)
                 self.put(scr, 8, x, [("Activity", "dim")], width=inner)
-                plan, half = self.plan_now(), h // 2
-                if plan:  # the bottom half is the plan: how far along, then its steps
+                plan = self.plan_now() if self.plan else None  # /plan off puts the plan away too
+                half = max(11, min(h - 4, h - self.plan_h if self.plan_h else h // 2))  # the bottom half, unless you dragged its edge
+                self.plan_edge = half - 1 if plan else None
+                if plan:  # a line to drag, how far along, then the steps
+                    held = self.drag == "plan"
+                    self.put(scr, half - 1, x, [(("━" if held else "─") * inner, a.mode if held else "frame")])
                     done = f"{min(plan['at'], len(plan['steps']))}/{len(plan['steps'])}"
                     self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
-                    for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 2 - half - 1))):
+                    for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 3 - half))):
                         self.put(scr, half + 1 + i, x, spans, width=inner)
                 log = self.activity()[-max(1, (half - 1 if plan else h - 3) - 9):]
                 for i, (item, spans) in enumerate(log):
