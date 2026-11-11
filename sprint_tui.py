@@ -498,6 +498,7 @@ class Screen:
         self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
+        self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
         self.flash = (None, 0.0)  # the item last jumped to and when, so it can light up and fade
@@ -1069,14 +1070,14 @@ class Screen:
             self.select["b"] = (y, x)
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
                 picked, self.select = self.select, None
-                self.click(x, y) if picked["a"] == picked["b"] else self.copy_range(picked["a"], picked["b"])
+                self.click(x, y) if picked["a"] == picked["b"] else self.copy_range(*self.span(picked))
         elif state & curses.BUTTON1_PRESSED:  # (a second press with no release between starts afresh)
             if side and abs(x - (w - side - 1)) <= 1:
                 self.drag = "right"
             elif lw and abs(x - lw) <= 1:
                 self.drag = "left"
             else:
-                self.select = {"a": (y, x), "b": (y, x)}
+                self.select = {"a": (y, x), "b": (y, x), "area": self.area_at(x, y)}
 
     def click(self, x, y):
         w, lw, side = self.geo
@@ -1097,11 +1098,31 @@ class Screen:
         age = time.time() - when
         return 0 if item is None or item is not lit else 2 if age < FLASH[0] else 1 if age < FLASH[1] else 0
 
-    def copy_range(self, a, b):
-        """copy the conversation text between two screen positions, without the tool windows' side borders"""
+    def area_at(self, x, y):
+        """which part of the screen a point is in: the prompt, the conversation, a side panel, or just the screen"""
+        for name, (left, right, top, bottom) in self.areas.items():
+            if left - 2 * (name == "prompt") <= x <= right and top <= y <= bottom:  # the prompt's mark counts as the prompt
+                return name
+        return "main" if y in self.screen else "screen"
+
+    def span(self, sel):
+        """a drag, kept inside the part of the screen it began in -> (where it starts, where it ends, that part's name)"""
+        area = sel.get("area", "main")
+        left, right, top, bottom = self.areas.get(area, (0, 10 ** 6, 0, 10 ** 6))
+        a, b = sorted((max(top, min(bottom, y)), max(left, min(right, x))) for y, x in (sel["a"], sel["b"]))
+        return a, b, area
+
+    def copy_range(self, a, b, area="main"):
+        """copy the text between two screen positions: the conversation's without the tool windows' side borders, any
+        other part's (the prompt, a side panel) as it stands on the screen"""
         (ya, xa), (yb, xb) = sorted([a, b])
         lines = []
         for y in range(ya, yb + 1):
+            if area != "main":
+                left, right = self.areas.get(area, (0, 10 ** 6, 0, 0))[:2]
+                row = self.grid[y] if y < len(self.grid) else []
+                lines.append("".join(row[xa if y == ya else left:(xb if y == yb else right) + 1]).rstrip())
+                continue
             x0, text = self.screen.get(y, (0, ""))
             piece = text[max(0, xa - x0) if y == ya else 0:(xb - x0 + 1) if y == yb else None]
             lines.append(re.sub(r" *[│┆]\s*$", "", re.sub(r"^\s*[│┆] ?", "", piece)).rstrip() if y in self.screen else "")
@@ -1808,6 +1829,8 @@ class Screen:
                     scr.addstr(y, x, text[:w - x], self.attr(role, panel))
                 except curses.error:
                     pass  # writing the bottom-right cell raises after drawing it
+                if y < len(self.grid) and 0 <= x and len(self.grid[y]) == w:
+                    self.grid[y][x:x + len(text[:w - x])] = text[:w - x]  # what the screen says there, for a drag to copy
             x += len(text)
 
     def draw(self, scr):
@@ -1819,6 +1842,7 @@ class Screen:
         for y in range(h):  # the whole screen takes the theme's background, a written cell at a time: the curses macOS
             self.put(scr, y, 0, " " * w)  # ships loses the colour of cells cleared to a window background (bkgdset)
         self.hits, self.screen, self.jump_to = {}, {}, None
+        self.grid, self.areas = [[" "] * w for _ in range(h)], {}
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")
             return scr.refresh()
@@ -1840,6 +1864,7 @@ class Screen:
         top = max(1, (h - logo_h - len(rows) - 3) // 2) + logo_h if home else h - 1 - len(rows)
         for i, r in enumerate(rows):
             self.put(scr, top + i, bx, r, width=bw)
+        self.areas["prompt"] = (bx + 2, bx + bw - 1, top + 1, top + len(rows) - 2)  # what you typed, without the mark and the rules
 
         if home:
             for i, row in enumerate(art):
@@ -1878,13 +1903,7 @@ class Screen:
                     self.put(scr, 1 + i, x0, spans)
                 if item:
                     self.hits[("main", 1 + i)] = item
-            if self.select:  # the text being dragged over
-                (ya, xa), (yb, xb) = sorted([self.select["a"], self.select["b"]])
-                for y in range(max(1, ya), min(top - 1, yb + 1)):
-                    left = max(x0, xa) if y == ya else x0
-                    right = min(x0 + mw - 1, xb) if y == yb else x0 + mw - 1
-                    if right >= left:
-                        self.mark(scr, y, left, right - left + 1, curses.A_REVERSE)
+            self.areas["main"] = (x0, x0 + mw - 1, 1, max(1, vh))
             self.jump_to = None
             if self.scroll:  # scrolled up: a button over the last row of the conversation takes you back down
                 button = " ↓ jump to bottom "
@@ -1909,6 +1928,7 @@ class Screen:
             self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)
             if side:  # right panel: the context window in small, then what the agent has done
                 x, inner = w - side + 1, side - 3
+                self.areas["side"] = (x, w - 2, 0, h - 1)
                 cells = sprint.context_cells(a, inner * 2)
                 self.put(scr, 1, x, [("Context", "dim"), (f"{used}%".rjust(inner - 7), "")], width=inner)
                 self.put(scr, 2, x, cells[:inner])
@@ -1929,6 +1949,7 @@ class Screen:
                     self.put(scr, y, w - side - 1, [("┃" if self.drag == "right" else "│", a.mode if self.drag == "right" else "frame")])
             if lw:  # left panel: your messages, newest at the bottom
                 rows = self.outline()
+                self.areas["left"] = (1, lw - 1, 0, h - 1)
                 self.put(scr, 1, 1, [("Messages", "dim")], width=lw - 3)
                 for i, (item, title, meta) in enumerate(rows[-max(1, (h - 4) // 2):]):
                     latest = item is rows[-1][0]
@@ -1938,6 +1959,14 @@ class Screen:
                 for y in range(h):
                     self.put(scr, y, lw, [("┃" if self.drag == "left" else "│", a.mode if self.drag == "left" else "frame")])
 
+
+        if self.select and not self.popup:  # the text being dragged over, in whichever part of the screen the drag began
+            (ya, xa), (yb, xb), area = self.span(self.select)
+            left, right = self.areas.get(area, (0, w - 1, 0, 0))[:2]
+            for y in range(ya, yb + 1):
+                first, last = xa if y == ya else left, min(w - 1, xb if y == yb else right)
+                if last >= first:
+                    self.mark(scr, y, first, last - first + 1, curses.A_REVERSE)
 
         # completion popup, drawn over whatever is above the input
         every = [] if self.pending or self.popup else self.options()
