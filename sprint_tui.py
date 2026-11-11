@@ -664,7 +664,8 @@ class Screen:
 
     def take(self, k):
         """every key comes through here: a terminal paste is collected whole, and a lone escape is held one beat
-        until it is clear it does not start a longer key (a marked paste, alt+v, alt+enter, shift+enter)"""
+        until it is clear it does not start a longer key (a marked paste, alt+v, alt+enter, shift+enter, or some
+        other key reported with its modifiers, which is dropped)"""
         if self.pasting is not None:
             if isinstance(k, str):
                 self.pasting += k
@@ -1428,7 +1429,8 @@ class Screen:
                 self.put(scr, top - len(waiting) + i, x0, r, width=mw)
             if self.busy():
                 self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
-                keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + [("esc", "bold"), (" interrupt  ", "dim")] + keys[2:]
+                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys[2:]
+                keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + keys
             if self.scroll:
                 self.put(scr, h - 1, x0, [("↓ newer messages below", "warn")])
             keys = keys if len(flat(keys)) < mw - 24 else keys[:4]
