@@ -273,7 +273,12 @@ SAMPLE = {f"{name}.{i}": 20 + 7 * n + i for n, name in enumerate(THEMES) for i i
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0)  # 0: a curses with no fifth button; it sends wheel-down as a bare move
 MOVED = getattr(curses, "REPORT_MOUSE_POSITION", 0)
 BUTTON = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED
-MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | (WHEEL_DOWN or 0x200000) | MOVED
+DOWN = WHEEL_DOWN or 0x200000  # the wheel turning down, also where curses has no name for it (a full report says so itself)
+MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | DOWN | MOVED
+# The mouse as the terminal reports it in full ("SGR"), read here because the curses macOS ships cannot: button, column, row,
+# M for a press or a move and m for a release. The older report cannot name a column past 223 and some terminals garble it
+# from 95 on, so a click in the right-hand panel landed on its divider; nor can it tell a release or the wheel for certain
+SGR_MOUSE, SGR_PART = re.compile(r"\[<(\d+);(\d+);(\d+)([Mm])"), re.compile(r"\[<[\d;]*")
 FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 ROLE["chosen"] = (0, curses.A_REVERSE | curses.A_BOLD)  # the highlighted answer to an approval
@@ -470,7 +475,7 @@ def wheel(state, bare):
     wheel-down looks just like the mouse moving, so bare says whether a move with no button in it can be the wheel"""
     if state & curses.BUTTON4_PRESSED:
         return 1
-    return -1 if state & WHEEL_DOWN or (bare and not WHEEL_DOWN and state & MOVED and not state & BUTTON) else 0
+    return -1 if state & DOWN or (bare and not WHEEL_DOWN and state & MOVED and not state & BUTTON) else 0
 
 
 # ---------- the screen: conversation model, keys, drawing ----------
@@ -977,7 +982,11 @@ class Screen:
             return
         if self.esc is not None:
             held = self.esc + k if isinstance(k, str) else None
-            if held and (any(seq.startswith(held) for seq in SEQS) or MODIFIED.fullmatch(held)):
+            click = held and SGR_MOUSE.fullmatch(held)
+            if click:
+                self.esc = None
+                return self.sgr_mouse(int(click[1]), int(click[2]) - 1, int(click[3]) - 1, click[4] == "M")
+            if held and (any(seq.startswith(held) for seq in SEQS) or MODIFIED.fullmatch(held) or SGR_PART.fullmatch(held)):
                 self.esc, what = held, SEQS.get(held)
                 if what or held[-1] in "~u":  # a whole key: one sprint knows, or a modified key it has no use for
                     self.esc = None
@@ -1009,7 +1018,7 @@ class Screen:
             curses.mouseinterval(0)
             curses.mousemask(MOUSE if self.mouse_on else 0)
             if VT:
-                sys.stdout.write("\033[?1002h" if self.mouse_on else "\033[?1002l")  # report drags, not just clicks
+                sys.stdout.write("\033[?1002h\033[?1006h" if self.mouse_on else "\033[?1006l\033[?1002l")  # drags too, and in full
                 sys.stdout.flush()
         except curses.error:
             pass  # no screen yet, or a terminal without a mouse
@@ -1021,12 +1030,29 @@ class Screen:
             return
         self.pointer(x, y, state)
 
-    def pointer(self, x, y, state):
-        """a mouse event: scroll, drag a divider, drag over text to copy it, or click; an open popup takes them all"""
+    def sgr_mouse(self, button, x, y, down):
+        """a mouse event the terminal reported in full: 64 and 65 are the wheel, 32 more is a move, else which button"""
+        if not self.mouse_on:
+            return
+        if button & 64:
+            state = DOWN if button & 1 else curses.BUTTON4_PRESSED
+        elif button & 32:
+            state = MOVED
+        elif button & 3 == 0:
+            state = curses.BUTTON1_PRESSED if down else curses.BUTTON1_RELEASED
+        else:
+            return  # the other buttons do nothing here
+        self.pointer(x, y, state, exact=True)
+
+    def pointer(self, x, y, state, exact=False):
+        """a mouse event: scroll, drag a divider, drag over text to copy it, or click; an open popup takes them all.
+        exact: reported in full, so a move is a move and never a guess at the wheel"""
         if self.popup:
-            return self.popup_pointer(x, y, state)
+            return self.popup_pointer(x, y, state, exact)
         w, lw, side = self.geo
-        turn = wheel(state, VT and not (self.drag or self.select or self.hover))
+        if state & curses.BUTTON1_PRESSED:
+            self.drag = None  # a press starts afresh: a release that never came must not leave a divider stuck to the mouse
+        turn = wheel(state, VT and not exact and not (self.drag or self.select or self.hover))
         if turn:  # the wheel always scrolls, and lets go of a drag whose release never came
             self.drag = self.select = None
             self.scroll = max(0, self.scroll + 3 * turn)
@@ -1195,7 +1221,7 @@ class Screen:
             p["sel"] = n
             p["move"](can[n]["v"]) if p["move"] else None
 
-    def popup_pointer(self, x, y, state):
+    def popup_pointer(self, x, y, state, exact=False):
         """the mouse over a popup: pointing at a row highlights it, a click chooses it, the wheel moves the choice by one,
         a press outside closes. A release chooses only on the row its press was on: some terminals send one for a hover"""
         p, last, self.last = self.popup, self.last, (x, y)
@@ -1205,7 +1231,7 @@ class Screen:
         inside = py <= y < py + ph and px <= x < px + pw
         at = p.get("at", {}).get(y - py) if inside else None
         press, held = state & curses.BUTTON1_PRESSED, p.get("held")
-        turn = wheel(state, last == (x, y))  # the mouse reports a move only from a new place: from the same one it is the wheel
+        turn = wheel(state, not exact and last == (x, y))  # the mouse reports a move only from a new place: from the same one it is the wheel
         if turn:
             return self.popup_to(p["sel"] - turn)
         if press and not inside:
@@ -1996,7 +2022,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write(("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * (self.exact and not ROUTED)) if VT else "")  # and the palette back
+        sys.stdout.write(("\033[?1003l\033[?1006l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * (self.exact and not ROUTED)) if VT else "")  # and the palette back
         sys.stdout.flush()
 
 
