@@ -243,6 +243,7 @@ class Screen:
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
+        self.began, self.got, self.down = 0.0, 0, False  # this turn: when it started, characters of reply, is one arriving?
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -275,13 +276,14 @@ class Screen:
     # --- what the agent calls (from its worker thread)
 
     def emit(self, s, style=""):
+        self.got, self.down = self.got + len(s), self.down or bool(s.strip())
         if self.items and self.items[-1]["t"] == "text":
             self.items[-1]["text"] += s
         elif s.strip():
             self.items.append({"t": "text", "text": s})
 
     def status(self, s):
-        self.note = s
+        self.note, self.down = s, self.down and s != "thinking"  # "thinking": the conversation is going up again
 
     def say(self, text, role="dim"):
         self.items.append({"t": "note", "text": text, "role": role})
@@ -291,6 +293,7 @@ class Screen:
                            "old": c.tool == "write" and os.path.isfile(os.path.expanduser(c.arg))})
 
     def show_thought(self, text):
+        self.got, self.down = self.got + len(text), True
         self.items.append({"t": "tool", "call": sprint.Call("think", "", "", 0, 0), "result": text, "state": "done",
                            "open": False, "old": False})
 
@@ -402,6 +405,7 @@ class Screen:
                     full = full.replace(label, sprint.clip(text, self.agent.cap * 2))
                 self.pastes = {}
                 self.items.append({"t": "user", "text": line})
+                self.began, self.got, self.down = time.time(), 0, False
                 self.worker = threading.Thread(target=self.bang if mine else self.work, args=(mine,) if mine else (full, chips), daemon=True)
                 self.worker.start()
 
@@ -1192,6 +1196,16 @@ class Screen:
         k = int(time.time() * 8) if self.motion and self.busy() else 0
         return [("".join("░▒▓█"[(i - k) % 4] for i in range(4)), self.agent.mode)]
 
+    def status_row(self):
+        """the line above the bar while a turn runs: the sprint, what is happening, then for how long, how many
+        tokens are going up (the conversation) or coming down (the reply so far), and the effort"""
+        a, secs = self.agent, int(time.time() - self.began)
+        doing = "waiting for you" if self.pending else self.note or "working"
+        took = f"{secs // 60}m {secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+        flow = f"↓ {kilo(int(self.got / a.cpt))}" if self.down else f"↑ {kilo(a.used())}"
+        return [(" ", "")] + dash(time.time() - self.began if self.motion else None) + \
+            [(f" {doing} ", ""), (f"({took} · {flow} tokens · {a.effort})", "dim")]
+
     def input_rows(self, bw, used=0, side=0):
         """the bar: a rule carrying the model, the prompt (or the approval question), a rule carrying the mode
         -> (rows, the typed lines on show). Where the cursor belongs is left in self.caret"""
@@ -1373,14 +1387,12 @@ class Screen:
                     right = min(x0 + mw - 1, xb) if y == yb else x0 + mw - 1
                     if right >= left:
                         self.mark(scr, y, left, right - left + 1, curses.A_REVERSE)
-            # status line and footer
-            keys = [("tab", "bold"), (" mode  ", "dim"), ("ctrl+o", "bold"), (" tools  ", "dim"),
-                    ("pgup/pgdn", "bold"), (" scroll  ", "dim"), ("/help", "bold")]
+            # the status line, on the blank row above the bar, and the footer
+            keys = [("tab", "bold"), (" mode  ", "dim"), ("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
             if self.busy():
-                doing = "waiting for you" if self.pending else self.note or "working"  # the trail on the prompt is the spinner
-                self.put(scr, h - 1, x0, [(doing, "dim")], width=max(10, mw // 2 - 2))
-                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys[:4]
-            elif self.scroll:
+                self.put(scr, top - 1, x0, self.status_row(), width=mw)
+                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys[2:]
+            if self.scroll:
                 self.put(scr, h - 1, x0, [("↓ newer messages below", "warn")])
             keys = keys if len(flat(keys)) < mw - 24 else keys[:4]
             self.put(scr, h - 1, max(x0, w - side - 2 - len(flat(keys))), keys)
@@ -1415,7 +1427,7 @@ class Screen:
                 for y in range(h):
                     self.put(scr, y, lw, [("┃" if self.drag == "left" else "│", a.mode if self.drag == "left" else "frame")])
 
-        if self.note_text() and not self.busy():
+        if self.note_text():
             self.put(scr, h - 1, 2 if home else x0, [(self.note_text(), "warn")], width=max(20, (w - side - lw) // 2))
 
         # completion popup, drawn over whatever is above the input

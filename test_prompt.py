@@ -169,6 +169,142 @@ def test_home_and_end_stay_on_the_line_and_up_still_recalls_history():
     assert s.buf == "one\ntwo"
 
 
+class Canvas:
+    """a stand-in for the curses window that keeps what was drawn on it, and where the cursor was left"""
+    def __init__(self, h=24, w=90):
+        self.h, self.w, self.at = h, w, None
+        self.erase()
+
+    def getmaxyx(self):
+        return self.h, self.w
+
+    def erase(self):
+        self.grid = [[" "] * self.w for _ in range(self.h)]
+
+    def addstr(self, y, x, text, attr=0):
+        self.grid[y][x:x + len(text)] = text
+
+    def chgat(self, *a):
+        pass
+
+    def move(self, y, x):
+        self.at = (y, x)
+
+    def refresh(self):
+        pass
+
+    def rows(self):
+        return ["".join(r).rstrip() for r in self.grid]
+
+
+def drawn(s, monkeypatch, h=24, w=90):
+    """the screen as text, without the side panels, and the canvas it was drawn on"""
+    monkeypatch.setattr(tui.curses, "curs_set", lambda n: None)
+    s.sidebar = s.history = False
+    c = Canvas(h, w)
+    s.draw(c)
+    return c.rows(), c
+
+
+def slow(*replies, **kw):
+    """a screen whose model says nothing until chat.go is set, or until it is hung up on, as esc does"""
+    go, started, it = threading.Event(), threading.Event(), iter(replies)
+
+    class Sock:
+        def shutdown(self, how):
+            go.set()
+
+    def chat(msgs):
+        sprint.SOCKETS[threading.get_ident()] = Sock()  # what a real request records once it has connected
+        started.set()
+        go.wait(5)
+        yield next(it)
+
+    chat.go, chat.started = go, started
+    kw.setdefault("mode", "auto")
+    return Screen(Agent(chat=chat, out=io.StringIO(), **kw)), chat
+
+
+# ---------- the status line ----------
+
+def test_the_status_line_says_what_is_happening_for_how_long_and_how_much():
+    s, chat = slow("All done.")
+    s.submit("go")
+    assert chat.started.wait(5)
+    s.began -= 12
+    row = s.status_row()
+    assert flat(row).startswith(" " + tui.ENDS[0]) and row[1][1] in tui.HUES  # the sprint leads it
+    assert f"{tui.ENDS[1]} thinking (12s · ↑ {tui.kilo(s.agent.used())} tokens · medium)" in flat(row)
+    s.emit("x" * 35)  # the reply has begun: count what comes down, by the agent's own measure of a token
+    assert "(12s · ↓ 10 tokens · medium)" in flat(s.status_row())
+    s.show_thought("y" * 7000)
+    assert "↓ 2.0k tokens" in flat(s.status_row())
+    s.status("thinking")  # the next step: the conversation goes up again
+    assert "↑" in flat(s.status_row())
+    s.began -= 113
+    s.note, s.agent.effort = "", "high"
+    assert "working (2m 05s · " in flat(s.status_row()) and "· high)" in flat(s.status_row())
+    chat.go.set()
+    finish(s)
+
+
+def test_the_status_line_starts_afresh_with_each_message_and_holds_still_without_motion():
+    s = screen("one", "two")
+    s.submit("first")
+    finish(s)
+    assert s.got == len("one\n") and s.down
+    before = s.began
+    s.submit("second")
+    assert s.began >= before and not s.down
+    finish(s)
+    assert s.got == len("two\n")
+    s.motion = False
+    assert s.status_row()[1] == tui.dash()[0]
+
+
+def test_while_a_turn_runs_the_status_is_above_the_bar_and_the_footer_is_free_for_a_note(monkeypatch):
+    s, chat = slow("ok")
+    s.submit("go")
+    assert chat.started.wait(5)
+    s.tell("copied 12 characters")
+    rows, c = drawn(s, monkeypatch)
+    assert rows[19].startswith("   " + tui.ENDS[0]) and "thinking (0s · ↑" in rows[19]  # where the blank row was
+    assert rows[20].startswith("  ───") and "Qwen3.5-0.8B" in rows[20]
+    assert rows[21].startswith("  ░") and "> Ask anything" in rows[21] and c.at == (21, 9)
+    assert rows[22].startswith("  ── auto ───")
+    assert "copied 12 characters" in rows[23] and rows[23].endswith("esc interrupt  ctrl+o tools  /help")
+    assert "thinking" not in rows[23] and "working" not in rows[23]
+    chat.go.set()
+    finish(s)
+    rows, _ = drawn(s, monkeypatch)
+    assert rows[19] == "" and rows[23].endswith("tab mode  ctrl+o tools  /help") and "pg" not in rows[23]
+
+
+def test_the_approval_question_sits_between_the_same_two_rules(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    s = screen("```shell\necho 1\n```", "ok", mode="ask")
+    s.submit("go")
+    for _ in range(200):
+        if s.pending:
+            break
+        s.worker.join(0.02)
+    rows, _ = drawn(s, monkeypatch)
+    assert "waiting for you (" in rows[18] and "Qwen" in rows[19] and "allow shell  echo 1" in rows[20]
+    assert "always this" in rows[21] and rows[22].startswith("  ── ask ───")
+    s.key("n")
+    finish(s)
+
+
+def test_the_home_screen_has_the_same_bar_under_the_logo(monkeypatch):
+    s = screen()
+    s.motion = False
+    rows, c = drawn(s, monkeypatch, h=30, w=100)
+    bar = next(i for i, r in enumerate(rows) if "> Ask anything" in r)
+    assert "Qwen3.5-0.8B" in rows[bar - 1] and "── auto ─" in rows[bar + 1] and c.at[0] == bar
+    assert "░░░░░░░░" in rows[bar - 8] and "pgup" not in "".join(rows)
+    assert rows[bar].index(">") == c.at[1] - 2
+
+
 class Window:
     """a stand-in for the curses window: no keys, and the first wait for one ends the loop"""
     def __init__(self, s):
