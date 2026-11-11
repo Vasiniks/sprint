@@ -69,7 +69,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | key | |
 |---|---|
 | `enter` | send; while a turn runs, queue the message; on an empty prompt with messages queued, stop the turn and run them now |
-| `shift+enter`, `alt+enter`, `ctrl+j`, or `\` then `enter` | a new line (shift+enter needs a terminal that reports it; the others work everywhere, and on Windows use `ctrl+j` or `\`) |
+| `shift+enter`, `alt+enter`, `ctrl+j`, or `\` then `enter` | a new line (shift+enter needs a terminal that reports it; on Windows use `\` then `enter`) |
 | `tab`, `shift+tab` | switch mode: ask → edits → auto |
 | `esc` | stop the turn at once (hangs up on the model, kills a running command); queued messages go back on the prompt |
 | `ctrl+o` | expand or collapse all tool windows; click one to toggle just it |

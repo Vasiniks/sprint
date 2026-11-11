@@ -500,3 +500,26 @@ def test_the_status_says_working_unless_the_model_is_set_to_reason_first(monkeyp
     assert " thinking " in flat(s.status_row())
     s.status("running make")
     assert " running make " in flat(s.status_row())
+
+
+def test_ctrl_j_only_means_a_new_line_where_enter_is_known_to_arrive_differently(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tui.curses, "nonl", lambda: calls.append(1))
+    monkeypatch.setattr(tui, "VT", True)
+    s = screen()
+    s.free_ctrl_j()
+    assert s.nl and calls == [1]
+    monkeypatch.setattr(tui, "VT", False)  # Windows: untried there, so "\n" stays Enter and can never swallow a send
+    s = screen()
+    s.free_ctrl_j()
+    assert not s.nl and calls == [1]
+
+
+def test_a_terminal_that_refuses_to_change_enter_still_starts(monkeypatch):
+    def refuse():
+        raise tui.curses.error("nonl() returned ERR")
+    monkeypatch.setattr(tui.curses, "nonl", refuse)
+    monkeypatch.setattr(tui, "VT", True)
+    s = screen()
+    s.free_ctrl_j()
+    assert not s.nl

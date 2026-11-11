@@ -1638,10 +1638,19 @@ class Screen:
                 pass
         scr.refresh()
 
+    def free_ctrl_j(self):
+        """make Enter arrive as "\r", which leaves ctrl+j ("\n") free to mean a new line. Not on Windows, where this
+        is untried: there "\n" stays Enter, so a wrong guess can never stop a message being sent"""
+        if VT:
+            try:
+                curses.nonl()
+                self.nl = True
+            except curses.error:
+                pass
+
     def loop(self, scr, first=""):
         curses.raw()
-        curses.nonl()  # Enter now arrives as "\r", which leaves ctrl+j ("\n") free to mean a new line
-        self.nl = True
+        self.free_ctrl_j()
         scr.keypad(True)
         scr.timeout(80)
         self.colors = curses.has_colors()
