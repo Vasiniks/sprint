@@ -346,6 +346,9 @@ def test_thinking_shows_up_as_its_own_window_before_the_answer():
     assert [i["t"] for i in s.items][-2:] == ["tool", "text"]
     thought = s.items[-2]
     assert thought["call"].tool == "think" and "weigh it up" in thought["result"]
+    folded = s.window(thought, 60)  # one line until it is opened, or /showthink shows them all
+    assert len(folded) == 1 and "thought" in flat(folded[0][1]) and "5 words" in flat(folded[0][1])
+    thought["open"] = True
     head = flat(s.window(thought, 60)[0][1])
     assert "think" in head and "5 words" in head
 

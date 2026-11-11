@@ -21,7 +21,8 @@ ROOM = 44  # columns the conversation always keeps; a panel that would squeeze i
 SIDE = 32  # the sidebar's width until you drag it
 COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the same as /clear"),
             ("/model", "switch model"), ("/mode", "ask · edits · auto"),
-            ("/think", "let the model reason first, on or off"), ("/effort", "low · medium · high"),
+            ("/think", "let the model reason first, on or off"), ("/showthink", "show the model's reasoning in full, or just that it thought"),
+            ("/effort", "low · medium · high"),
             ("/context", "what is filling the context window"), ("/permissions", "what runs without asking"),
             ("/config", "see or change saved settings"), ("/systemprompt", "edit what the model is told at the start"),
             ("/theme", "colours"), ("/plan", "split each message into steps first, on or off"),
@@ -43,7 +44,7 @@ Keys
   ctrl+o expand or collapse all tool windows · click a window to toggle just that one
   pgup / pgdn or the mouse wheel scroll · up / down recall earlier messages
 Commands
-  /clear  /model [name]  /mode [ask|edits|auto]  /permissions  /think  /effort [low|medium|high]
+  /clear  /model [name]  /mode [ask|edits|auto]  /permissions  /think  /showthink  /effort [low|medium|high]
   /context  /config [key value]  /systemprompt  /theme  /sidebar [width]  /history [width]  /tools  /mouse
   /plan  /race [model message]  /directory [path]  /copy [code|all]  /export [file]  /log  /compact  /help  /exit
 Copy and paste
@@ -202,6 +203,13 @@ def row(spans, value=None, keep=False):
     return {"s": spans if isinstance(spans, list) else [(spans, "")], "v": value, "keep": keep}
 
 
+def took(it):
+    """how long a call ran, or has run so far: 0.4s, 12s. Nothing for what was never timed, or is waiting for you"""
+    live = it["state"] == "running" and "began" in it
+    secs = it.get("secs", time.time() - it["began"] if live else None)
+    return "" if secs is None else f"{int(secs)}s" if live or secs >= 10 else f"{secs:.1f}s"
+
+
 def kilo(n):
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
@@ -234,6 +242,7 @@ class Screen:
         self.motion, self.plan = kept.get("motion", True), bool(kept.get("plan", False))
         self.theme = kept.get("theme") if kept.get("theme") in THEMES else "default"
         self.peek = kept["peek"] if isinstance(kept.get("peek"), int) and kept["peek"] > 0 else PEEK
+        self.showthink = bool(kept.get("showthink", False))  # the model's reasoning in full, or one line saying it thought
         self.paint()
 
     def paint(self):
@@ -266,7 +275,7 @@ class Screen:
         self.items.append({"t": "note", "text": text, "role": role})
 
     def show_call(self, c):
-        self.items.append({"t": "tool", "call": c, "result": None, "state": "running", "open": False,
+        self.items.append({"t": "tool", "call": c, "result": None, "state": "running", "open": False, "began": time.time(),
                            "old": c.tool == "write" and os.path.isfile(os.path.expanduser(c.arg))})
 
     def show_thought(self, text):
@@ -277,6 +286,8 @@ class Screen:
         it = self.items[-1]
         bad = r.startswith("error") or re.search(r"\[(exit -?\d+|timed out[^\]]*)\]$", r)
         it["result"], it["state"] = r, "denied" if r.startswith("denied") else "failed" if bad else "done"
+        if "began" in it:
+            it["secs"] = time.time() - it["began"]
 
     def ask(self, call):
         self.items[-1]["state"] = "waiting"
@@ -284,7 +295,7 @@ class Screen:
         self.pending = call
         self.gate.wait()
         self.pending = None
-        self.items[-1]["state"] = "running"
+        self.items[-1]["state"], self.items[-1]["began"] = "running", time.time()  # the wait for you is not the call's time
         return self.answer
 
     def show_plan(self, steps, at):
@@ -364,6 +375,10 @@ class Screen:
                       "mouse off: select text as usual; ctrl+o and pgup/pgdn still work")
         elif cmd == "/paste":
             self.paste_image()
+        elif cmd == "/showthink":
+            self.showthink = not self.showthink
+            sprint.save_config(showthink=self.showthink)
+            self.tell("reasoning shown in full" if self.showthink else "reasoning folded to one line; click one to open it")
         elif cmd in self.popups() and not arg:
             self.popups()[cmd]()
         elif (rows := sprint.command(a, line)) is not None:  # a command given its value: apply it and say so
@@ -1188,6 +1203,9 @@ class Screen:
     def window(self, it, w):
         """a tool call as a bordered window, every line exactly w wide"""
         c, inner = it["call"], w - 4
+        full = it["open"] or (c.tool == "think" and self.showthink)
+        if c.tool == "think" and not full:  # folded: one line saying it thought; click it, or /showthink for all
+            return [("", [("  ▸ ", "frame"), ("thought", "dim"), (f"  {len((it['result'] or '').split())} words", "dim")], it)]
         body = []
         if c.tool == "shell":
             body = [[("$ " if i == 0 else "  ", "dim"), (x, "bold")] for i, x in enumerate(c.body.splitlines())]
@@ -1199,13 +1217,13 @@ class Screen:
         if it["result"] is not None:
             role = "err" if it["state"] in ("failed", "denied") else "" if c.tool in ("shell", "read", "fetch") else "dim"
             body += [[(x.replace("\t", "    "), role)] for x in it["result"].splitlines()]
-        hidden = 0 if it["open"] else max(0, len(body) - self.peek)
-        rows = [r for b in body for r in wrap(b, inner)] if it["open"] else body[:self.peek]
+        hidden = 0 if full else max(0, len(body) - self.peek)
+        rows = [r for b in body for r in wrap(b, inner)] if full else body[:self.peek]
 
         state = {"waiting": "allow?", "running": "running"}.get(it["state"], it["state"])
         srole = {"done": "ok", "failed": "err", "denied": "err", "waiting": self.agent.mode}.get(it["state"], "warn")
-        head = [("╭─ " + ("▾ " if it["open"] else "▸ "), "frame"), (c.tool, "bold")]
-        tail = [(f" {state} ", srole), ("─╮", "frame")]
+        head = [("╭─ " + ("▾ " if full else "▸ "), "frame"), (c.tool, "bold")]
+        tail = [(f" {state} ", srole)] + ([(took(it) + " ", "dim")] if took(it) else []) + [("─╮", "frame")]
         room = w - len(flat(head)) - len(flat(tail)) - 3
         flag = ""
         if c.tool == "edit":
@@ -1220,7 +1238,7 @@ class Screen:
                (flag, "warn" if it["old"] else "dim")]
         gap = w - len(flat(head + mid + tail))
         top = head + mid + [(" " + "─" * (gap - 1), "frame")] + tail
-        hint = f" … +{hidden} lines · ctrl+o " if hidden else " ctrl+o to collapse " if it["open"] and len(body) > self.peek else ""
+        hint = f" … +{hidden} lines · ctrl+o " if hidden else " ctrl+o to collapse " if full and len(body) > self.peek else ""
         foot = [("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]
         return [("", top, it)] + [("", [("│ ", "frame")] + clip(r, inner) + [(" │", "frame")], it) for r in rows] + \
                [("", foot, it)]
@@ -1228,7 +1246,8 @@ class Screen:
     def lines(self, w):
         out = []
         for it in self.items:
-            key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"))
+            key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
+                   self.showthink, took(it) if it["t"] == "tool" else "")
             if self.cache.get(id(it), (None,))[0] != key:
                 if it["t"] == "tool":
                     rows = self.window(it, w)
