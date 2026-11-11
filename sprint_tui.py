@@ -231,7 +231,7 @@ class Screen:
         self.pastes = {}  # large pasted texts by their chip label
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
-        self.hover = False  # is the terminal reporting every move of the mouse? Only while a popup is open
+        self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -672,9 +672,11 @@ class Screen:
         self.pointer(x, y, state)
 
     def pointer(self, x, y, state):
-        """a mouse event: scroll, drag a divider, drag over text to copy it, or click"""
+        """a mouse event: scroll, drag a divider, drag over text to copy it, or click; an open popup takes them all"""
+        if self.popup:
+            return self.popup_pointer(x, y, state)
         w, lw, side = self.geo
-        turn = wheel(state, not (self.drag or self.select or self.hover))
+        turn = wheel(state, VT and not (self.drag or self.select or self.hover))
         if turn:  # the wheel always scrolls, and lets go of a drag whose release never came
             self.drag = self.select = None
             self.scroll = max(0, self.scroll + 3 * turn)
@@ -803,10 +805,15 @@ class Screen:
         if p["field"]:
             field_at = len(lines)
             lines.append([("│ ", "frame")] + clip([(p["field"]["label"] + " ", "dim"), (p["field"]["text"], "")], w - 4) + [(" │", "frame")])
-        room = max(1, tall - len(lines) - 1)
-        start = max(0, min((rows.index(chosen) if chosen else 0) - room // 2, len(rows) - room))
+        room, at = max(1, tall - len(lines) - 1), rows.index(chosen) if chosen else 0
+        # a long list starts around the chosen row, then scrolls only as far as that row needs: it holds still under the mouse
+        start = max(at - room + 1, min(p.get("top", at - room // 2), at if p["sel"] else 0))
+        start = p["top"] = max(0, min(start, len(rows) - room))
+        nth, p["at"] = {id(r): n for n, r in enumerate(can)}, {}  # p["at"]: which line shows which row that can be chosen
         for r in rows[start:start + room]:
             sel_at = len(lines) if r is chosen else sel_at
+            if id(r) in nth:
+                p["at"][len(lines)] = nth[id(r)]
             lines.append([("│ ", "frame")] + clip(r["s"], w - 4) + [(" │", "frame")])
         field = p["field"] or {}
         hint = " " + " · ".join(x for x in ("↑↓ move" if len(can) > 1 else "", "type to filter" if field.get("filter") else "",
@@ -814,8 +821,39 @@ class Screen:
                                            "esc back" if p["back"] else "esc close") if x) + " "
         return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], sel_at, field_at
 
+    def popup_to(self, n):
+        """move the choice to the nth row that can be chosen, kept in range, and tell the popup (a theme previews itself)"""
+        p, can = self.popup, self.shown()[1]
+        n = max(0, min(n, len(can) - 1))
+        if can and n != p["sel"]:
+            p["sel"] = n
+            p["move"](can[n]["v"]) if p["move"] else None
+
+    def popup_pointer(self, x, y, state):
+        """the mouse over a popup: pointing at a row highlights it, a click chooses it, the wheel moves the choice by one,
+        a press outside closes. A release chooses only on the row its press was on: some terminals send one for a hover"""
+        p, last, self.last = self.popup, self.last, (x, y)
+        if p["edit"] or "box" not in p:
+            return
+        py, px, pw, ph = p["box"]
+        inside = py <= y < py + ph and px <= x < px + pw
+        at = p.get("at", {}).get(y - py) if inside else None
+        press, held = state & curses.BUTTON1_PRESSED, p.get("held")
+        turn = wheel(state, last == (x, y))  # the mouse reports a move only from a new place: from the same one it is the wheel
+        if turn:
+            return self.popup_to(p["sel"] - turn)
+        if press and not inside:
+            return self.popup_key("\x1b")
+        p["held"] = at if press or (held == at and not state & curses.BUTTON1_RELEASED) else None
+        if at is not None:
+            self.popup_to(at)
+            if state & curses.BUTTON1_CLICKED or (state & curses.BUTTON1_RELEASED and held == at):
+                self.popup_key("\n")
+
     def popup_key(self, k):
         p = self.popup
+        if k == curses.KEY_MOUSE:
+            return self.mouse()
         if p["edit"]:
             return self.edit_key(p["edit"], k)
         _, can = self.shown()
@@ -825,11 +863,9 @@ class Screen:
             if p["back"]:
                 p["back"]()
         elif k in (curses.KEY_UP, curses.KEY_DOWN) and can:
-            p["sel"] = (p["sel"] + (1 if k == curses.KEY_DOWN else -1)) % len(can)
-            p["move"](can[p["sel"]]["v"]) if p["move"] else None
+            self.popup_to((p["sel"] + (1 if k == curses.KEY_DOWN else -1)) % len(can))
         elif k in (curses.KEY_PPAGE, curses.KEY_NPAGE) and can:
-            p["sel"] = max(0, min(len(can) - 1, p["sel"] + (8 if k == curses.KEY_NPAGE else -8)))
-            p["move"](can[p["sel"]]["v"]) if p["move"] else None
+            self.popup_to(p["sel"] + (8 if k == curses.KEY_NPAGE else -8))
         elif k in ("\n", "\r", curses.KEY_ENTER):
             if can and p["pick"]:
                 p["pick"](can[p["sel"]]["v"])
@@ -1405,10 +1441,16 @@ class Screen:
             if on:
                 self.mark(scr, top - len(opts) + i, bx + 3, bw - 3, curses.A_REVERSE)
 
+        hover = bool(self.popup and self.mouse_on and not self.popup["edit"])
+        if VT and hover != self.hover:  # only under a popup does the terminal report every move, so its rows can light up
+            self.hover = hover
+            sys.stdout.write("\033[?1003h" if hover else "\033[?1003l" + "\033[?1002h" * self.mouse_on)  # one mode at a time
+            sys.stdout.flush()
         if self.popup:  # the standard popup, centred over everything
             pw = max(40, min(78, w - 6))
             plines, sel_at, field_at = self.popup_lines(pw, tall=h - 6)
             py, px = max(1, (h - len(plines)) // 2), (w - pw) // 2
+            self.popup["box"] = (py, px, pw, len(plines))  # where it is, for the mouse
             for i, spans in enumerate(plines):
                 self.put(scr, py + i, px, spans)
                 if i == sel_at:
@@ -1462,7 +1504,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write("\033[?1002l\033[?2004l" if VT else "")
+        sys.stdout.write("\033[?1003l\033[?1002l\033[?2004l" if VT else "")
         sys.stdout.flush()
 
 
