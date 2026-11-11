@@ -69,7 +69,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | you type | what happens |
 |---|---|
 | `@notes.txt` | That file is attached to the message, so the model doesn't have to go and read it. Tab completes the name. |
-| `!git status` | Shell mode: the prompt's `>` becomes `!` and the bar changes colour. The command runs yourself: no model, no approval. Its output joins the conversation. |
+| `!git status` | Shell mode: the prompt's `❯` becomes `!` and the bar changes colour. The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |
 | `ctrl+v`, `alt+v` or `/paste` | The picture on the clipboard (a screenshot, or a copied file) is attached as `[Image #1]`. Terminals paste text only, so sprint asks the system. In Windows Terminal use `alt+v` or `/paste`. |
@@ -81,7 +81,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | key | |
 |---|---|
 | `enter` | send; while a turn runs, queue the message; on an empty prompt with messages queued, stop the turn and run them now |
-| `shift+enter`, `alt+enter`, `ctrl+j`, or `\` then `enter` | a new line (shift+enter needs a terminal that reports it; on Windows use `\` then `enter`) |
+| `shift+enter`, `alt+enter`, `ctrl+j`, or `\` then `enter` | a new line. Where the terminal sends shift+enter as a plain Enter (Apple's Terminal, the Windows console), sprint asks the system whether Shift is down; that cannot work over ssh, where the other keys do. |
 | `tab`, `shift+tab` | switch mode: ask → edits → auto |
 | `esc` | stop the turn at once (hangs up on the model, kills a running command); queued messages go back on the prompt |
 | `ctrl+o` | expand or collapse all tool windows; click one to toggle just it |

@@ -345,7 +345,7 @@ def test_user_message_leads_with_the_trail_and_prose_is_indented():
     s.submit("hello there")
     finish(s)
     lines = s.lines(40)
-    assert lines[0][0] == "user" and flat(lines[0][1]) == "> hello there"
+    assert lines[0][0] == "user" and flat(lines[0][1]) == tui.MARK + " hello there"
     assert "┃" not in "".join(flat(spans) for _, spans, _ in lines)
     assert any(flat(spans) == "  Sure thing." for _, spans, _ in lines)
 
@@ -526,7 +526,7 @@ def test_input_area_is_a_titled_rule_and_a_trail_prompt_not_a_box():
     text = [flat(r) for r in rows]
     assert len(rows) == 3 and len(text[0]) == len(text[2]) == 60  # a rule above and a rule below
     assert "Qwen3.5-0.8B" in text[0] and "7%" in text[0] and "ask" in text[2]
-    assert text[1].startswith("> make it so") and "┃" not in "".join(text)
+    assert text[1].startswith(tui.MARK + " make it so") and "┃" not in "".join(text)
 
 
 def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():

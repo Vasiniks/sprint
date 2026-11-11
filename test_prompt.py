@@ -72,11 +72,11 @@ def test_the_bar_has_the_model_on_its_top_rule_and_the_mode_on_its_bottom_rule()
 def test_the_prompt_is_marked_in_the_mode_colour_and_the_hint_is_a_ghost():
     s = screen(mode="ask")
     prompt = s.input_rows(60)[0][1]
-    assert flat(prompt).startswith("> Ask anything") and prompt[0] == (">", "ask")  # just the mark: no shade trail
+    assert flat(prompt).startswith(tui.MARK + " Ask anything") and prompt[0] == (tui.MARK, "ask")  # just the mark: no shade trail
     assert prompt[-1] == ("Ask anything…  / for commands  ! for shell", "ghost")
     s.buf = "hello"
     prompt = s.input_rows(60)[0][1]
-    assert flat(prompt) == "> hello" and prompt[-1] == ("hello", "")
+    assert flat(prompt) == tui.MARK + " hello" and prompt[-1] == ("hello", "")
 
 
 # ---------- more than one line ----------
@@ -86,7 +86,7 @@ def test_line_breaks_lay_the_text_out_and_later_lines_sit_under_the_first():
     s.buf = "make it so\na second line\n"
     rows, lines = s.input_rows(60)
     assert lines == ["make it so", "a second line", ""] and len(rows) == 5
-    assert [flat(r) for r in rows[1:4]] == ["> make it so", "  a second line", "  "]
+    assert [flat(r) for r in rows[1:4]] == [tui.MARK + " make it so", "  a second line", "  "]
 
 
 def test_the_bar_says_where_the_cursor_is():
@@ -279,7 +279,7 @@ def test_while_a_turn_runs_the_status_is_above_the_bar_and_the_footer_is_free_fo
     rows, c = drawn(s, monkeypatch)
     assert rows[19].startswith("   " + tui.CELLS[0]) and "working (0s | ↑" in rows[19]  # where the blank row was
     assert rows[20].startswith("  ───") and "Qwen3.5-0.8B" in rows[20]
-    assert rows[21].startswith("  > Ask anything") and "░" not in rows[21] and c.at == (21, 4)
+    assert rows[21].startswith("  " + tui.MARK + " Ask anything") and "░" not in rows[21] and c.at == (21, 4)
     assert rows[22].startswith("  ── auto ───")
     assert "copied 12 characters" in rows[23] and rows[23].endswith("esc interrupt  ctrl+o tools  /help")
     assert "thinking" not in rows[23] and "working" not in rows[23]
@@ -308,10 +308,10 @@ def test_the_home_screen_has_the_same_bar_under_the_logo(monkeypatch):
     s = screen()
     s.motion = False
     rows, c = drawn(s, monkeypatch, h=30, w=100)
-    bar = next(i for i, r in enumerate(rows) if "> Ask anything" in r)
+    bar = next(i for i, r in enumerate(rows) if tui.MARK + " Ask anything" in r)
     assert "Qwen3.5-0.8B" in rows[bar - 1] and "── auto ─" in rows[bar + 1] and c.at[0] == bar
     assert "░░░░░░░░" in rows[bar - 8] and "pgup" not in "".join(rows)
-    assert rows[bar].index(">") == c.at[1] - 2
+    assert rows[bar].index(tui.MARK) == c.at[1] - 2
 
 
 # ---------- the queue ----------
@@ -561,7 +561,7 @@ def test_a_line_starting_with_a_bang_turns_the_bar_into_shell_mode():
     assert s.input_rows(60)[0][1][-1] == ("a command to run yourself", "ghost")
     s.buf, s.cur = "", 0  # the ! deleted: an ordinary prompt again
     top, prompt, bottom = s.input_rows(60)[0]
-    assert prompt[0] == (">", "ask") and top[0][1] == "frame" and ("ask", "ask") in bottom
+    assert prompt[0] == (tui.MARK, "ask") and top[0][1] == "frame" and ("ask", "ask") in bottom
 
 
 def test_a_command_you_ran_yourself_keeps_its_mark_in_the_conversation(tmp_path, monkeypatch):
@@ -625,3 +625,64 @@ def test_enter_on_no_refuses_and_the_next_approval_starts_on_once_again(tmp_path
     s.key("y")  # the letters still answer directly
     finish(s)
     assert s.items[2]["state"] == "done"
+
+
+# ---------- found on a real Mac terminal ----------
+
+def test_a_marked_paste_whose_lines_end_in_carriage_returns_still_becomes_a_chip():
+    """once Enter arrives as a return, so do the line breaks inside a paste"""
+    s = screen()
+    for ch in "\x1b[200~" + "\r".join(f"line {i}" for i in range(12)) + "\x1b[201~":
+        s.take(ch)
+    assert s.buf == "[Pasted #1 +12 lines] " and s.pastes["[Pasted #1 +12 lines]"] == "\n".join(f"line {i}" for i in range(12))
+    s = screen()
+    for ch in "\x1b[200~one\r\ntwo\x1b[201~":
+        s.take(ch)
+    assert s.buf == "one two" and "\r" not in s.buf
+
+
+def test_enter_with_shift_held_is_a_new_line_where_the_terminal_cannot_say_so(monkeypatch):
+    s = screen("ok")
+    typed(s, "one")
+    monkeypatch.setattr(tui, "shift_held", lambda: True)
+    s.key("\r")
+    finish(s)  # not a live screen (only tests call key directly): the keyboard is not asked, and Enter sends
+    assert s.items[0]["text"] == "one"
+    s = screen("ok")
+    s.live = True
+    typed(s, "one")
+    s.key("\r")
+    typed(s, "two")
+    assert s.buf == "one\ntwo" and s.worker is None
+    monkeypatch.setattr(tui, "shift_held", lambda: False)
+    s.key("\r")
+    finish(s)
+    assert s.items[0]["text"] == "one\ntwo"
+
+
+def test_shift_is_never_read_from_this_machine_over_ssh(monkeypatch):
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.2 5000 10.0.0.1 22")
+    monkeypatch.setattr(tui, "shift_reader", lambda: pytest.fail("asked the keyboard of the wrong machine"))
+    assert tui.shift_held() is False
+
+
+def test_a_keyboard_that_cannot_be_asked_is_asked_once_and_then_left_alone(monkeypatch):
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_TTY", raising=False)
+    asked = []
+
+    def broken():
+        asked.append(1)
+        raise OSError("no window server")
+    monkeypatch.setattr(tui, "SHIFT", [])
+    monkeypatch.setattr(tui, "shift_reader", broken)
+    assert tui.shift_held() is False and tui.shift_held() is False and asked == [1]
+    monkeypatch.setattr(tui, "SHIFT", [])
+    monkeypatch.setattr(tui, "shift_reader", lambda: (lambda: True))
+    assert tui.shift_held() is True
+
+
+def test_the_prompt_mark_is_a_heavy_angle_where_the_font_has_one():
+    assert tui.MARK == ("❯" if tui.VT else ">")
+    s = screen(mode="ask")
+    assert s.input_rows(60)[0][1][0] == (tui.MARK, "ask")

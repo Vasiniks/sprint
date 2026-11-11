@@ -157,6 +157,7 @@ MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports 
 DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching"}  # a tool at work
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
+MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
 CELLS = "▰▱" if VT else "//"  # a filled and an empty cell of the working animation; Windows console fonts lack the parallelograms
 
 CODE = re.compile(
@@ -262,6 +263,46 @@ def took(it):
     return "" if secs is None else f"{int(secs)}s" if live or secs >= 10 else f"{secs:.1f}s"
 
 
+def shift_reader():
+    """a function that says whether Shift is down right now, where the system can be asked (macOS, Windows), else None"""
+    import ctypes
+    if sys.platform == "darwin":
+        cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cg.CGEventSourceFlagsState.restype, cg.CGEventSourceFlagsState.argtypes = ctypes.c_uint64, [ctypes.c_int32]
+        return lambda: bool(cg.CGEventSourceFlagsState(1) & 0x20000)
+    if sprint.WINDOWS:
+        return lambda: bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+    return None
+
+
+SHIFT = []  # the reader above, once it has been tried: [None] where the keyboard cannot be asked
+
+
+def shift_held():
+    """is Shift down? For shift+enter in terminals that send it as a plain Enter (Apple's Terminal, the Windows
+    console). Never over ssh, where the keyboard in question belongs to another machine"""
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False
+    if not SHIFT:
+        got = []
+
+        def first():
+            try:
+                read = shift_reader()
+                read() if read else None
+                got.append(read)
+            except Exception:
+                got.append(None)
+        t = threading.Thread(target=first, daemon=True)
+        t.start()
+        t.join(0.3)  # no answer in time (no window server to ask): never ask again
+        SHIFT.append(got[0] if got else None)
+    try:
+        return bool(SHIFT[0] and SHIFT[0]())
+    except Exception:
+        return False
+
+
 def kilo(n):
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
@@ -290,6 +331,7 @@ class Screen:
         self.pastes = {}  # large pasted texts by their chip label
         self.newer = ""  # a newer published version, once the daily look has found one
         self.choice = 0  # which answer to an approval is highlighted: once, always, no
+        self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -584,6 +626,8 @@ class Screen:
             self.buf = self.buf[:self.cur - 1] + "\n" + self.buf[self.cur:]              # a new line instead of a send
         elif k == "\n" and self.nl:  # ctrl+j, now that Enter arrives as "\r"
             self.newline()
+        elif k in ("\n", "\r", curses.KEY_ENTER) and self.buf.strip() and self.live and shift_held():
+            self.newline()  # shift+enter in a terminal that sends it as a plain Enter
         elif k in ("\n", "\r", curses.KEY_ENTER):
             if opts:
                 self.complete(opts)
@@ -686,6 +730,7 @@ class Screen:
 
     def paste(self, text):
         """pasted text: files become chips like [Image #1]; anything else goes in as typed, on one line"""
+        text = text.replace("\r\n", "\n").replace("\r", "\n")  # terminals send a paste's line breaks as returns
         if self.popup:
             for ch in text.replace("\n", " "):
                 self.popup_key(ch)
@@ -1395,7 +1440,7 @@ class Screen:
                 keys += [(f" {text} ", "chosen")] if n == self.choice else [(" " + text[0], "bold"), (text[1:] + " ", "dim")]
                 keys += [("  ", "")]
             keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
-            return [rule, [(">", a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
+            return [rule, [(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
         typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
         for line in text.split("\n"):
@@ -1407,7 +1452,7 @@ class Screen:
         typed, self.caret = typed[first:first + 6], (1 + at - first, 2 + col)
         empty = "a command to run yourself" if shell else "Ask anything…  / for commands  ! for shell"
         body = [[(t, "")] for t in typed] if text else [[(empty, "ghost")]]
-        lead = [("!" if shell else ">", tone), (" ", "")]
+        lead = [("!" if shell else MARK, tone), (" ", "")]
         return [rule] + [(lead if n == 0 else [("  ", "")]) + r for n, r in enumerate(body)] + [foot], typed
 
     # --- conversation -> lines of (kind, spans, item)
@@ -1466,7 +1511,7 @@ class Screen:
                 elif it["t"] == "user":
                     mine = it["text"].startswith("!")  # a command you ran yourself keeps its mark
                     rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 2)]
-                    rows = [("user", ([("!" if mine else ">", "yellow" if mine else self.agent.mode), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
+                    rows = [("user", ([("!" if mine else MARK, "yellow" if mine else self.agent.mode), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
                 elif it["t"] == "plan":  # plan mode's checklist: done, doing now, still to do
                     at, me = it["at"], self.agent.mode
@@ -1689,6 +1734,7 @@ class Screen:
     def loop(self, scr, first=""):
         curses.raw()
         self.free_ctrl_j()
+        self.live = True
         scr.keypad(True)
         scr.timeout(80)
         self.colors = curses.has_colors()
