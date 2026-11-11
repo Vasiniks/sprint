@@ -151,6 +151,7 @@ PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline",
         "[27;5;13~": "newline", "[13;5u": "newline"}  # and ctrl+enter, which the same terminals report the same way
 MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports with its modifiers, whole or still arriving
+DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching"}  # a tool at work
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 ENDS = "◢◤" if VT else "//"  # the slanted ends of the working animation; Windows console fonts lack the triangles
@@ -1331,20 +1332,30 @@ class Screen:
     # --- the input area
 
     def trail(self):
-        """the four shade cells that lead every prompt, in the mode colour; they ripple while the agent works"""
-        k = int(time.time() * 8) if self.motion and self.busy() else 0
-        return [("".join("░▒▓█"[(i - k) % 4] for i in range(4)), self.agent.mode)]
+        """the four shade cells that lead every prompt, in the mode colour. They hold still: the sprint above the bar
+        is what moves while the agent works"""
+        return [("░▒▓█", self.agent.mode)]
+
+    def verb(self):
+        """one or two words for what is happening right now"""
+        last = self.items[-1] if self.items else None
+        if self.pending:
+            return "waiting for you"
+        if last and last["t"] == "tool" and last["state"] == "running" and last["call"].tool in DOING:
+            return DOING[last["call"].tool]
+        if self.note and self.note != "thinking":
+            return self.note  # the tool call being written: its name, target and length so far
+        return "answering" if self.down else "thinking" if self.agent.think else "working"
 
     def status_row(self):
-        """the line above the bar while a turn runs: the sprint, what is happening, then for how long, how many
-        tokens are going up (the conversation) or coming down (the reply so far), and the effort"""
+        """the line above the bar while a turn runs: the sprint, a verb, then (how long | tokens going up with the
+        conversation or coming down with the reply | the effort, and whether the model reasons first)"""
         a, secs = self.agent, int(time.time() - self.began)
-        doing = "waiting for you" if self.pending else self.note or "working"
-        doing = "working" if doing == "thinking" and not a.think else doing  # only reasoning models are thinking
         took = f"{secs // 60}m {secs % 60:02d}s" if secs >= 60 else f"{secs}s"
         flow = f"↓ {kilo(int(self.got / a.cpt))}" if self.down else f"↑ {kilo(a.used())}"
+        effort = f"thinking with {a.effort} effort" if a.think else f"{a.effort} effort"
         return [(" ", "")] + dash(time.time() - self.began if self.motion else None) + \
-            [(f" {doing} ", ""), (f"({took} · {flow} tokens · {a.effort})", "dim")]
+            [(f" {self.verb()} ", "bold"), (f"({took} | {flow} tokens | {effort})", "dim")]
 
     def queue_rows(self):
         """the messages sent while the agent worked, in the order they will run: three at most, then how many more"""
