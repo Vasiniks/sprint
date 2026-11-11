@@ -45,7 +45,9 @@ def test_time_spent_waiting_for_approval_is_not_counted(monkeypatch):
     now, s = clock(monkeypatch, 100.0), screen()
     s.show_call(Call("shell", "", "ls", 0, 0))
     s.gate.set = lambda: None
-    s.gate.wait = lambda: now.__setitem__(0, 160.0)  # a minute goes by before the answer
+    s.agent.ask_timeout = 0  # it waits as long as it takes
+    s.gate.wait = lambda *a: now.__setitem__(0, 160.0) or True  # a minute goes by before the answer
+    s.gate.is_set = lambda: True
     s.answer = True
     s.ask(s.items[-1]["call"])
     now[0] = 160.5

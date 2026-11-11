@@ -489,6 +489,7 @@ class Screen:
         self.buf, self.cur, self.past, self.at, self.pick = "", 0, [], 0, 0  # input line, cursor, history, popup row
         self.scroll, self.page, self.hits = 0, 10, {}
         self.pending, self.answer, self.gate = None, None, threading.Event()  # a tool call waiting for approval
+        self.deadline = None  # when the question stops waiting for you and the call is set aside
         self.worker, self.models, self.quit, self.colors = None, None, False, False
         self.mouse_on, self.drag, self.jump, self.geo = True, None, None, (0, 0, 0)  # geo: screen, list and sidebar widths
         self.popup, self.job, self.toast, self.details = None, None, ("", 0.0), {}  # open popup, its background work, brief note
@@ -602,16 +603,32 @@ class Screen:
     def show_result(self, r):
         it = self.items[-1]
         bad = r.startswith("error") or re.search(r"\[(exit -?\d+|timed out[^\]]*)\]$", r)
-        it["result"], it["state"] = r, "denied" if r.startswith("denied") else "failed" if bad else "done"
+        it["result"], it["state"] = r, "denied" if r.startswith("denied") else "parked" if r.startswith("set aside") else "failed" if bad else "done"
         if "began" in it:
             it["secs"] = time.time() - it["began"]
 
+    def choices(self):
+        """what the question can be answered with, its key first. A deletion can be allowed once, never for ever"""
+        c = self.pending
+        return ("y once", "n no") if c.tool == "shell" and sprint.deletes(c.body) else ("y once", "a always this", "n no")
+
     def ask(self, call):
+        """put a call to you. A question nobody answers must not hold the work up: after the wait (20 seconds unless
+        changed; any key starts it again) the call is set aside, to be allowed later from /permissions, and "later"
+        tells the agent to carry on without it"""
         self.items[-1]["state"] = "waiting"
         self.gate.clear()
         self.pending, self.choice = call, 0  # every question starts on "once"
-        self.gate.wait()
-        self.pending = None
+        limit = self.agent.ask_timeout
+        self.deadline = time.time() + limit if limit else None
+        while not self.gate.wait(0.05):
+            if self.deadline and time.time() >= self.deadline:
+                break
+        answered, self.pending, self.deadline = self.gate.is_set(), None, None
+        if not answered:
+            self.items[-1].pop("began", None)  # it never ran: no time to show for it
+            self.tell(f"set aside, nobody answered: {call.tool} {self.agent.target(call).splitlines()[0][:40]} · /permissions to allow it")
+            return "later"
         self.items[-1]["state"], self.items[-1]["began"] = "running", time.time()  # the wait for you is not the call's time
         return self.answer
 
@@ -802,11 +819,14 @@ class Screen:
         if self.leave and k != "\x03":  # any other key takes back the offer to quit, and the note that made it
             self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
         if self.pending:  # only the approval keys count while a call waits
+            can = [text[0] for text in self.choices()]
+            if self.deadline:
+                self.deadline = time.time() + self.agent.ask_timeout  # you are there: the wait starts again
             if k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):  # move the highlighted choice
-                self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % 3
+                self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % len(can)
                 return
-            k = "yan"[self.choice] if k in ("\n", "\r", curses.KEY_ENTER) else k  # enter takes the highlighted one
-            if k in ("y", "Y", "a", "A"):
+            k = can[min(self.choice, len(can) - 1)] if k in ("\n", "\r", curses.KEY_ENTER) else k  # enter takes the highlighted one
+            if isinstance(k, str) and k.lower() in can and k.lower() in "ya":
                 self.answer = "always" if k in ("a", "A") else True
                 self.gate.set()
             elif k in ("n", "N", "\x1b", "\x03"):
@@ -1169,7 +1189,7 @@ class Screen:
                 continue
             c, extra = it["call"], ""
             mark = {"done": ("✓", "green"), "failed": ("✗", "red"), "denied": ("✗", "red"),
-                    "waiting": ("?", self.agent.mode)}.get(it["state"], ("…", "warn"))
+                    "waiting": ("?", self.agent.mode), "parked": ("‖", "warn")}.get(it["state"], ("…", "warn"))
             if c.tool == "edit":
                 old, new = split_edit(c.body) or ("", c.body)
                 extra = f" +{len(new.splitlines())} -{len(old.splitlines())}"
@@ -1499,6 +1519,10 @@ class Screen:
             rows += [row(""), row([("always allowed" if a.allow else "nothing is always allowed yet", "dim")])]
             rows += [row([("  " + rule, ""), ("   enter removes", "dim")], ("rule", n)) for n, rule in enumerate(a.allow)]
             rows += [row("  Add a rule…", ("add", 0))]
+            if a.parked:  # calls nobody answered for: enter allows one, for the next time the model asks
+                rows += [row(""), row([("waiting for your say-so", "warn")])]
+                rows += [row([("  " + f"{c.tool} {a.target(c).splitlines()[0][:50]}", ""), ("   enter allows it once", "dim")], ("parked", n))
+                         for n, c in enumerate(a.parked)]
 
         def add(text):
             said = flat((sprint.command(a, "/permissions allow " + text) or [[]])[0])
@@ -1511,6 +1535,10 @@ class Screen:
             elif choice[0] == "rule":
                 sprint.command(a, f"/permissions forget {choice[1] + 1}")
                 self.mode_popup(title)
+            elif choice[0] == "parked":
+                said = a.approve(choice[1])
+                self.mode_popup(title)
+                self.tell(said)
             else:
                 self.pop("Always allow", [row([("a tool and a pattern, for example: shell git status*", "dim")])],
                          field={"label": "rule ›", "text": "", "submit": add}, back=lambda: self.mode_popup(title))
@@ -1625,7 +1653,7 @@ class Screen:
         a = self.agent
         now = {"model": a.model, "url": a.url, "ctx": a.ctx, "steps": a.steps, "mode": a.mode, "think": a.think, "effort": a.effort,
                "sidebar": self.sidebar, "sidebar_w": self.side_w, "history": self.history, "history_w": self.left_w, "motion": self.motion,
-               "theme": self.theme, "peek": self.peek, "timeout": a.timeout, "plan": self.plan}
+               "theme": self.theme, "peek": self.peek, "timeout": a.timeout, "ask_timeout": a.ask_timeout, "plan": self.plan}
         rows = [row([(f"{k:<11}", "dim"), ("on" if v is True else "off" if v is False else str(v), "")], k) for k, v in now.items()]
         self.pop("Settings", rows, pick=lambda k: self.config_pick(k, now[k], list(now).index(k)), sel=sel)
 
@@ -1652,8 +1680,9 @@ class Screen:
         """what sits under the bar: the mode's icon and name, and how to change it; or that this line is a command"""
         if self.buf.startswith("!") and not self.pending:
             return [("!", "shell"), (" shell", "shell"), (" (runs it yourself, no model)", "dim")]
-        mode = self.agent.mode
-        return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")]
+        mode, held = self.agent.mode, len(self.agent.parked)
+        return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")] + \
+            [(f"  {held} waiting for you: /permissions", "warn")] * bool(held)
 
     def version_text(self):
         """this version, and beside it a newer one when there is one to get"""
@@ -1700,11 +1729,15 @@ class Screen:
             c = self.pending
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
             keys = [("  ", "")]
-            for n, text in enumerate(("y once", "a always this", "n no")):  # the highlighted one is what enter takes
+            for n, text in enumerate(self.choices()):  # the highlighted one is what enter takes
                 keys += [(f" {text} ", "chosen")] if n == self.choice else [(" " + text[0], "bold"), (text[1:] + " ", "dim")]
                 keys += [("  ", "")]
+            if self.deadline:  # how long the question still waits before the call is set aside
+                keys += [(f"waits {max(0, round(self.deadline - time.time()))}s   ", "dim")]
             keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
-            return [rule, [(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
+            why = [("  deletes: always asked", "err")] if len(self.choices()) == 2 else []
+            return [rule, clip([(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], max(8, bw - len(flat(why)))) + why,
+                    keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
         typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
         for line in text.split("\n"):

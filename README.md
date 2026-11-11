@@ -102,9 +102,13 @@ Drag over text to copy it: in the conversation, in the prompt, or in either side
 |---|---|
 | `ask` (default) | reading files |
 | `edits` | reading, writing and editing files |
-| `auto` | everything |
+| `auto` | everything, except commands that delete |
 
 When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One of the three is highlighted; left and right move it and Enter takes it. "Always" allows just that command or file from then on (a fetch allows the whole site). `/permissions` lists those rules, removes them, and adds patterns such as `shell git status*`.
+
+**Deleting always asks.** A command that deletes (`rm`, `rmdir`, `git clean`, `find -delete`, `Remove-Item`, a one-line script calling `rmtree` and the like) is put to you in every mode, `auto` included, and can be allowed once but never for ever; no allow rule covers it. If a command does remove the folder sprint is working in, sprint steps up to the nearest folder that still exists and tells the model.
+
+**A question nobody answers does not stall the work.** After 20 seconds (`/config ask_timeout N`; `0` waits for ever; any key starts the wait again) the call is set aside, not run: the model is told to carry on without it, and the prompt shows that something is waiting. `/permissions` lists what was set aside; Enter on one allows it once, and it runs the next time the model asks for it. (Plain mode, `--plain`, waits as long as it takes.)
 
 ## Commands
 
@@ -115,8 +119,8 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/model [name]` | Pick an installed model, pull one by name, or search Hugging Face and pick a quantization. |
 | `/race [model message]` | Send one message to two models and compare answers, time and speed. They may read files but change nothing. |
 | `/mode`, `/permissions` | Change the mode; manage the always-allowed list. |
-| `/think` | Let the model reason before answering. |
-| `/showthink` | Show that reasoning in full, in a dashed frame of its own so it never looks like an action. Otherwise it is one line saying the model thought; click one to open it. |
+| `/think` | Let the model reason before answering. Its reasoning shows as it is written: a line that counts the words and shows the newest ones. |
+| `/showthink` | Show that reasoning in full, growing as it arrives, in a dashed frame of its own so it never looks like an action. Otherwise it is one line; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
 | `/plan` | Split each message into a short list of steps first. Off by default. |
 | `/context` | What is filling the context window, as a coloured grid. |
@@ -141,7 +145,7 @@ Everything sprint keeps lives in `~/.config/sprint/` (`%APPDATA%\sprint` on Wind
 
 | file | |
 |---|---|
-| `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, panel sizes, allow list, recent folders |
+| `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, how long a question waits, panel sizes, allow list, recent folders |
 | `system.md` | your own system prompt, if you wrote one |
 | `sprint.log` | messages, tool calls and errors, so there is something to read when a run goes wrong |
 | `usage.json` | one tally per day of tokens, replies, time and tool calls; what `/usage` adds up |

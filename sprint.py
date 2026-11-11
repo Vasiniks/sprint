@@ -303,6 +303,20 @@ def kill_tree(p):
         pass
 
 
+# Commands that delete. One of these is always put to you first, whatever the mode and whatever is on the allow list:
+# rm and its kin (by any path, but not a file called rm-something, and not docker's --rm), git clean, find -delete,
+# PowerShell's Remove-Item, and the ways a one-line script does it. A false alarm costs a question; a miss, your files
+DELETES = re.compile(r"""(?<![\w.-])(?:[\w./~-]*/)?(?:rm|rmdir|unlink|shred|srm|trash|rimraf)(?![\w.-])
+                         |\bgit\b[^|;&\n]*\bclean\b | \bfind\b[^|;&\n]*\s-delete\b | (?i:\bRemove-Item\b)
+                         |rmtree|\bos\.(?:remove|unlink|rmdir|removedirs)\b|\.unlink\(|\b(?:rm|rmdir|unlink)Sync\b|\bfs\.rm\b""", re.X)
+DELETES_WIN = re.compile(r"(?i)(?<![\w.-])(?:del|erase|rd|ri)(?![\w.-])")  # the classic Windows words, only looked for there
+
+
+def deletes(cmd):
+    """does this shell command delete files?"""
+    return bool(DELETES.search(cmd) or (WINDOWS and DELETES_WIN.search(cmd)))
+
+
 SEEN = [""]  # the last working folder known to exist
 
 
@@ -486,6 +500,8 @@ class Agent:
         self.model, self.url, self.ctx, self.steps, self.mode, self.key = model, url, ctx, steps, mode, key
         self.think, self.effort = think, effort  # ask the model to reason first? how much room and how many steps?
         self.custom, self.timeout = "", 60       # your own system prompt, if any; seconds a shell command may run
+        self.ask_timeout = 20                    # seconds a question waits for you before the call is set aside (0: for ever)
+        self.parked, self.passes = [], []        # calls set aside unanswered; (tool, target) you have since allowed, once
         self.allow = []                          # calls that never ask: "shell git status*", "write notes/*", ...
         self.rate, self.took = 0.0, 0.0          # tokens a second in the last reply, and how long it took
         self.tally, self.unsaved, self.started = blank(), blank(), time.time()  # this session's use; the part not yet on disk
@@ -843,14 +859,33 @@ class Agent:
         self.say("".join(f"  ┊ {x[:160]}\n" for x in lines[:6]), "2")
         self.say(f"  ┊ … +{len(lines) - 6} lines\n" if len(lines) > 6 else "", "2")
 
+    def approve(self, n):
+        """allow, once, the nth call that was set aside: it runs the next time the model asks for it -> what to tell you"""
+        c = self.parked.pop(n)
+        self.passes.append((c.tool, self.target(c)))
+        return f"allowed once: {c.tool} {self.target(c).splitlines()[0][:60]} (it runs when the model next asks for it)"
+
     def do(self, c):
+        key, risky = (c.tool, self.target(c)), c.tool == "shell" and deletes(c.body)  # a deletion is always put to you
         free = c.tool == "read" or self.mode == "auto" or (self.mode == "edits" and c.tool in ("write", "edit")) or self.allowed(c)
-        answer = free or self.ask(c)
-        if answer == "always":  # never ask about this one again
+        if key in self.passes:  # set aside earlier, and since allowed by you
+            self.passes.remove(key)
+            answer = True
+        else:
+            answer = (free and not risky) or self.ask(c)
+        if answer == "later":  # nobody answered in time: the work goes on without it, and it waits in /permissions
+            if not any((p.tool, self.target(p)) == key for p in self.parked):
+                self.parked.append(c)
+            return ("set aside: this needs the user's say-so and they have not answered. It is waiting for them. "
+                    "Carry on with whatever does not depend on it, and do not repeat it now.")
+        if answer == "always" and not risky:  # never ask about this one again (a deletion is never remembered)
             self.allow.append(self.rule_for(c))
             save_config(allow=self.allow)
         elif not answer:
-            return "denied by the user" if sys.stdin.isatty() else "denied: no terminal to ask on (start with -y)"
+            if not sys.stdin.isatty():
+                return "denied: deleting always needs the user's say-so, and there is no terminal to ask on" if risky else \
+                    "denied: no terminal to ask on (start with -y)"
+            return "denied by the user"
         try:
             if c.tool == "shell":
                 return shell(c.body, self.cap, self.timeout)
@@ -1069,7 +1104,7 @@ CONFIG = config_dir() / "config.json"
 SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "think": bool, "effort": str,
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
             "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool,
-            "update_check": bool}
+            "update_check": bool, "ask_timeout": int}
 SHADE = {"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
          "tool results": "yellow", "reserved for the reply": "dim", "free": "dim"}
 ANSI = {"": "", "dim": "2", "bold": "1", "blue": "34", "magenta": "35", "cyan": "36", "green": "32", "yellow": "33", "red": "31"}
@@ -1456,7 +1491,7 @@ def command(agent, line):
                 return note(f"{key} cannot be {value}")
             if key == "effort":
                 agent.set_effort(new)
-            elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout"):
+            elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout"):
                 setattr(agent, key, new)
             agent.tools = agent.tools if key not in ("url", "model") else not agent.url.rstrip("/").endswith("/v1")
             save_config(**{key: new})
@@ -1464,9 +1499,9 @@ def command(agent, line):
         now = {"model": agent.model, "url": agent.url, "ctx": agent.ctx, "steps": agent.steps, "mode": agent.mode,
                "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
                "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
-               "motion": kept.get("motion", True), "timeout": agent.timeout, "theme": kept.get("theme", "sprint"),
+               "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout, "theme": kept.get("theme", "sprint"),
                "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
-        return [[(f"  {k:<10}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
+        return [[(f"  {k:<12}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
             note(f"change with /config KEY VALUE · kept in {str(CONFIG).replace(str(Path.home()), '~', 1)}")
     return None
 
@@ -1532,7 +1567,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.9"  # the same as in pyproject.toml
+VERSION = "0.4.10"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
@@ -1689,6 +1724,7 @@ def main():
                   "auto" if a.yes else a.mode or saved.get("mode", "ask"), os.environ.get("SPRINT_KEY", ""),
                   think=bool(saved.get("think")), effort=effort)
     agent.custom, agent.timeout, agent.allow = load_prompt(), saved.get("timeout", 60), list(saved.get("allow", []))
+    agent.ask_timeout = saved.get("ask_timeout", 20)
     warm(a.url, a.model)
     try:
         ready = serve(a.url, agent.status)
