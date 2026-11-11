@@ -85,7 +85,7 @@ def logo_rows(t=None):
     return rows
 
 
-# what each kind of text looks like: (colour 0-7, attribute). 0 = terminal default
+# what each kind of text looks like: (colour, attribute). 0 = plain text, 1-6 the theme's hues, 9 its grey
 ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame": (0, curses.A_DIM),
         "title": (3, curses.A_BOLD), "code": (6, 0), "path": (5, 0), "url": (4, curses.A_UNDERLINE),
         "bullet": (6, 0), "kw": (5, 0), "string": (2, 0), "comment": (0, curses.A_DIM), "number": (3, 0),
@@ -93,12 +93,33 @@ ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame
         "ask": (6, curses.A_BOLD), "edits": (3, curses.A_BOLD), "auto": (5, curses.A_BOLD),
         "red": (1, 0), "green": (2, 0), "yellow": (3, 0), "blue": (4, 0), "magenta": (5, 0), "cyan": (6, 0),
         "ghost": (9, 0)}  # ghost: greyed out, for a placeholder and for the screen behind a popup; plain dim without 256 colours
-# a theme only says which terminal colour each of the six hues becomes; the rest of the screen follows
+
+
+def theme(hues, bg, fg, panel, ghost):
+    """a theme, in the terminal's 256 colours: what red, green, yellow, blue, magenta and cyan become, the background of
+    the whole screen, plain text, the shade behind your messages and popups, and greyed-out text"""
+    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost}
+
+
+# default and mono leave the screen to the terminal; every other theme brings its own background
 THEMES = {"default": {}, "mono": {i: -1 for i in range(1, 8)},
-          "amber": {1: 203, 2: 178, 3: 214, 4: 172, 5: 208, 6: 220}, "forest": {1: 167, 2: 114, 3: 185, 4: 109, 5: 150, 6: 79},
-          "ocean": {1: 204, 2: 49, 3: 80, 4: 33, 5: 105, 6: 39}, "sunset": {1: 203, 2: 150, 3: 221, 4: 141, 5: 205, 6: 215}}
+          "amber": theme((203, 178, 214, 172, 208, 220), 233, 222, 236, 94),
+          "forest": theme((167, 114, 185, 109, 150, 79), 234, 151, 237, 65),
+          "ocean": theme((204, 49, 80, 33, 105, 39), 17, 153, 19, 67),
+          "sunset": theme((203, 150, 221, 141, 205, 215), 52, 223, 53, 131),
+          "midnight": theme((203, 120, 227, 75, 213, 87), 16, 255, 235, 242),
+          "cmyk": theme((199, 51, 226, 45, 201, 51), 16, 231, 236, 244),
+          "matrix": theme((210, 46, 190, 35, 84, 120), 16, 40, 235, 28),
+          "slate": theme((210, 150, 222, 110, 182, 116), 237, 253, 235, 246),
+          "grape": theme((204, 156, 228, 111, 213, 123), 54, 189, 17, 103),
+          "paper": theme((124, 28, 130, 25, 127, 24), 230, 235, 187, 243)}
 THEME_ABOUT = {"default": "your terminal's own colours", "mono": "no colour, only bold and dim", "amber": "warm ambers, like an old monitor",
-               "forest": "soft greens", "ocean": "blues and teals", "sunset": "orange, pink and violet"}
+               "forest": "soft greens on charcoal", "ocean": "blues and teals on deep navy", "sunset": "orange, pink and violet at dusk",
+               "midnight": "true black, bright colours", "cmyk": "black with cyan, magenta, yellow", "matrix": "green on black",
+               "slate": "soft pastels on grey", "grape": "purple, with candy colours", "paper": "light, with dark ink"}
+# colour pairs from 20 up show every theme in its own colours, for the theme popup: "ocean.0" is its text, "ocean.1"-"ocean.6"
+# its hues, all on its background. (No pair goes past 255: older curses cannot name one.)
+SAMPLE = {f"{name}.{i}": 20 + 7 * n + i for n, name in enumerate(THEMES) for i in range(7)}
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0)  # 0: a curses with no fifth button; it sends wheel-down as a bare move
 MOVED = getattr(curses, "REPORT_MOUSE_POSITION", 0)
 BUTTON = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED
@@ -248,20 +269,30 @@ class Screen:
         self.paint()
 
     def paint(self):
-        """(re)define the colour pairs for the current theme"""
+        """(re)define the colour pairs for the current theme: 1-7 its hues on its background, 8 its plain text, 9 ghost
+        text, 10-19 the same on the panel shade. With fewer than 256 colours the screen stays the terminal's own"""
+        self.base = 0  # the pair plain text is drawn in: 8 when the theme has a background, else the terminal's own
         try:
             if not curses.has_colors():
                 return
             curses.use_default_colors()
             rich = self.rich = curses.COLORS >= 256
+            t = THEMES[self.theme]
+            bg, fg, panel = (t.get("bg", -1), t.get("fg", -1), t.get("panel", 236)) if rich else (-1, -1, -1)
             for i in range(8):
-                colour = THEMES[self.theme].get(i, i) if rich or self.theme == "mono" else i
+                colour = t.get(i, i) if rich or self.theme == "mono" else i
                 if i:
-                    curses.init_pair(i, colour, -1)
-                curses.init_pair(10 + i, colour if i else -1, 236 if rich else -1)
-            if rich:  # ghost text, on the screen and on the panel shade
-                curses.init_pair(9, 244, -1)
-                curses.init_pair(19, 244, 236)
+                    curses.init_pair(i, colour, bg)
+                curses.init_pair(10 + i, colour if i else fg, panel)
+            if not rich:
+                return
+            curses.init_pair(8, fg, bg)
+            curses.init_pair(9, t.get("ghost", 244), bg)
+            curses.init_pair(19, t.get("ghost", 244), panel)
+            self.base = 8 if "bg" in t else 0
+            for n, other in enumerate(THEMES.values()):
+                for i in range(7):
+                    curses.init_pair(20 + 7 * n + i, other.get(i, i) if i else other.get("fg", -1), other.get("bg", -1))
         except curses.error:
             pass  # no screen yet
 
@@ -775,11 +806,12 @@ class Screen:
     def tell(self, text):
         self.toast = (text, time.time() + 4)
 
-    def pop(self, title, rows, pick=None, field=None, back=None, sel=0, move=None, edit=None):
+    def pop(self, title, rows, pick=None, field=None, back=None, sel=0, move=None, edit=None, lit=None):
         """open the popup. pick(value) runs on enter and move(value) as the choice changes; field is a line of typed
-        text that filters the rows or is submitted; edit turns the popup into a small text editor"""
+        text that filters the rows or is submitted; edit turns the popup into a small text editor; lit is how many
+        cells of the chosen row the highlight covers (all of it unless said)"""
         self.popup = {"title": title, "rows": rows, "pick": pick, "field": field, "back": back, "sel": sel, "move": move,
-                      "edit": edit}
+                      "edit": edit, "lit": lit}
         return self.popup
 
     def shown(self):
@@ -945,10 +977,11 @@ class Screen:
             self.popup = None
             self.tell("theme: " + name)
 
-        swatch = [("██", c) for c in ("red", "green", "yellow", "blue", "magenta", "cyan")]
-        rows = [row([("● " if n == was else "  ", self.agent.mode), (f"{n:<9}", "bold"), (f"{THEME_ABOUT[n]:<36}", "dim")] + swatch, n)
-                for n in THEMES]
-        self.pop("Theme", rows, pick=keep, move=show, back=lambda: show(was), sel=list(THEMES).index(was))
+        # every row is a strip of its own theme: name, the six hues and a few words, on that theme's background.
+        # The highlight covers only the mark and the name, so the hues of the chosen row stay in view
+        rows = [row([("● " if n == was else "  ", self.agent.mode), (f" {n:<9}", n + ".0")] + [("██", f"{n}.{i}") for i in range(1, 7)]
+                    + [(f"  {THEME_ABOUT[n]:<34} ", n + ".0")], n) for n in THEMES]
+        self.pop("Theme", rows, pick=keep, move=show, back=lambda: show(was), sel=list(THEMES).index(was), lit=12)
 
     def popups(self):
         return {"/systemprompt": self.prompt_popup, "/system": self.prompt_popup, "/theme": self.theme_popup,
@@ -1303,13 +1336,18 @@ class Screen:
     # --- drawing
 
     def attr(self, role, panel=False):
+        """how a role is drawn, on the screen or on the panel shade; a theme's sample keeps its own colours anywhere"""
+        if role in SAMPLE:
+            return curses.color_pair(SAMPLE[role] if self.rich else int(role[-1])) if self.colors else 0
         colour, extra = ROLE.get(role, (0, 0))
         if role == "ghost" and not self.rich:
             return curses.A_DIM
-        return (curses.color_pair((10 if panel else 0) + colour) if self.colors else 0) | extra
+        return (curses.color_pair((10 if panel else 0) + colour or self.base) if self.colors else 0) | extra
 
     def mark(self, scr, y, x, n, attr):
         """restyle n cells that are already drawn (a highlight); skipped where the curses at hand cannot"""
+        if not attr & curses.A_COLOR:
+            attr |= self.attr("")  # no colour of its own: it sits on the theme's
         try:
             scr.chgat(y, x, n, attr)
         except (AttributeError, curses.error):
@@ -1331,6 +1369,7 @@ class Screen:
 
     def draw(self, scr):
         h, w = scr.getmaxyx()
+        scr.bkgdset(" ", self.attr(""))  # the whole screen takes the theme's background
         scr.erase()
         self.hits, self.screen = {}, {}
         if h < 12 or w < 50:
@@ -1462,7 +1501,7 @@ class Screen:
             for i, spans in enumerate(plines):
                 self.put(scr, py + i, px, spans, panel=True)
                 if i == sel_at:
-                    self.mark(scr, py + i, px + 2, pw - 4, curses.A_REVERSE)
+                    self.mark(scr, py + i, px + 2, min(pw - 4, self.popup["lit"] or pw), curses.A_REVERSE)
             curses.curs_set(1 if field_at or self.popup["edit"] else 0)
             try:
                 if self.popup["edit"]:

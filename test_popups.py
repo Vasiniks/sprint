@@ -378,3 +378,93 @@ def test_without_256_colours_the_backdrop_is_dimmed(scr, tmp_path, monkeypatch):
     s.submit("/help")
     s.draw(scr)
     assert [m for m in scr.marks if m[3] == curses.A_DIM] == [(y, 0, scr.w, curses.A_DIM) for y in range(scr.h)]
+
+
+# ---------- themes ----------
+
+def test_every_theme_has_a_line_about_it_and_six_hues_from_the_256():
+    assert set(tui.THEME_ABOUT) == set(tui.THEMES) and len(tui.THEMES) >= 12
+    assert {"midnight", "cmyk", "matrix", "slate", "grape", "paper"} <= set(tui.THEMES)
+    for name, t in tui.THEMES.items():
+        assert len(tui.THEME_ABOUT[name]) <= 34, name
+        if name not in ("default", "mono"):
+            assert all(16 <= t[k] <= 255 for k in (1, 2, 3, 4, 5, 6, "bg", "fg", "panel", "ghost")), name
+            assert len({t["bg"], t["fg"], t["panel"], t["ghost"]}) == 4, name
+    assert "bg" not in tui.THEMES["default"] and "bg" not in tui.THEMES["mono"]
+    assert 20 + 7 * len(tui.THEMES) <= 256  # older curses cannot name a pair past 255
+
+
+def test_a_theme_paints_its_own_background_text_panel_and_ghost(monkeypatch):
+    s, pairs = painted(monkeypatch, "paper")
+    t = tui.THEMES["paper"]
+    assert s.base == 8 and pairs[8] == (t["fg"], t["bg"])
+    assert [pairs[i] for i in range(1, 7)] == [(t[i], t["bg"]) for i in range(1, 7)]
+    assert pairs[10] == (t["fg"], t["panel"]) and pairs[13] == (t[3], t["panel"])
+    assert pairs[9] == (t["ghost"], t["bg"]) and pairs[19] == (t["ghost"], t["panel"])
+
+
+def test_the_default_theme_keeps_the_terminals_own_colours(monkeypatch):
+    s, pairs = painted(monkeypatch, "default")
+    assert s.base == 0 and [pairs[i] for i in range(1, 7)] == [(i, -1) for i in range(1, 7)]
+    assert pairs[10] == (-1, 236) and pairs[12] == (2, 236) and pairs[9][1] == -1 and pairs[19][1] == 236
+
+
+def test_with_fewer_than_256_colours_a_theme_changes_nothing(monkeypatch):
+    s, pairs = painted(monkeypatch, "paper", colours=8)
+    assert s.base == 0 and not s.rich
+    assert pairs == {**{i: (i, -1) for i in range(1, 8)}, **{10 + i: (i or -1, -1) for i in range(8)}}
+    s, pairs = painted(monkeypatch, "mono", colours=8)
+    assert pairs[1] == (-1, -1) and pairs[16] == (-1, -1)
+
+
+def test_every_theme_gets_sample_pairs_in_its_own_colours(monkeypatch):
+    s, pairs = painted(monkeypatch, "default")
+    for name, t in tui.THEMES.items():
+        text = tui.SAMPLE[f"{name}.0"]
+        assert text >= 20 and pairs[text] == (t.get("fg", -1), t.get("bg", -1)), name
+        assert [pairs[tui.SAMPLE[f"{name}.{i}"]] for i in range(1, 7)] == [(t.get(i, i), t.get("bg", -1)) for i in range(1, 7)], name
+    assert len(set(tui.SAMPLE.values())) == 7 * len(tui.THEMES)
+
+
+def test_plain_text_takes_the_themes_base_pair_and_samples_keep_theirs(monkeypatch):
+    monkeypatch.setattr(tui.curses, "color_pair", lambda n: n << 8)
+    s = screen()
+    s.colors = s.rich = True
+    s.base = 8
+    assert pair(s.attr("")) == 8 and s.attr("dim") == 8 << 8 | curses.A_DIM and pair(s.attr("bold", panel=True)) == 10
+    assert pair(s.attr("red")) == 1 and pair(s.attr("red", panel=True)) == 11
+    sample = tui.SAMPLE["ocean.4"]
+    assert pair(s.attr("ocean.4")) == sample and pair(s.attr("ocean.4", panel=True)) == sample  # wherever it is drawn
+    s.rich = False  # without the 256 a sample is just the plain hue
+    assert pair(s.attr("ocean.4", panel=True)) == 4 and pair(s.attr("ocean.0")) == 0
+
+
+def test_a_highlight_sits_on_the_theme_and_the_screen_is_cleared_to_it(scr, tmp_path, monkeypatch):
+    s = talked(tmp_path, monkeypatch)
+    s.colors = s.rich = True
+    s.base = 8
+    s.mark(scr, 2, 3, 4, curses.A_REVERSE)
+    s.mark(scr, 2, 3, 4, 5 << 8)
+    assert scr.marks == [(2, 3, 4, curses.A_REVERSE | 8 << 8), (2, 3, 4, 5 << 8)]
+    s.draw(scr)
+    assert scr.bkgd == 8 << 8
+
+
+def test_the_theme_popup_shows_each_theme_in_its_own_colours(scr):
+    s = screen()
+    s.submit("/theme")
+    for r in s.popup["rows"]:
+        name, roles = r["v"], [role for _, role in r["s"]]
+        assert name in flat(r["s"]) and tui.THEME_ABOUT[name] in flat(r["s"])
+        assert f"{name}.0" in roles and [x for x in roles if x[-1] in "123456"] == [f"{name}.{i}" for i in range(1, 7)]
+    assert [r["v"] for r in s.popup["rows"]] == list(tui.THEMES)
+    s.colors = s.rich = True
+    s.popup["sel"] = 4
+    s.draw(scr)
+    py, px, pw, ph = s.popup["box"]
+    lit = [m for m in scr.marks if m[3] & curses.A_REVERSE]
+    assert len(lit) == 1 and lit[0][0] == py + 5 and lit[0][2] < 16  # the highlight stops short of the swatches
+    swatches = [x for x in range(px, px + pw) if scr.cells[(py + 5, x)][0] == "█"]
+    assert len(swatches) == 12 and swatches[0] >= lit[0][1] + lit[0][2]
+    name = list(tui.THEMES)[4]
+    assert [pair(scr.cells[(py + 5, x)][1]) for x in swatches[::2]] == [tui.SAMPLE[f"{name}.{i}"] for i in range(1, 7)]
