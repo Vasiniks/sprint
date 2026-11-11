@@ -663,3 +663,26 @@ def test_end_on_an_empty_prompt_jumps_to_the_bottom_too(tmp_path, monkeypatch):
     s.scroll, s.buf, s.cur = 30, "typing", 0
     s.key(curses.KEY_END)  # with text on the prompt, End is still the end of the line
     assert s.scroll == 30 and s.cur == 6
+
+
+# ---------- room to read ----------
+
+def test_popups_are_a_little_larger_and_the_editor_takes_most_of_the_screen():
+    s = screen()
+    s.submit("/help")
+    assert s.popup_size(40, 140) == (92, 36)  # was 78 wide and six rows short of the screen
+    assert s.popup_size(24, 80) == (74, 20) and s.popup_size(14, 50)[0] == 44  # never wider than the screen allows
+    s.popup = None
+    s.submit("/systemprompt")
+    assert s.popup["edit"] and s.popup_size(40, 140) == (120, 36) and s.popup_size(24, 80) == (76, 20)
+
+
+def test_the_editor_fills_its_window_however_short_the_text(scr):
+    s = screen()
+    s.submit("/systemprompt")
+    s.popup["edit"]["lines"], s.popup["edit"]["row"], s.popup["edit"]["col"] = ["Be brief."], 0, 0
+    lines, _, _ = s.popup_lines(100, tall=30)
+    assert len(lines) == 30 and all(len(flat(x)) == 100 for x in lines)  # a full-height window, not one squeezed round a line
+    s.draw(scr)
+    py, px, pw, ph = s.popup["box"]
+    assert pw == min(120, scr.w - 4) and ph == scr.h - 4

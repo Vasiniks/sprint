@@ -1053,6 +1053,10 @@ class Screen:
         rows = [r for r in p["rows"] if not q or r["keep"] or (r["v"] is not None and q in flat(r["s"]).lower())]
         return rows, [r for r in rows if r["v"] is not None]
 
+    def popup_size(self, h, w):
+        """how wide and how tall the open popup may be on a screen this size: the text editor takes most of it"""
+        return (max(40, min(120, w - 4)) if self.popup["edit"] else max(40, min(92, w - 6))), h - 4
+
     def popup_lines(self, w, tall=20):
         """the popup as a window exactly w wide -> (lines, index of the chosen line, index of the typing line)"""
         p = self.popup
@@ -1065,7 +1069,8 @@ class Screen:
             e, room = p["edit"], max(3, tall - 2)
             e["top"] = max(e["row"] - room + 1, min(e["top"], e["row"]))
             shift = max(0, e["col"] - (w - 6))
-            for i, text in enumerate(e["lines"][e["top"]:e["top"] + room], e["top"]):
+            shown = e["lines"][e["top"]:e["top"] + room]
+            for i, text in enumerate(shown + [""] * (room - len(shown)), e["top"]):  # a full window, however short the text
                 lines.append([("│ ", "frame")] + clip([(text[shift:] if i == e["row"] else text, "")], w - 4) + [(" │", "frame")])
             p["cursor"] = (1 + e["row"] - e["top"], e["col"] - shift)
             hint = " ctrl+s save · ctrl+r default · esc cancel "
@@ -1807,8 +1812,8 @@ class Screen:
         if self.popup:  # the standard popup: a raised box on the panel shade, centred over a greyed-out screen
             for y in range(h):
                 self.mark(scr, y, 0, w, self.attr("ghost"))
-            pw = max(40, min(78, w - 6))
-            plines, sel_at, field_at = self.popup_lines(pw, tall=h - 6)
+            pw, tall = self.popup_size(h, w)
+            plines, sel_at, field_at = self.popup_lines(pw, tall=tall)
             py, px = max(1, (h - len(plines)) // 2), (w - pw) // 2
             self.popup["box"] = (py, px, pw, len(plines))  # where it is, for the mouse
             for i, spans in enumerate(plines):
