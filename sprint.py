@@ -459,6 +459,7 @@ class Agent:
         self.custom, self.timeout = "", 60       # your own system prompt, if any; seconds a shell command may run
         self.allow = []                          # calls that never ask: "shell git status*", "write notes/*", ...
         self.rate, self.took = 0.0, 0.0          # tokens a second in the last reply, and how long it took
+        self.tally, self.unsaved, self.started = blank(), blank(), time.time()  # this session's use; the part not yet on disk
         self.thread = 0                          # the thread running the current turn, so stop() can hang up on it
         self.limit = 0                           # tokens the next reply may use: free room, up to half the window
         self.cpt = 3.5            # chars per token; only ever revised downward, which is the safe side
@@ -528,6 +529,11 @@ class Agent:
         self.msgs = [m[0], {"role": "user", "content": text, "human": True, "summary": True}] + tail
         self.forgotten += len(old) // 2
         return len(old) - 1
+
+    def count(self, **more):
+        """add to this session's tally, and to what the next save writes into the lifetime file"""
+        add(self.tally, more)
+        add(self.unsaved, more)
 
     def breakdown(self):
         """where the context window goes, in tokens: [(what, tokens), ...] ending with what is free"""
@@ -690,7 +696,7 @@ class Agent:
         buf, cut, shown, raw, told = "", False, 0, None, False
         keep = ("role", "content", "tool_calls", "tool_name") + (() if self.url.rstrip("/").endswith("/v1") else ("images",))
         stream = self.chat([{k: m[k] for k in keep if k in m} for m in self.msgs])
-        began, wrote, secs, self.thread = time.time(), 0, 0.0, threading.get_ident()
+        began, wrote, secs, asked, self.thread = time.time(), 0, 0.0, 0, threading.get_ident()
         self.status("thinking")
         try:
             for chunk in stream:
@@ -698,6 +704,7 @@ class Agent:
                     raise KeyboardInterrupt
                 if isinstance(chunk, dict):
                     if chunk.get("prompt"):
+                        asked = chunk["prompt"]
                         self.cpt = max(1.0, min(self.cpt, sent / chunk["prompt"]))
                     cut = cut or bool(chunk.get("cut"))
                     raw = raw or chunk.get("call")
@@ -736,6 +743,9 @@ class Agent:
             raise KeyboardInterrupt
         self.took = time.time() - began
         self.rate = wrote / (secs or self.took or 1e-9) if wrote else self.rate
+        out = wrote or int(len(buf) / self.cpt)  # what the server counted, else an estimate from the text
+        used = {"replies": 1, "sent": asked or int(sent / self.cpt), "written": out, "secs": round(secs or self.took, 3)}
+        self.count(reasoning=min(out, int((len(buf) - len(unthink(buf))) / self.cpt)), models={self.model: dict(used)}, **used)
         text = unthink(buf).lstrip()
         told = told or self.thought(buf)
         call = from_args(raw.get("name"), raw.get("arguments"), len(text), len(text)) if raw else None
@@ -845,13 +855,23 @@ class Agent:
         for n, step in enumerate(steps):
             self.show_plan(steps, n)
             ask = f"Now do only step {n + 1} of {len(steps)}: {step}"
-            answer = self.run(f"{task}\n\nWe will do this one step at a time. {ask}", chips) if n == 0 else self.run(ask)
+            answer = self.run(f"{task}\n\nWe will do this one step at a time. {ask}", chips) if n == 0 else \
+                self.run(ask, human=False)
             if answer.startswith("stopped:"):
                 return answer
         self.show_plan(steps, len(steps))
         return answer
 
-    def run(self, task, chips=None):
+    def run(self, task, chips=None, human=True):
+        """answer one message; whatever it used is added to the lifetime tally when it ends, however it ends"""
+        self.count(messages=int(human))
+        try:
+            return self._run(task, chips)
+        finally:
+            keep_usage(self.unsaved)
+            self.unsaved = blank()
+
+    def _run(self, task, chips=None):
         self.msgs[0]["content"] = self.system()  # refresh the file listing
         self.cancel = False
         log("message", text=task[:300], model=self.model, mode=self.mode, cwd=os.getcwd())
@@ -904,6 +924,8 @@ class Agent:
                         call = call._replace(body=shown[-1] if shown else "")
                     self.show_call(call)
                     result = self.do(call)
+                    bad = result.startswith("error") or re.search(r"\[(exit -?[1-9]\d*|timed out[^\]]*)\]$", result)
+                    self.count(tools={call.tool: 1}, failed=int(bool(bad)))
                     log("tool", tool=call.tool, target=self.target(call)[:200], result=result[:300])
                 # going in circles: the same call again, the same call and result as some time before, the same file
                 # written whole twice running, or the same failure twice running. One warning, then it is stopped.
@@ -1110,6 +1132,110 @@ def context_cells(agent, n=200):
     return used + [("·", "dim")] * (n - len(used) - len(hold)) + hold
 
 
+def blank():
+    """an empty tally of use: what /usage adds up for a session, a day, or a lifetime"""
+    return {"messages": 0, "replies": 0, "sent": 0, "written": 0, "reasoning": 0, "secs": 0.0, "tools": {}, "failed": 0, "models": {}}
+
+
+def add(total, more):
+    """add one tally into another, tool by tool and model by model"""
+    for k, v in more.items():
+        if isinstance(v, dict):
+            add(total.setdefault(k, {}), v)
+        else:
+            total[k] = total.get(k, 0) + v
+    return total
+
+
+def usage_file():
+    return CONFIG.with_name("usage.json")  # beside the settings: one tally per day, as plain JSON
+
+
+def load_usage():
+    try:
+        days = json.loads(usage_file().read_text(encoding="utf-8"))["days"]
+        return {day: add(blank(), t) for day, t in days.items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}  # none yet, or not readable: start again rather than fail
+
+
+def keep_usage(more):
+    """add a tally to today's line of the lifetime file"""
+    if not (more["messages"] or more["replies"]):
+        return
+    try:
+        days = load_usage()
+        add(days.setdefault(time.strftime("%Y-%m-%d"), blank()), more)
+        usage_file().parent.mkdir(parents=True, exist_ok=True)
+        usage_file().write_text(json.dumps({"days": dict(sorted(days.items())[-730:])}, indent=1) + "\n", encoding="utf-8")
+    except OSError:
+        pass  # the count just does not stick
+
+
+def human(n):
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.1f}k" if n >= 1000 else str(int(n))
+
+
+def clock(secs):
+    secs = int(secs)
+    return f"{secs // 3600}h {secs % 3600 // 60:02d}m" if secs >= 3600 else f"{secs // 60}m {secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+
+
+def bar(n, top, width=20):
+    return "█" * max(1 if n else 0, round(width * n / top)) if top else ""
+
+
+def usage_rows(agent):
+    """/usage: this session, what is in the window now, the last fourteen days, each model, and everything so far"""
+    s, days = agent.tally, load_usage()
+    add(days.setdefault(time.strftime("%Y-%m-%d"), blank()), agent.unsaved)  # the turn in progress is not on disk yet
+    life = blank()
+    for t in days.values():
+        add(life, t)
+    head = lambda title, more="": [(title, "bold"), (more, "dim")]
+    line = lambda *spans: [("  ", "")] + list(spans)
+    name = lambda model: re.sub(r"^hf\.co/[^/]+/|-GGUF", "", model)
+
+    def about(t):  # counts, the three kinds of token as bars, time, tools
+        calls, top = sum(t["tools"].values()), max(t["sent"], t["written"], 1)
+        kinds = (("sent", "cyan", "  the conversation, every reply"), ("written", "magenta", ""), ("reasoning", "yellow", "  part of written"))
+        return [line((f"messages {t['messages']} · replies {t['replies']} · tool calls {calls}"
+                      + (f" ({t['failed']} failed)" if t["failed"] else ""), ""))] + \
+            [line((f"{kind:<10}", ""), (f"{human(t[kind]):>7} ", "bold"), (bar(t[kind], top), colour), (note, "dim"))
+             for kind, colour, note in kinds] + \
+            [line((f"generating {clock(t['secs'])}" + (f" at {t['written'] / t['secs']:.0f} tok/s" if t["secs"] else ""), "dim")),
+             line((" · ".join(f"{k} {v}" for k, v in sorted(t["tools"].items(), key=lambda kv: -kv[1])) or "no tool calls", "dim"))]
+
+    rows = [head("Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
+                            f"{clock(time.time() - agent.started)} ago · {name(agent.model)[:30]}")]
+    rows += about(s) if s["messages"] or s["replies"] else [line(("nothing yet this session", "dim"))]
+
+    parts = agent.breakdown()
+    top = max(n for _, n in parts) or 1
+    rows += [[], head("In the window now", f"  {human(agent.used())} of {human(agent.ctx)} tokens")]
+    rows += [line((f"{what:<24}", ""), (f"{human(n):>6} ", "bold"), (bar(n, top, 24), SHADE.get(what, "dim"))) for what, n in parts]
+
+    last = [time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400 * back)) for back in range(13, -1, -1)]
+    wrote = [days[d]["written"] if d in days else 0 for d in last]
+    peak = max(wrote)
+    spark = "".join("▁▂▃▄▅▆▇█"[min(7, n * 8 // (peak + 1))] if n else " " for n in wrote)
+    rows += [[], head("Last 14 days", "  tokens written each day"),
+             line((spark, "magenta"), (f"  most: {human(peak)} on {last[wrote.index(peak)][5:]}" if peak else "  nothing written", "dim"))]
+    rows += [line((d[5:] + "  ", "dim"), (f"↑ {human(days[d]['sent']):>6}  ↓ {human(days[d]['written']):>6}  ", ""),
+                  (f"{days[d]['replies']:>4} replies  ", "dim"), (bar(days[d]["written"], peak, 16), "magenta"))
+             for d in last[-7:] if d in days and days[d]["replies"]]
+
+    rows += [[], head("Models", "  every session")]
+    for model, m in sorted(life["models"].items(), key=lambda kv: -kv[1].get("written", 0))[:8]:
+        speed = f" · {m['written'] / m['secs']:.0f} tok/s" if m.get("secs") else ""
+        rows.append(line((f"{name(model)[:24]:<24} ", ""), (f"↑ {human(m.get('sent', 0)):>6}  ↓ {human(m.get('written', 0)):>6}  ", "bold"),
+                         (f"{m.get('replies', 0)} replies{speed}", "dim")))
+    if not life["models"]:
+        rows.append(line(("none yet", "dim")))
+
+    return rows + [[], head("Lifetime", f"  since {min(days)}, {len(days)} day{'s' * (len(days) != 1)} with use")] + about(life)
+
+
 def context_rows(agent):
     """the context window as a 20x10 grid of cells, with what each colour is beside it"""
     parts, cells = agent.breakdown(), context_cells(agent)
@@ -1191,6 +1317,8 @@ def command(agent, line):
         return note(f"folded {folded} messages into a summary: {before:,} → {agent.used():,} tokens" if folded else "nothing to compact yet")
     if cmd == "/context":
         return context_rows(agent)
+    if cmd == "/usage":
+        return usage_rows(agent)
     if cmd == "/export":
         path = os.path.expanduser(arg) if arg else time.strftime("sprint-%Y%m%d-%H%M%S.md")
         try:
@@ -1302,7 +1430,7 @@ TINT = {"ask": "36", "edits": "33", "auto": "35"}
 ABOUT = {"ask": "asks before every action", "edits": "file edits run without asking",
          "auto": "everything runs without asking"}
 HELP = ("@file attaches a file · !command runs it yourself · /model [NAME] · /mode · /permissions · /think · /effort [LEVEL]\n"
-        "  /context · /compact · /copy [code|all] · /export [FILE] · /log · /directory [PATH] · /plan · /race MODEL MESSAGE\n"
+        "  /context · /usage · /compact · /copy [code|all] · /export [FILE] · /log · /directory [PATH] · /plan · /race MODEL MESSAGE\n"
         "  /systemprompt · /config · /clear · /bye")
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
 
