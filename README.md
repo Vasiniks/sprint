@@ -71,7 +71,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | you type | what happens |
 |---|---|
 | `@notes.txt` | That file is attached to the message, so the model doesn't have to go and read it. Tab completes the name. |
-| `/model` | A command, typed in full, lights up in the prompt, as do the files you attach and the chips of pasted things. |
+| `/model` | A command, typed in full, lights up in the prompt, as do the files you attach and the chips of pasted things. One that switches or sets something also shows what it stands at now, at the far right (`/showthink` … `off`), and so does its row in the list of commands. |
 | `!git status` | Shell mode: the prompt's `❯` becomes `!` and the bar takes the shell colour (green in most themes; ask, edits, auto and shell each have their own, in every theme). The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |

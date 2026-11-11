@@ -804,6 +804,21 @@ class Screen:
         pool = [(m, "") for m in self.installed()] if cmd == "/model" else pool or []
         return [(o, d) for o, d in pool if o.startswith(arg) and o != arg]
 
+    def state_of(self, cmd, choice=None):
+        """what a command stands at now, for the far right of its row and of the prompt: on or off for a switch, the
+        value for a setting, nothing for the rest -> (text, role). With a choice: whether that one is the one in force"""
+        a = self.agent
+        now = {"/think": a.think, "/showthink": self.showthink, "/plan": self.plan, "/sidebar": self.sidebar, "/history": self.history,
+               "/mouse": self.mouse_on, "/mode": a.mode, "/permissions": a.mode, "/effort": a.effort, "/theme": self.theme,
+               "/model": a.model}.get(cmd)
+        if choice is not None:
+            return ("current", "ok") if choice == now else None
+        if now is None:
+            return None
+        if isinstance(now, bool):
+            return ("on", "ok") if now else ("off", "dim")
+        return (short(now), "dim") if cmd == "/model" else (now, now if now in MODES else "code")
+
     def complete(self, opts):
         choice = opts[min(self.pick, len(opts) - 1)][0]
         if self.mention() is not None:  # swap the @word at the cursor for the chosen file
@@ -1753,6 +1768,10 @@ class Screen:
         if cmd and cmd.group() in dict(COMMANDS) and typed[0].startswith(cmd.group()):  # a command, once it is one: it lights up
             body[0] = [(cmd.group(), "kw")] + marks(typed[0][cmd.end():], ATTACHED)
         lead = [("!" if shell else MARK, tone), (" ", "")]
+        state = self.state_of(cmd.group()) if cmd and cmd.group() in dict(COMMANDS) else None
+        gap = bw - 2 - len(flat(body[0])) - len(state[0]) if state else 0
+        if gap >= 2:  # a command typed in full: what it stands at now, at the far right, so you know what enter changes
+            body[0] = body[0] + [(" " * gap, ""), state]
         return [rule] + [(lead if n == 0 else [("  ", "")]) + r for n, r in enumerate(body)] + [foot], typed
 
     # --- conversation -> lines of (kind, spans, item)
@@ -2016,9 +2035,14 @@ class Screen:
         chosen = min(self.pick, len(every) - 1)
         start = max(0, min(chosen - 3, len(every) - 8))  # eight at a time, kept around the chosen one
         opts = every[start:start + 8]
+        asked = self.buf.partition(" ")[0] if " " in self.buf else None  # the command whose choices these are, if they are
         for i, (name, about) in enumerate(opts):
             on = start + i == chosen
-            self.put(scr, top - len(opts) + i, bx, [(f"     {name:<24}", "bold" if on else ""), (about, "dim")], width=bw)
+            state = self.state_of(asked, name) if asked else self.state_of(name)  # what it stands at now, at the far right
+            room = bw - (len(state[0]) + 2 if state else 0)
+            self.put(scr, top - len(opts) + i, bx, [(f"     {name:<24}", "bold" if on else ""), (about, "dim")], width=room)
+            if state:
+                self.put(scr, top - len(opts) + i, bx + room, [(" " + state[0] + " ", state[1])])
             if on:
                 self.mark(scr, top - len(opts) + i, bx + 3, bw - 3, curses.A_REVERSE)
 
