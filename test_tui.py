@@ -48,12 +48,12 @@ def test_wrap_splits_words_longer_than_the_line_and_keeps_roles():
 def test_prose_colours_paths_inline_code_urls_and_bold():
     r = roles(prose("Edit `main()` in src/app.py, see https://example.com and **note** this.")[0])
     assert r["`main()`"] == "code" and r["src/app.py"] == "path"
-    assert r["https://example.com"] == "url" and r["**note**"] == "bold"
+    assert r["https://example.com"] == "url" and r["**note**"] == "strong"  # bold in a colour of its own
 
 
 def test_prose_marks_headings_and_short_title_lines():
     lines = prose("# Plan\nSteps:\n- first do a thing\nplain text here")
-    assert lines[0][0][1] == "title" and lines[1][0][1] == "title"
+    assert lines[0] == [("# ", "dim"), ("Plan", "h1")] and lines[1][0][1] == "title"  # the # is dim, a heading has its level's colour
     assert lines[2][0][1] == "bullet" and lines[3][0][1] == ""
 
 

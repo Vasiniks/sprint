@@ -205,11 +205,24 @@ CODE = re.compile(
     r"(?P<comment>#.*|//.*)|(?P<string>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|(?P<number>\b\d+(?:\.\d+)?\b)"
     r"|(?P<kw>\b(?:def|class|return|if|elif|else|for|while|import|from|as|try|except|finally|with|lambda|yield|async"
     r"|await|function|const|let|var|new|public|private|static|void|fn|struct|impl|package|func|type|interface|export"
-    r"|default|switch|case|break|continue|in|not|and|or|is|None|True|False|null|true|false|this|self)\b)")
+    r"|default|switch|case|break|continue|in|not|and|or|is|None|True|False|null|true|false|this|self)\b)"
+    r"|(?P<deco>(?<!\S)@[\w.]+)|(?P<func>\b[^\W\d]\w*(?=\())|(?P<const>\b[A-Z][A-Z0-9_]+\b)")
+# emphasis has to hug its text and stand clear of a word, so 2 * 3 * 4, snake_case and *args stay as they are; a path is
+# tried before the underscores, so __init__.py is one. Each group is named for the role its text is shown in
 PROSE = re.compile(
-    r"(?P<code>`[^`\n]+`)|(?P<bold>\*\*[^*\n]+\*\*)|(?P<url>https?://[^\s)>\]]+)"
+    r"(?P<code>`[^`\n]+`)|(?P<struck>~~(?=\S)[^~\n]+(?<=\S)~~)|(?P<url>https?://[^\s)>\]]+)"
     r"|(?P<path>(?<![\w/])(?:~/|\.{0,2}/)?(?:[\w.-]+/)+[\w.-]*\w"
-    r"|(?<![\w/.-])[\w-]+\.(?:py|js|ts|tsx|jsx|json|md|txt|toml|ya?ml|sh|html|css|go|rs|c|h|cpp|java|rb|cfg|ini)\b)")
+    r"|(?<![\w/.-])[\w-]+\.(?:py|js|ts|tsx|jsx|json|md|txt|toml|ya?ml|sh|html|css|go|rs|c|h|cpp|java|rb|cfg|ini)\b)"
+    r"|(?P<strong>\*\*\*?(?=[^\s*])[^*\n]+(?<=[^\s*])\*\*\*?|(?<![\w.])__(?=[^\s_])[^_\n]+(?<=[^\s_])__(?!\w))"
+    r"|(?P<em>(?<![\w*])\*(?=[^\s*])[^*\n]+(?<=[^\s*])\*(?![\w*])|(?<!\w)_(?=[^\s_])[^_\n]+(?<=[^\s_])_(?!\w))")
+RULE = re.compile(r"\s*([-*_])(?:\s*\1){2,}\s*")  # --- or * * *: a line across
+ITEM = re.compile(r"(\s*(?:[-*+•]|(\d+[.)]))\s+)(\[[ xX]\](?=\s))?")  # a list mark, and a task box after it
+# a word that says what the line is, then a colon; any other key of up to three words counts only at the start of a list item
+LABEL = re.compile(r"(?i)\s*(?:(?P<note>note|tip|hint|info)|(?P<warn>warning|caution|important|todo|fixme)|(?P<err>error|failed|failure)"
+                   r"|(?P<ok>done|fixed|success|passed)|(?P<label>[^\W\d][\w-]*(?: [\w-]+){0,2})):(?=\s|$)")
+ROLE.update({"strong": (3, curses.A_BOLD), "em": (2, getattr(curses, "A_ITALIC", 0)), "struck": (0, curses.A_DIM),
+             "h1": (5, curses.A_BOLD), "h2": (6, curses.A_BOLD), "h3": (3, curses.A_BOLD), "ordinal": (3, 0), "bar": (4, 0),
+             "note": (4, 0), "label": (6, 0), "func": (6, 0), "deco": (4, 0), "const": (3, 0)})
 
 
 # ---------- text: highlighting and wrapping. A line is a list of (text, role) spans ----------
@@ -229,21 +242,35 @@ def code(line):
 
 
 def prose(text):
-    """assistant text -> highlighted lines: titles, bullets, `code`, **bold**, paths, URLs, fenced code"""
+    """assistant text -> highlighted lines: headings by level, lists, task boxes, quotes, rules, labels, `code`, **bold**,
+    *italic*, ~~struck~~, paths, URLs, fenced code. The marks stay in the text, in the colour of what they mark"""
     out, fenced = [], False
     for line in text.split("\n"):
-        bullet = re.match(r"\s*(?:[-*•]|\d+[.)])\s+", line)
+        head, quote = re.match(r"\s*(#+)\s*", line), re.match(r"(?:\s*>)+", line)
         if line.strip().startswith("```"):
             fenced = not fenced
             out.append([(line, "dim")])
         elif fenced:
             out.append(code(line))
-        elif line.lstrip().startswith("#") or (0 < len(line) <= 40 and line.rstrip().endswith(":") and not bullet):
+        elif RULE.fullmatch(line):
+            out.append([("─" * 24, "dim")])
+        elif head:
+            out.append([(t, r) for t, r in ((head.group(), "dim"), (line[head.end():], f"h{min(3, len(head.group(1)))}")) if t])
+        elif 0 < len(line) <= 40 and line.rstrip().endswith(":") and not quote and not ITEM.match(line):
             out.append([(line, "title")])
-        elif bullet:
-            out.append([(bullet.group(), "bullet")] + marks(line[bullet.end():], PROSE))
         else:
-            out.append(marks(line, PROSE))
+            lead, base, rest = [], "", line
+            if quote:  # a bar where the > was, and what is quoted in dim
+                lead, base, rest = [(quote.group().replace(">", "▌"), "bar")], "dim", line[quote.end():]
+            item = ITEM.match(rest)
+            if item:
+                lead += [(item.group(1), "ordinal" if item.group(2) else "bullet")]
+                lead += [(item.group(3), "ok" if item.group(3) != "[ ]" else "warn")] * bool(item.group(3))
+                rest = rest[item.end():]
+            label = LABEL.match(rest)
+            if label and (item or label.lastgroup != "label"):
+                lead, rest = lead + [(label.group(), label.lastgroup)], rest[label.end():]
+            out.append(lead + marks(rest, PROSE, base))
     return out
 
 
