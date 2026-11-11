@@ -202,7 +202,7 @@ python -m pytest
 | `sprint_tui.py` | the full-screen interface (stdlib `curses`) |
 | `test_sprint.py`, `test_tui.py` | tests; they use a scripted model and never touch your settings |
 | `test_windows.py` | the Windows-only paths, run on Windows in CI and skipped elsewhere |
-| `site/`, `wrangler.jsonc` | the website: static files, published to Cloudflare with `npx wrangler deploy` |
+| `site/`, `wrangler.jsonc` | the website: static files, published to Cloudflare Pages with `npx wrangler pages deploy` |
 
 ## License
 

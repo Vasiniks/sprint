@@ -1,6 +1,6 @@
-// The website in site/ is served by Cloudflare as static files. Publish with: npx wrangler deploy
+// The website in site/ is a Cloudflare Pages project. Publish with: npx wrangler pages deploy
 {
   "name": "sprint",
   "compatibility_date": "2026-11-01",
-  "assets": { "directory": "./site" }
+  "pages_build_output_dir": "./site"
 }
