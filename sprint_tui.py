@@ -91,7 +91,8 @@ ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame
         "bullet": (6, 0), "kw": (5, 0), "string": (2, 0), "comment": (0, curses.A_DIM), "number": (3, 0),
         "add": (2, 0), "del": (1, 0), "err": (1, 0), "ok": (2, 0), "warn": (3, 0),
         "ask": (6, curses.A_BOLD), "edits": (3, curses.A_BOLD), "auto": (5, curses.A_BOLD),
-        "red": (1, 0), "green": (2, 0), "yellow": (3, 0), "blue": (4, 0), "magenta": (5, 0), "cyan": (6, 0)}
+        "red": (1, 0), "green": (2, 0), "yellow": (3, 0), "blue": (4, 0), "magenta": (5, 0), "cyan": (6, 0),
+        "ghost": (9, 0)}  # ghost: greyed out, for a placeholder and for the screen behind a popup; plain dim without 256 colours
 # a theme only says which terminal colour each of the six hues becomes; the rest of the screen follows
 THEMES = {"default": {}, "mono": {i: -1 for i in range(1, 8)},
           "amber": {1: 203, 2: 178, 3: 214, 4: 172, 5: 208, 6: 220}, "forest": {1: 167, 2: 114, 3: 185, 4: 109, 5: 150, 6: 79},
@@ -258,6 +259,9 @@ class Screen:
                 if i:
                     curses.init_pair(i, colour, -1)
                 curses.init_pair(10 + i, colour if i else -1, 236 if rich else -1)
+            if rich:  # ghost text, on the screen and on the panel shade
+                curses.init_pair(9, 244, -1)
+                curses.init_pair(19, 244, 236)
         except curses.error:
             pass  # no screen yet
 
@@ -1300,6 +1304,8 @@ class Screen:
 
     def attr(self, role, panel=False):
         colour, extra = ROLE.get(role, (0, 0))
+        if role == "ghost" and not self.rich:
+            return curses.A_DIM
         return (curses.color_pair((10 if panel else 0) + colour) if self.colors else 0) | extra
 
     def mark(self, scr, y, x, n, attr):
@@ -1446,13 +1452,15 @@ class Screen:
             self.hover = hover
             sys.stdout.write("\033[?1003h" if hover else "\033[?1003l" + "\033[?1002h" * self.mouse_on)  # one mode at a time
             sys.stdout.flush()
-        if self.popup:  # the standard popup, centred over everything
+        if self.popup:  # the standard popup: a raised box on the panel shade, centred over a greyed-out screen
+            for y in range(h):
+                self.mark(scr, y, 0, w, self.attr("ghost"))
             pw = max(40, min(78, w - 6))
             plines, sel_at, field_at = self.popup_lines(pw, tall=h - 6)
             py, px = max(1, (h - len(plines)) // 2), (w - pw) // 2
             self.popup["box"] = (py, px, pw, len(plines))  # where it is, for the mouse
             for i, spans in enumerate(plines):
-                self.put(scr, py + i, px, spans)
+                self.put(scr, py + i, px, spans, panel=True)
                 if i == sel_at:
                     self.mark(scr, py + i, px + 2, pw - 4, curses.A_REVERSE)
             curses.curs_set(1 if field_at or self.popup["edit"] else 0)

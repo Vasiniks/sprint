@@ -341,3 +341,40 @@ def test_without_a_fifth_button_a_bare_report_is_the_wheel_going_down(monkeypatc
     s.pointer(50, 8, MOVE)
     s.pointer(50, 8, MOVE)
     assert s.scroll == 0
+
+
+# ---------- popups stand out ----------
+
+def test_ghost_is_a_grey_pair_with_256_colours_and_plain_dim_without(monkeypatch):
+    monkeypatch.setattr(tui.curses, "color_pair", lambda n: n << 8)
+    s = screen()
+    assert "ghost" in tui.ROLE
+    assert s.attr("ghost") == curses.A_DIM and s.attr("ghost", panel=True) == curses.A_DIM
+    s.colors = True  # eight colours: still only dim
+    assert s.attr("ghost") == curses.A_DIM
+    s.rich = True
+    assert pair(s.attr("ghost")) == 9 and pair(s.attr("ghost", panel=True)) == 19
+
+
+def test_an_open_popup_greys_out_the_screen_and_sits_on_the_panel_shade(scr, tmp_path, monkeypatch):
+    s = talked(tmp_path, monkeypatch)
+    s.colors = s.rich = True
+    s.draw(scr)
+    assert not any(pair(m[3]) == 9 for m in scr.marks)
+    s.submit("/mode")
+    s.draw(scr)
+    ghost = [m for m in scr.marks if pair(m[3]) == 9]
+    assert [m[:3] for m in ghost] == [(y, 0, scr.w) for y in range(scr.h)]  # every row, edge to edge
+    py, px, pw, ph = s.popup["box"]
+    inside = [scr.cells[(y, x)][1] for y in range(py, py + ph) for x in range(px, px + pw)]
+    assert len(inside) == pw * ph and all(10 <= pair(a) <= 19 for a in inside)
+    sel = [m for m in scr.marks if m[3] & curses.A_REVERSE]
+    assert sel == [(py + 1 + s.popup["sel"], px + 2, pw - 4, sel[0][3])]
+    assert scr.marks.index(sel[0]) > scr.marks.index(ghost[-1])  # the highlight is laid over the grey, not under it
+
+
+def test_without_256_colours_the_backdrop_is_dimmed(scr, tmp_path, monkeypatch):
+    s = talked(tmp_path, monkeypatch)
+    s.submit("/help")
+    s.draw(scr)
+    assert [m for m in scr.marks if m[3] == curses.A_DIM] == [(y, 0, scr.w, curses.A_DIM) for y in range(scr.h)]
