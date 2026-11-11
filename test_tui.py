@@ -1,6 +1,9 @@
 import curses
 import io
 
+import pytest
+
+import sprint
 import sprint_tui as tui
 from sprint import Agent
 from sprint_tui import Screen, code, prose, wrap
@@ -1149,3 +1152,89 @@ def test_a_huge_paste_is_trimmed_to_what_the_window_can_take():
     finish(s)
     sent = chat.seen[0][1]["content"]
     assert len(sent) < 10_000 and "row 0 " in sent and "row 1999 " in sent and "cut" in sent
+
+
+# ---------- pastes the terminal does not mark (Windows), and pictures from the clipboard ----------
+
+def test_keys_that_arrive_together_are_a_paste_and_its_line_breaks_do_not_send():
+    s = screen()
+    s.burst(list("first line\rsecond line\r"))
+    assert s.worker is None and "first line second line" in s.buf  # nothing was sent; the text is on the prompt
+
+
+def test_a_big_unmarked_paste_becomes_one_chip():
+    s = screen()
+    s.burst(list("\r".join(f"line {i}" for i in range(40))))
+    assert s.buf == "[Pasted #1 +40 lines] " and s.pastes["[Pasted #1 +40 lines]"].count("\n") == 39
+
+
+def test_a_few_typed_keys_are_still_keys_so_enter_sends():
+    s = screen("ok")
+    s.burst(list("hi") + ["\n"])
+    finish(s)
+    assert s.items[0] == {"t": "user", "text": "hi"}
+
+
+def test_an_unmarked_paste_cannot_answer_an_approval(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    s = screen("```shell\necho 1\n```", "ok", mode="ask")
+    s.submit("go")
+    for _ in range(200):
+        if s.pending:
+            break
+        s.worker.join(0.02)
+    s.burst(list("yes always\ry\r"))
+    assert s.pending and not s.gate.is_set()
+    s.key("n")
+    finish(s)
+
+
+def test_a_marked_paste_arriving_in_one_go_is_still_read_by_its_marks():
+    s = screen()
+    s.burst(list("\x1b[200~one\ntwo\x1b[201~"))
+    assert s.buf == "one two" and s.worker is None
+
+
+class Keys:
+    """a stand-in for the curses window: hands out the keys it was given, then says there are none"""
+    def __init__(self, *keys):
+        self.keys, self.waits = list(keys), []
+
+    def timeout(self, ms):
+        self.waits.append(ms)
+
+    def get_wch(self):
+        if not self.keys:
+            raise tui.curses.error("no input")
+        return self.keys.pop(0)
+
+
+def test_reading_keys_takes_everything_that_is_already_waiting():
+    s = screen()
+    assert s.read_keys(Keys("a", "b", "\r", "c")) == ["a", "b", "\r", "c"]
+    assert s.read_keys(Keys("x")) == ["x"]
+    with pytest.raises(tui.curses.error):
+        s.read_keys(Keys())
+
+
+def test_ctrl_v_puts_the_clipboard_picture_on_the_prompt_as_a_chip(tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG....")
+    monkeypatch.setattr(sprint, "clipboard_image", lambda: str(shot))
+    s = screen()
+    s.key("\x16")
+    assert s.buf == "[Image #1] " and s.chips == {"[Image #1]": str(shot)}
+
+
+def test_alt_v_and_the_paste_command_do_the_same_and_say_so_when_there_is_no_picture(tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG....")
+    monkeypatch.setattr(sprint, "clipboard_image", lambda: str(shot))
+    s = screen()
+    s.take("\x1b")
+    s.take("v")
+    s.submit("/paste")
+    assert s.buf == "[Image #1] [Image #2] " and s.worker is None
+    monkeypatch.setattr(sprint, "clipboard_image", lambda: "")
+    s.key("\x16")
+    assert "no picture" in s.note_text() and s.buf == "[Image #1] [Image #2] "

@@ -1,7 +1,9 @@
 import io
 import json
 import os
+import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -1538,3 +1540,37 @@ def test_old_powershell_gets_its_double_ampersands_translated(monkeypatch):
     assert "cd app; python main.py" in sprint.shell_argv("cd app && python main.py", "t")[-1]
     monkeypatch.setattr(sprint.shutil, "which", lambda name: "pwsh.exe" if name == "pwsh" else None)
     assert "cd app && python main.py" in sprint.shell_argv("cd app && python main.py", "t")[-1]  # the new one understands &&
+
+
+# ---------- a picture on the clipboard ----------
+
+def test_clipboard_image_saves_the_picture_and_returns_its_path(tmp_path, monkeypatch):
+    def fake(argv, **kw):  # the system tool writes the picture where it was told to, or prints it (Linux)
+        target = [p for p in " ".join(argv).replace("'", '"').split('"') if p.endswith(".png")]
+        if not target:
+            return subprocess.CompletedProcess(argv, 0, b"\x89PNG data", b"")
+        if "furl" in " ".join(argv):
+            return subprocess.CompletedProcess(argv, 1, b"", b"no file")
+        Path(target[0]).write_bytes(b"\x89PNG data")
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+    monkeypatch.setattr(sprint.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sprint.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(sprint.subprocess, "run", fake)
+    path = sprint.clipboard_image()
+    assert path.endswith(".png") and Path(path).read_bytes() == b"\x89PNG data"
+
+
+def test_clipboard_image_is_empty_when_there_is_no_picture(tmp_path, monkeypatch):
+    monkeypatch.setattr(sprint.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sprint.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(sprint.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"", b"no image"))
+    assert sprint.clipboard_image() == "" and not list(tmp_path.iterdir())
+
+
+def test_clipboard_image_returns_a_copied_file_as_it_is(tmp_path, monkeypatch):
+    photo = tmp_path / "holiday.jpg"
+    photo.write_bytes(b"jpg")
+    monkeypatch.setattr(sprint.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sprint.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(sprint.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, (str(photo) + "\n").encode(), b""))
+    assert sprint.clipboard_image() == str(photo)

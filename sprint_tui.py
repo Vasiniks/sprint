@@ -27,7 +27,7 @@ COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the 
             ("/theme", "colours"), ("/plan", "split each message into steps first, on or off"),
             ("/race", "one message, two models, side by side"),
             ("/directory", "change the folder sprint works in"),
-            ("/copy", "copy the last answer; /copy code, /copy all"), ("/export", "save the conversation as markdown"),
+            ("/copy", "copy the last answer; /copy code, /copy all"), ("/paste", "attach the picture on the clipboard"), ("/export", "save the conversation as markdown"),
             ("/log", "what happened recently, and where the full log is"),
             ("/compact", "fold the older conversation into a short summary to free room"), ("/sidebar", "show or hide the sidebar, or set its width"),
             ("/history", "show or hide the message list, or set its width"),
@@ -37,6 +37,7 @@ HELP = """In a message
   @path attaches that file (tab completes) · a line starting with ! runs the rest as a command yourself
   paste or drag a file in and it becomes a chip like [Image #1] or [PDF #1] that travels with the message
   a large paste becomes a chip too, like [Pasted #1 +42 lines]; the model gets the full text
+  ctrl+v, alt+v or /paste attaches the picture on the clipboard (a screenshot, or a copied file)
 Keys
   enter send · tab switch mode (ask → edits → auto) · esc interrupt · ctrl+l clear · ctrl+c quit
   ctrl+o expand or collapse all tool windows · click a window to toggle just that one
@@ -100,6 +101,9 @@ THEME_ABOUT = {"default": "your terminal's own colours", "mono": "no colour, onl
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)
 MOUSE = (curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | WHEEL_DOWN
          | getattr(curses, "REPORT_MOUSE_POSITION", 0))
+PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
+# what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
+SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline"}
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 
 CODE = re.compile(
@@ -358,6 +362,8 @@ class Screen:
             self.set_mouse()
             self.tell("mouse on: click a window to toggle it, wheel to scroll" if self.mouse_on else
                       "mouse off: select text as usual; ctrl+o and pgup/pgdn still work")
+        elif cmd == "/paste":
+            self.paste_image()
         elif cmd in self.popups() and not arg:
             self.popups()[cmd]()
         elif (rows := sprint.command(a, line)) is not None:  # a command given its value: apply it and say so
@@ -495,6 +501,8 @@ class Screen:
             self.toggle_all()
         elif k == "\x0c":  # ctrl+l
             self.submit("/clear")
+        elif k == "\x16":  # ctrl+v: the picture on the clipboard (text pastes come from the terminal itself)
+            self.paste_image()
         elif k == "\x19":  # ctrl+y: copy the last answer
             self.tell(flat(sprint.command(self.agent, "/copy")[0]))
         elif k in (curses.KEY_PPAGE, curses.KEY_NPAGE):
@@ -559,9 +567,47 @@ class Screen:
         else:
             self.insert(" ".join(text.split("\n")))
 
+    def paste_image(self):
+        """attach the picture on the clipboard as a chip; terminals paste text only, so this asks the system"""
+        if self.pending or self.popup:
+            return
+        path = sprint.clipboard_image()
+        if path:
+            self.insert(self.chip(path) + " ")
+        else:
+            self.tell("no picture on the clipboard")
+
+    def newline(self):
+        if not (self.pending or self.popup):
+            self.insert("\n")
+
+    def read_keys(self, scr):
+        """the next key, and any others already waiting behind it: a paste arrives as a run of keys"""
+        keys = [scr.get_wch()]
+        scr.timeout(0)
+        try:
+            while len(keys) < 500000:
+                keys.append(scr.get_wch())
+                if len(keys) == 2:
+                    scr.timeout(25)  # more is coming: give the rest of a paste a moment to arrive
+        except curses.error:
+            pass
+        return keys
+
+    def burst(self, keys):
+        """keys that arrived together. Nobody types several at once, so a run of plain text is a paste from a
+        terminal that does not mark pastes (Windows): its line breaks are text, not Enter, and it goes in whole"""
+        text = all(isinstance(k, str) and (k.isprintable() or k in "\r\n\t") for k in keys)
+        if text and len(keys) >= PASTE_KEYS and self.pasting is None and self.esc is None:
+            if not self.pending:  # a paste must never answer an approval
+                self.paste("".join(keys).replace("\r\n", "\n").replace("\r", "\n").strip("\n"))
+            return
+        for k in keys:
+            self.take(k)
+
     def take(self, k):
         """every key comes through here: a terminal paste is collected whole, and a lone escape is held one beat
-        until it is clear it does not start one"""
+        until it is clear it does not start a longer key (a marked paste, alt+v, alt+enter, shift+enter)"""
         if self.pasting is not None:
             if isinstance(k, str):
                 self.pasting += k
@@ -570,10 +616,13 @@ class Screen:
                     self.paste(text)
             return
         if self.esc is not None:
-            if isinstance(k, str) and "[200~".startswith(self.esc + k):
-                self.esc += k
-                if self.esc == "[200~":
-                    self.esc, self.pasting = None, ""
+            held = self.esc + k if isinstance(k, str) else None
+            if held and any(seq.startswith(held) for seq in SEQS):
+                self.esc, what = held, SEQS.get(held)
+                if what:
+                    self.esc = None
+                    self.pasting = "" if what == "paste" else None
+                    self.paste_image() if what == "image" else self.newline() if what == "newline" else None
                 return
             self.idle()
         if k == "\x1b":
@@ -1397,7 +1446,7 @@ class Screen:
             scr.timeout(80 if quick else 160 if now else 1000)
             was = now
             try:
-                self.take(scr.get_wch())
+                self.burst(self.read_keys(scr))
                 fresh = True
             except curses.error:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
