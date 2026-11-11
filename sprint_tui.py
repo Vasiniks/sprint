@@ -719,7 +719,7 @@ class Screen:
         """keys that arrived together. Nobody types several at once, so a run of plain text is a paste from a
         terminal that does not mark pastes (Windows): its line breaks are text, not Enter, and it goes in whole"""
         text = all(isinstance(k, str) and (k.isprintable() or k in "\r\n\t") for k in keys)
-        if text and len(keys) >= PASTE_KEYS and self.pasting is None and self.esc is None:
+        if text and len(keys) >= PASTE_KEYS and not VT:  # where pastes are marked (everywhere else), a run of keys is just keys
             if not self.pending:  # a paste must never answer an approval
                 self.paste("".join(keys).replace("\r\n", "\n").replace("\r", "\n").strip("\n"))
             return
@@ -1339,6 +1339,7 @@ class Screen:
         tokens are going up (the conversation) or coming down (the reply so far), and the effort"""
         a, secs = self.agent, int(time.time() - self.began)
         doing = "waiting for you" if self.pending else self.note or "working"
+        doing = "working" if doing == "thinking" and not a.think else doing  # only reasoning models are thinking
         took = f"{secs // 60}m {secs % 60:02d}s" if secs >= 60 else f"{secs}s"
         flow = f"↓ {kilo(int(self.got / a.cpt))}" if self.down else f"↑ {kilo(a.used())}"
         return [(" ", "")] + dash(time.time() - self.began if self.motion else None) + \

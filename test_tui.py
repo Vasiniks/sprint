@@ -1195,13 +1195,15 @@ def test_a_huge_paste_is_trimmed_to_what_the_window_can_take():
 
 # ---------- pastes the terminal does not mark (Windows), and pictures from the clipboard ----------
 
-def test_keys_that_arrive_together_are_a_paste_and_its_line_breaks_do_not_send():
+def test_keys_that_arrive_together_are_a_paste_and_its_line_breaks_do_not_send(monkeypatch):
+    monkeypatch.setattr(tui, "VT", False)  # as on Windows, where the terminal does not mark a paste
     s = screen()
     s.burst(list("first line\rsecond line\r"))
     assert s.worker is None and "first line second line" in s.buf  # nothing was sent; the text is on the prompt
 
 
-def test_a_big_unmarked_paste_becomes_one_chip():
+def test_a_big_unmarked_paste_becomes_one_chip(monkeypatch):
+    monkeypatch.setattr(tui, "VT", False)  # as on Windows, where the terminal does not mark a paste
     s = screen()
     s.burst(list("\r".join(f"line {i}" for i in range(40))))
     assert s.buf == "[Pasted #1 +40 lines] " and s.pastes["[Pasted #1 +40 lines]"].count("\n") == 39
@@ -1216,6 +1218,7 @@ def test_a_few_typed_keys_are_still_keys_so_enter_sends():
 
 def test_an_unmarked_paste_cannot_answer_an_approval(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tui, "VT", False)
     s = screen("```shell\necho 1\n```", "ok", mode="ask")
     s.submit("go")
     for _ in range(200):
@@ -1277,3 +1280,11 @@ def test_alt_v_and_the_paste_command_do_the_same_and_say_so_when_there_is_no_pic
     monkeypatch.setattr(sprint, "clipboard_image", lambda: "")
     s.key("\x16")
     assert "no picture" in s.note_text() and s.buf == "[Image #1] [Image #2] "
+
+
+def test_where_the_terminal_marks_pastes_a_run_of_keys_is_just_keys(monkeypatch):
+    monkeypatch.setattr(tui, "VT", True)
+    s = screen("ok")
+    s.burst(list("say hello") + ["\n"])  # typed ahead while the screen was busy, or sent by a script
+    finish(s)
+    assert s.items[0] == {"t": "user", "text": "say hello"}

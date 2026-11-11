@@ -489,3 +489,14 @@ def test_the_loop_asks_for_enter_as_a_return_and_for_shift_enter_to_be_reported(
     out = capsys.readouterr().out
     assert "nonl" in called and s.nl is True
     assert ("\033[>4;1m" in out and out.endswith("\033[>4;0m")) if tui.VT else out == ""
+
+
+def test_the_status_says_working_unless_the_model_is_set_to_reason_first(monkeypatch):
+    s = screen()
+    monkeypatch.setattr(s, "busy", lambda: True)
+    s.status("thinking")  # what the agent calls the start of every step
+    assert " working " in flat(s.status_row()) and "thinking" not in flat(s.status_row())
+    s.agent.think = True
+    assert " thinking " in flat(s.status_row())
+    s.status("running make")
+    assert " running make " in flat(s.status_row())
