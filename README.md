@@ -37,7 +37,7 @@ Type a request and press Enter. In the default mode sprint asks before it runs a
 | `sprint update` | get the newest sprint: `git pull` for a checkout, `pip install --upgrade` otherwise |
 | `sprint --version` | the version |
 
-Once a day sprint looks at this repository for a newer version and, if there is one, says so beside the version on the opening screen. The look sends nothing but the request itself; `/config update_check off` stops it.
+Once a day sprint looks at this repository for a newer version and, if there is one, says so beside the version, bottom left on the opening screen. The look sends nothing but the request itself; `/config update_check off` stops it.
 
 ## The screen
 
@@ -71,6 +71,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | you type | what happens |
 |---|---|
 | `@notes.txt` | That file is attached to the message, so the model doesn't have to go and read it. Tab completes the name. |
+| `/model` | A command, typed in full, lights up in the prompt, as do the files you attach and the chips of pasted things. |
 | `!git status` | Shell mode: the prompt's `❯` becomes `!` and the bar takes the shell colour (green in most themes; ask, edits, auto and shell each have their own, in every theme). The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |
@@ -93,7 +94,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | `up`, `down` | recall earlier messages |
 | `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit |
 
-Drag over text in the conversation to copy it. `/mouse` hands the mouse back to the terminal if you prefer its own selection.
+Drag over text to copy it: in the conversation, in the prompt, or in either side panel (a drag stays in the part of the screen it began in). `/mouse` hands the mouse back to the terminal if you prefer its own selection.
 
 ## Modes and permissions
 
@@ -101,9 +102,13 @@ Drag over text in the conversation to copy it. `/mouse` hands the mouse back to 
 |---|---|
 | `ask` (default) | reading files |
 | `edits` | reading, writing and editing files |
-| `auto` | everything |
+| `auto` | everything, except commands that delete |
 
 When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One of the three is highlighted; left and right move it and Enter takes it. "Always" allows just that command or file from then on (a fetch allows the whole site). `/permissions` lists those rules, removes them, and adds patterns such as `shell git status*`.
+
+**Deleting always asks.** A command that deletes (`rm`, `rmdir`, `git clean`, `find -delete`, `Remove-Item`, a one-line script calling `rmtree` and the like) is put to you in every mode, `auto` included, and can be allowed once but never for ever; no allow rule covers it. If a command does remove the folder sprint is working in, sprint steps up to the nearest folder that still exists and tells the model.
+
+**A question nobody answers does not stall the work.** After 20 seconds (`/config ask_timeout N`; `0` waits for ever; any key starts the wait again) the call is set aside, not run: the model is told to carry on without it, and the prompt shows that something is waiting. `/permissions` lists what was set aside; Enter on one allows it once, and it runs the next time the model asks for it. (Plain mode, `--plain`, waits as long as it takes.)
 
 ## Commands
 
@@ -114,13 +119,13 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/model [name]` | Pick an installed model, pull one by name, or search Hugging Face and pick a quantization. |
 | `/race [model message]` | Send one message to two models and compare answers, time and speed. They may read files but change nothing. |
 | `/mode`, `/permissions` | Change the mode; manage the always-allowed list. |
-| `/think` | Let the model reason before answering. |
-| `/showthink` | Show that reasoning in full, in a dashed frame of its own so it never looks like an action. Otherwise it is one line saying the model thought; click one to open it. |
+| `/think` | Let the model reason before answering. Its reasoning shows as it is written: a line that counts the words and shows the newest ones. |
+| `/showthink` | Show that reasoning in full, growing as it arrives, in a dashed frame of its own so it never looks like an action. Otherwise it is one line; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
 | `/plan` | Split each message into a short list of steps first. Off by default. |
 | `/context` | What is filling the context window, as a coloured grid. |
 | `/usage` | Tokens sent, written and spent on reasoning, time, speed and tool calls: for this session, per day for the last two weeks, per model, and for all time. |
-| `/compact` | Fold the older conversation into a short summary. sprint also does this by itself. |
+| `/compact` | Fold the conversation into a short summary, at any time: everything before the latest exchange, or that exchange too when there is nothing older. sprint also does this by itself when room runs out. |
 | `/copy [code\|all]` | Copy the last answer, the last code block, or everything. |
 | `/paste` | Attach the picture on the clipboard. |
 | `/export [file]` | Save the conversation as markdown. |
@@ -140,7 +145,7 @@ Everything sprint keeps lives in `~/.config/sprint/` (`%APPDATA%\sprint` on Wind
 
 | file | |
 |---|---|
-| `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, panel sizes, allow list, recent folders |
+| `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, how long a question waits, panel sizes, allow list, recent folders |
 | `system.md` | your own system prompt, if you wrote one |
 | `sprint.log` | messages, tool calls and errors, so there is something to read when a run goes wrong |
 | `usage.json` | one tally per day of tokens, replies, time and tool calls; what `/usage` adds up |

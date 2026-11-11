@@ -75,7 +75,8 @@ GLINT_EVERY = 4      # seconds from one glint of colour to the next; the wave is
 GLINT_SECONDS = 1.0  # how long a glint takes to cross the word
 GLINT = 14           # columns a glint covers: about three letters
 RUN = 14             # cells of track the working animation sprints along
-LAP = 1.0            # seconds one lap of it takes
+LAP = 1.2            # seconds one lap of it takes
+PACE = 0.4           # how much of its speed the runner has from the first moment; the rest it gathers
 
 
 def wave(x, t):
@@ -106,7 +107,10 @@ def dash(t=None):
     """the working animation as spans: a track of slanted cells along which four filled ones sprint, gathering
     speed, and come round again in the next colour. t in seconds; None holds them still on their mark"""
     lap, into = divmod((t or 0) / LAP, 1)
-    head, hue = 3 + int(into * into * RUN), HUES[int(lap) % 3]  # the square of the time: slow off the line, then fast
+    # It comes in over the left edge and leaves over the right, so one colour is gone as the next sets off. Already
+    # moving as it enters, then faster and faster: a runner that waited on its mark made every change of colour stutter
+    head = 3 if t is None else int((PACE * into + (1 - PACE) * into * into) * (RUN + 3))
+    hue = HUES[int(lap) % 3]
     fade = (hue + ".bold", hue, hue + ".dim", hue + ".dim")  # the head, then a tail that fades behind it
     return [(CELLS[0], fade[head - x]) if 0 <= head - x < 4 else (CELLS[1], "ghost") for x in range(RUN)]
 
@@ -269,7 +273,13 @@ SAMPLE = {f"{name}.{i}": 20 + 7 * n + i for n, name in enumerate(THEMES) for i i
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0)  # 0: a curses with no fifth button; it sends wheel-down as a bare move
 MOVED = getattr(curses, "REPORT_MOUSE_POSITION", 0)
 BUTTON = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED
-MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | (WHEEL_DOWN or 0x200000) | MOVED
+DOWN = WHEEL_DOWN or 0x200000  # the wheel turning down, also where curses has no name for it (a full report says so itself)
+MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | DOWN | MOVED
+# The mouse as the terminal reports it in full ("SGR"), read here because the curses macOS ships cannot: button, column, row,
+# M for a press or a move and m for a release. The older report cannot name a column past 223 and some terminals garble it
+# from 95 on, so a click in the right-hand panel landed on its divider; nor can it tell a release or the wheel for certain
+ATTACHED = re.compile(r"(?P<path>(?<!\S)@\S+|\[[A-Za-z]+ #\d+[^\]\n]*\])")  # in the prompt: a file you attach, or a chip
+SGR_MOUSE, SGR_PART = re.compile(r"\[<(\d+);(\d+);(\d+)([Mm])"), re.compile(r"\[<[\d;]*")
 FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 ROLE["chosen"] = (0, curses.A_REVERSE | curses.A_BOLD)  # the highlighted answer to an approval
@@ -279,7 +289,8 @@ for _hue in HUES:  # each of the three colours also in bold and in dim, for the 
 SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline",
         "[27;5;13~": "newline", "[13;5u": "newline"}  # and ctrl+enter, which the same terminals report the same way
 MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports with its modifiers, whole or still arriving
-DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching"}  # a tool at work
+DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching",
+         "think": "thinking"}  # a tool at work, or the reasoning coming down
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
@@ -466,7 +477,7 @@ def wheel(state, bare):
     wheel-down looks just like the mouse moving, so bare says whether a move with no button in it can be the wheel"""
     if state & curses.BUTTON4_PRESSED:
         return 1
-    return -1 if state & WHEEL_DOWN or (bare and not WHEEL_DOWN and state & MOVED and not state & BUTTON) else 0
+    return -1 if state & DOWN or (bare and not WHEEL_DOWN and state & MOVED and not state & BUTTON) else 0
 
 
 # ---------- the screen: conversation model, keys, drawing ----------
@@ -478,6 +489,7 @@ class Screen:
         self.buf, self.cur, self.past, self.at, self.pick = "", 0, [], 0, 0  # input line, cursor, history, popup row
         self.scroll, self.page, self.hits = 0, 10, {}
         self.pending, self.answer, self.gate = None, None, threading.Event()  # a tool call waiting for approval
+        self.deadline = None  # when the question stops waiting for you and the call is set aside
         self.worker, self.models, self.quit, self.colors = None, None, False, False
         self.mouse_on, self.drag, self.jump, self.geo = True, None, None, (0, 0, 0)  # geo: screen, list and sidebar widths
         self.popup, self.job, self.toast, self.details = None, None, ("", 0.0), {}  # open popup, its background work, brief note
@@ -488,6 +500,7 @@ class Screen:
         self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
+        self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
         self.flash = (None, 0.0)  # the item last jumped to and when, so it can light up and fade
@@ -497,7 +510,7 @@ class Screen:
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
-        agent.show_plan = self.show_plan
+        agent.show_plan, agent.show_thinking = self.show_plan, self.show_thinking
 
     def load_ui(self):
         kept = sprint.load_config()
@@ -575,24 +588,47 @@ class Screen:
         self.items.append({"t": "tool", "call": c, "result": None, "state": "running", "open": False, "began": time.time(),
                            "old": c.tool == "write" and os.path.isfile(os.path.expanduser(c.arg))})
 
+    def show_thinking(self, text, state="running"):
+        """the reasoning so far, each time it has grown: one item from its first words on, and what came down counted once"""
+        it = self.items[-1] if self.items else None
+        if not (it and it["t"] == "tool" and it["call"].tool == "think" and it["state"] == "running"):
+            it = {"t": "tool", "call": sprint.Call("think", "", "", 0, 0), "result": "", "state": "running", "open": False, "old": False}
+            self.items.append(it)
+        self.got, self.down = self.got + len(text) - len(it["result"]), True
+        it["result"], it["state"] = text, state
+
     def show_thought(self, text):
-        self.got, self.down = self.got + len(text), True
-        self.items.append({"t": "tool", "call": sprint.Call("think", "", "", 0, 0), "result": text, "state": "done",
-                           "open": False, "old": False})
+        self.show_thinking(text, "done")  # the reasoning is over: the item it grew in, or a new one if it came all at once
 
     def show_result(self, r):
         it = self.items[-1]
         bad = r.startswith("error") or re.search(r"\[(exit -?\d+|timed out[^\]]*)\]$", r)
-        it["result"], it["state"] = r, "denied" if r.startswith("denied") else "failed" if bad else "done"
+        it["result"], it["state"] = r, "denied" if r.startswith("denied") else "parked" if r.startswith("set aside") else "failed" if bad else "done"
         if "began" in it:
             it["secs"] = time.time() - it["began"]
 
+    def choices(self):
+        """what the question can be answered with, its key first. A deletion can be allowed once, never for ever"""
+        c = self.pending
+        return ("y once", "n no") if c.tool == "shell" and sprint.deletes(c.body) else ("y once", "a always this", "n no")
+
     def ask(self, call):
+        """put a call to you. A question nobody answers must not hold the work up: after the wait (20 seconds unless
+        changed; any key starts it again) the call is set aside, to be allowed later from /permissions, and "later"
+        tells the agent to carry on without it"""
         self.items[-1]["state"] = "waiting"
         self.gate.clear()
         self.pending, self.choice = call, 0  # every question starts on "once"
-        self.gate.wait()
-        self.pending = None
+        limit = self.agent.ask_timeout
+        self.deadline = time.time() + limit if limit else None
+        while not self.gate.wait(0.05):
+            if self.deadline and time.time() >= self.deadline:
+                break
+        answered, self.pending, self.deadline = self.gate.is_set(), None, None
+        if not answered:
+            self.items[-1].pop("began", None)  # it never ran: no time to show for it
+            self.tell(f"set aside, nobody answered: {call.tool} {self.agent.target(call).splitlines()[0][:40]} · /permissions to allow it")
+            return "later"
         self.items[-1]["state"], self.items[-1]["began"] = "running", time.time()  # the wait for you is not the call's time
         return self.answer
 
@@ -724,14 +760,14 @@ class Screen:
 
     def files(self, part):
         """files under this folder whose path contains part, best matches first (for @ completion)"""
-        if time.time() - self.tree[0] > 3 or self.tree[1] != os.getcwd():
+        if time.time() - self.tree[0] > 3 or self.tree[1] != sprint.folder():
             found = []
             for root, dirs, names in os.walk("."):
                 dirs[:] = [] if root.count(os.sep) >= 3 else sorted(d for d in dirs if not d.startswith(".") and d not in SKIP)
                 found += [os.path.join(root, n)[2:] for n in sorted(names) if not n.startswith(".")]
                 if len(found) > 2000:
                     break
-            self.tree = (time.time(), os.getcwd(), found)
+            self.tree = (time.time(), sprint.folder(), found)
         low = part.lower()
         hits = [p for p in self.tree[2] if low in p.lower() and p != part]
         return sorted(hits, key=lambda p: (not os.path.basename(p).lower().startswith(low), p))[:20]
@@ -783,11 +819,14 @@ class Screen:
         if self.leave and k != "\x03":  # any other key takes back the offer to quit, and the note that made it
             self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
         if self.pending:  # only the approval keys count while a call waits
+            can = [text[0] for text in self.choices()]
+            if self.deadline:
+                self.deadline = time.time() + self.agent.ask_timeout  # you are there: the wait starts again
             if k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):  # move the highlighted choice
-                self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % 3
+                self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % len(can)
                 return
-            k = "yan"[self.choice] if k in ("\n", "\r", curses.KEY_ENTER) else k  # enter takes the highlighted one
-            if k in ("y", "Y", "a", "A"):
+            k = can[min(self.choice, len(can) - 1)] if k in ("\n", "\r", curses.KEY_ENTER) else k  # enter takes the highlighted one
+            if isinstance(k, str) and k.lower() in can and k.lower() in "ya":
                 self.answer = "always" if k in ("a", "A") else True
                 self.gate.set()
             elif k in ("n", "N", "\x1b", "\x03"):
@@ -973,7 +1012,11 @@ class Screen:
             return
         if self.esc is not None:
             held = self.esc + k if isinstance(k, str) else None
-            if held and (any(seq.startswith(held) for seq in SEQS) or MODIFIED.fullmatch(held)):
+            click = held and SGR_MOUSE.fullmatch(held)
+            if click:
+                self.esc = None
+                return self.sgr_mouse(int(click[1]), int(click[2]) - 1, int(click[3]) - 1, click[4] == "M")
+            if held and (any(seq.startswith(held) for seq in SEQS) or MODIFIED.fullmatch(held) or SGR_PART.fullmatch(held)):
                 self.esc, what = held, SEQS.get(held)
                 if what or held[-1] in "~u":  # a whole key: one sprint knows, or a modified key it has no use for
                     self.esc = None
@@ -1005,7 +1048,7 @@ class Screen:
             curses.mouseinterval(0)
             curses.mousemask(MOUSE if self.mouse_on else 0)
             if VT:
-                sys.stdout.write("\033[?1002h" if self.mouse_on else "\033[?1002l")  # report drags, not just clicks
+                sys.stdout.write("\033[?1002h\033[?1006h" if self.mouse_on else "\033[?1006l\033[?1002l")  # drags too, and in full
                 sys.stdout.flush()
         except curses.error:
             pass  # no screen yet, or a terminal without a mouse
@@ -1017,12 +1060,29 @@ class Screen:
             return
         self.pointer(x, y, state)
 
-    def pointer(self, x, y, state):
-        """a mouse event: scroll, drag a divider, drag over text to copy it, or click; an open popup takes them all"""
+    def sgr_mouse(self, button, x, y, down):
+        """a mouse event the terminal reported in full: 64 and 65 are the wheel, 32 more is a move, else which button"""
+        if not self.mouse_on:
+            return
+        if button & 64:
+            state = DOWN if button & 1 else curses.BUTTON4_PRESSED
+        elif button & 32:
+            state = MOVED
+        elif button & 3 == 0:
+            state = curses.BUTTON1_PRESSED if down else curses.BUTTON1_RELEASED
+        else:
+            return  # the other buttons do nothing here
+        self.pointer(x, y, state, exact=True)
+
+    def pointer(self, x, y, state, exact=False):
+        """a mouse event: scroll, drag a divider, drag over text to copy it, or click; an open popup takes them all.
+        exact: reported in full, so a move is a move and never a guess at the wheel"""
         if self.popup:
-            return self.popup_pointer(x, y, state)
+            return self.popup_pointer(x, y, state, exact)
         w, lw, side = self.geo
-        turn = wheel(state, VT and not (self.drag or self.select or self.hover))
+        if state & curses.BUTTON1_PRESSED:
+            self.drag = None  # a press starts afresh: a release that never came must not leave a divider stuck to the mouse
+        turn = wheel(state, VT and not exact and not (self.drag or self.select or self.hover))
         if turn:  # the wheel always scrolls, and lets go of a drag whose release never came
             self.drag = self.select = None
             self.scroll = max(0, self.scroll + 3 * turn)
@@ -1038,14 +1098,14 @@ class Screen:
             self.select["b"] = (y, x)
             if state & (curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED):
                 picked, self.select = self.select, None
-                self.click(x, y) if picked["a"] == picked["b"] else self.copy_range(picked["a"], picked["b"])
+                self.click(x, y) if picked["a"] == picked["b"] else self.copy_range(*self.span(picked))
         elif state & curses.BUTTON1_PRESSED:  # (a second press with no release between starts afresh)
             if side and abs(x - (w - side - 1)) <= 1:
                 self.drag = "right"
             elif lw and abs(x - lw) <= 1:
                 self.drag = "left"
             else:
-                self.select = {"a": (y, x), "b": (y, x)}
+                self.select = {"a": (y, x), "b": (y, x), "area": self.area_at(x, y)}
 
     def click(self, x, y):
         w, lw, side = self.geo
@@ -1066,11 +1126,31 @@ class Screen:
         age = time.time() - when
         return 0 if item is None or item is not lit else 2 if age < FLASH[0] else 1 if age < FLASH[1] else 0
 
-    def copy_range(self, a, b):
-        """copy the conversation text between two screen positions, without the tool windows' side borders"""
+    def area_at(self, x, y):
+        """which part of the screen a point is in: the prompt, the conversation, a side panel, or just the screen"""
+        for name, (left, right, top, bottom) in self.areas.items():
+            if left - 2 * (name == "prompt") <= x <= right and top <= y <= bottom:  # the prompt's mark counts as the prompt
+                return name
+        return "main" if y in self.screen else "screen"
+
+    def span(self, sel):
+        """a drag, kept inside the part of the screen it began in -> (where it starts, where it ends, that part's name)"""
+        area = sel.get("area", "main")
+        left, right, top, bottom = self.areas.get(area, (0, 10 ** 6, 0, 10 ** 6))
+        a, b = sorted((max(top, min(bottom, y)), max(left, min(right, x))) for y, x in (sel["a"], sel["b"]))
+        return a, b, area
+
+    def copy_range(self, a, b, area="main"):
+        """copy the text between two screen positions: the conversation's without the tool windows' side borders, any
+        other part's (the prompt, a side panel) as it stands on the screen"""
         (ya, xa), (yb, xb) = sorted([a, b])
         lines = []
         for y in range(ya, yb + 1):
+            if area != "main":
+                left, right = self.areas.get(area, (0, 10 ** 6, 0, 0))[:2]
+                row = self.grid[y] if y < len(self.grid) else []
+                lines.append("".join(row[xa if y == ya else left:(xb if y == yb else right) + 1]).rstrip())
+                continue
             x0, text = self.screen.get(y, (0, ""))
             piece = text[max(0, xa - x0) if y == ya else 0:(xb - x0 + 1) if y == yb else None]
             lines.append(re.sub(r" *[│┆]\s*$", "", re.sub(r"^\s*[│┆] ?", "", piece)).rstrip() if y in self.screen else "")
@@ -1109,7 +1189,7 @@ class Screen:
                 continue
             c, extra = it["call"], ""
             mark = {"done": ("✓", "green"), "failed": ("✗", "red"), "denied": ("✗", "red"),
-                    "waiting": ("?", self.agent.mode)}.get(it["state"], ("…", "warn"))
+                    "waiting": ("?", self.agent.mode), "parked": ("‖", "warn")}.get(it["state"], ("…", "warn"))
             if c.tool == "edit":
                 old, new = split_edit(c.body) or ("", c.body)
                 extra = f" +{len(new.splitlines())} -{len(old.splitlines())}"
@@ -1191,7 +1271,7 @@ class Screen:
             p["sel"] = n
             p["move"](can[n]["v"]) if p["move"] else None
 
-    def popup_pointer(self, x, y, state):
+    def popup_pointer(self, x, y, state, exact=False):
         """the mouse over a popup: pointing at a row highlights it, a click chooses it, the wheel moves the choice by one,
         a press outside closes. A release chooses only on the row its press was on: some terminals send one for a hover"""
         p, last, self.last = self.popup, self.last, (x, y)
@@ -1201,7 +1281,7 @@ class Screen:
         inside = py <= y < py + ph and px <= x < px + pw
         at = p.get("at", {}).get(y - py) if inside else None
         press, held = state & curses.BUTTON1_PRESSED, p.get("held")
-        turn = wheel(state, last == (x, y))  # the mouse reports a move only from a new place: from the same one it is the wheel
+        turn = wheel(state, not exact and last == (x, y))  # the mouse reports a move only from a new place: from the same one it is the wheel
         if turn:
             return self.popup_to(p["sel"] - turn)
         if press and not inside:
@@ -1439,6 +1519,10 @@ class Screen:
             rows += [row(""), row([("always allowed" if a.allow else "nothing is always allowed yet", "dim")])]
             rows += [row([("  " + rule, ""), ("   enter removes", "dim")], ("rule", n)) for n, rule in enumerate(a.allow)]
             rows += [row("  Add a rule…", ("add", 0))]
+            if a.parked:  # calls nobody answered for: enter allows one, for the next time the model asks
+                rows += [row(""), row([("waiting for your say-so", "warn")])]
+                rows += [row([("  " + f"{c.tool} {a.target(c).splitlines()[0][:50]}", ""), ("   enter allows it once", "dim")], ("parked", n))
+                         for n, c in enumerate(a.parked)]
 
         def add(text):
             said = flat((sprint.command(a, "/permissions allow " + text) or [[]])[0])
@@ -1451,6 +1535,10 @@ class Screen:
             elif choice[0] == "rule":
                 sprint.command(a, f"/permissions forget {choice[1] + 1}")
                 self.mode_popup(title)
+            elif choice[0] == "parked":
+                said = a.approve(choice[1])
+                self.mode_popup(title)
+                self.tell(said)
             else:
                 self.pop("Always allow", [row([("a tool and a pattern, for example: shell git status*", "dim")])],
                          field={"label": "rule ›", "text": "", "submit": add}, back=lambda: self.mode_popup(title))
@@ -1459,7 +1547,7 @@ class Screen:
 
     def dir_popup(self, at=None):
         """a small folder browser: enter goes into a folder; nothing changes until you choose to work there"""
-        at = os.path.abspath(at or os.getcwd())
+        at = os.path.abspath(at or sprint.folder())
         tilde = lambda p: p.replace(str(Path.home()), "~", 1)
         try:
             subs = sorted(d.name for d in os.scandir(at) if d.is_dir() and not d.name.startswith("."))
@@ -1565,7 +1653,7 @@ class Screen:
         a = self.agent
         now = {"model": a.model, "url": a.url, "ctx": a.ctx, "steps": a.steps, "mode": a.mode, "think": a.think, "effort": a.effort,
                "sidebar": self.sidebar, "sidebar_w": self.side_w, "history": self.history, "history_w": self.left_w, "motion": self.motion,
-               "theme": self.theme, "peek": self.peek, "timeout": a.timeout, "plan": self.plan}
+               "theme": self.theme, "peek": self.peek, "timeout": a.timeout, "ask_timeout": a.ask_timeout, "plan": self.plan}
         rows = [row([(f"{k:<11}", "dim"), ("on" if v is True else "off" if v is False else str(v), "")], k) for k, v in now.items()]
         self.pop("Settings", rows, pick=lambda k: self.config_pick(k, now[k], list(now).index(k)), sel=sel)
 
@@ -1592,8 +1680,9 @@ class Screen:
         """what sits under the bar: the mode's icon and name, and how to change it; or that this line is a command"""
         if self.buf.startswith("!") and not self.pending:
             return [("!", "shell"), (" shell", "shell"), (" (runs it yourself, no model)", "dim")]
-        mode = self.agent.mode
-        return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")]
+        mode, held = self.agent.mode, len(self.agent.parked)
+        return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")] + \
+            [(f"  {held} waiting for you: /permissions", "warn")] * bool(held)
 
     def version_text(self):
         """this version, and beside it a newer one when there is one to get"""
@@ -1640,11 +1729,15 @@ class Screen:
             c = self.pending
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
             keys = [("  ", "")]
-            for n, text in enumerate(("y once", "a always this", "n no")):  # the highlighted one is what enter takes
+            for n, text in enumerate(self.choices()):  # the highlighted one is what enter takes
                 keys += [(f" {text} ", "chosen")] if n == self.choice else [(" " + text[0], "bold"), (text[1:] + " ", "dim")]
                 keys += [("  ", "")]
+            if self.deadline:  # how long the question still waits before the call is set aside
+                keys += [(f"waits {max(0, round(self.deadline - time.time()))}s   ", "dim")]
             keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
-            return [rule, [(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
+            why = [("  deletes: always asked", "err")] if len(self.choices()) == 2 else []
+            return [rule, clip([(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], max(8, bw - len(flat(why)))) + why,
+                    keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
         typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
         for line in text.split("\n"):
@@ -1655,7 +1748,10 @@ class Screen:
         first = min(at, max(0, len(typed) - 6))  # six lines at most: the last ones, or from the cursor's line down
         typed, self.caret = typed[first:first + 6], (1 + at - first, 2 + col)
         empty = "a command to run yourself" if shell else "Ask anything…  / for commands  ! for shell"
-        body = [[(t, "")] for t in typed] if text else [[(empty, "ghost")]]
+        body = [[(t, "")] if shell else marks(t, ATTACHED) for t in typed] if text else [[(empty, "ghost")]]
+        cmd = re.match(r"/\S+", text) if first == 0 and not shell else None
+        if cmd and cmd.group() in dict(COMMANDS) and typed[0].startswith(cmd.group()):  # a command, once it is one: it lights up
+            body[0] = [(cmd.group(), "kw")] + marks(typed[0][cmd.end():], ATTACHED)
         lead = [("!" if shell else MARK, tone), (" ", "")]
         return [rule] + [(lead if n == 0 else [("  ", "")]) + r for n, r in enumerate(body)] + [foot], typed
 
@@ -1666,10 +1762,12 @@ class Screen:
         c, inner = it["call"], w - 4
         full = it["open"] or (c.tool == "think" and self.showthink)
         if c.tool == "think":  # reasoning is not an action: no status and no time, only how much of it there is
-            said = it["result"] or ""
-            name = [("thought", "dim"), (f"  {len(said.split())} words ", "dim")]
-            if not full:  # folded: one line saying it thought; click it, or /showthink for all
-                return [("", clip([("  ┄ ", "frame")] + name, w), it)]
+            said, live = it["result"] or "", it["state"] == "running"  # live: still being written, and growing on the screen
+            name = [("thinking" if live else "thought", "dim"), (f"  {len(said.split())} words ", "dim")]
+            if not full:  # folded: one line saying it thought, or is thinking and its newest words; click it, or /showthink for all
+                last, room = " ".join(said.split()), max(0, w - len(flat(name)) - 7)
+                last = last if len(last) <= room else "… " + last[len(last) - room:].split(" ", 1)[-1]  # cut between words
+                return [("", clip([("  ┄ ", "frame")] + name + [(" " + last, "thought")] * live, w), it)]
             top = [("┌┄ ", "frame")] + name
             rows = [r for x in said.splitlines() for r in wrap([(x.replace("\t", "    "), "thought")], inner)]  # wrapped, never cut
             return [("", top + [("┄" * (w - len(flat(top)) - 1) + "┐", "frame")], it)] + \
@@ -1715,7 +1813,7 @@ class Screen:
         out = []
         for it in self.items:
             key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
-                   self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"))
+                   self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""))  # a thought grows
             if self.cache.get(id(it), (None,))[0] != key:
                 if it["t"] == "tool":
                     rows = self.window(it, w)
@@ -1774,6 +1872,8 @@ class Screen:
                     scr.addstr(y, x, text[:w - x], self.attr(role, panel))
                 except curses.error:
                     pass  # writing the bottom-right cell raises after drawing it
+                if y < len(self.grid) and 0 <= x and len(self.grid[y]) == w:
+                    self.grid[y][x:x + len(text[:w - x])] = text[:w - x]  # what the screen says there, for a drag to copy
             x += len(text)
 
     def draw(self, scr):
@@ -1785,6 +1885,7 @@ class Screen:
         for y in range(h):  # the whole screen takes the theme's background, a written cell at a time: the curses macOS
             self.put(scr, y, 0, " " * w)  # ships loses the colour of cells cleared to a window background (bkgdset)
         self.hits, self.screen, self.jump_to = {}, {}, None
+        self.grid, self.areas = [[" "] * w for _ in range(h)], {}
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")
             return scr.refresh()
@@ -1806,6 +1907,7 @@ class Screen:
         top = max(1, (h - logo_h - len(rows) - 3) // 2) + logo_h if home else h - 1 - len(rows)
         for i, r in enumerate(rows):
             self.put(scr, top + i, bx, r, width=bw)
+        self.areas["prompt"] = (bx + 2, bx + bw - 1, top + 1, top + len(rows) - 2)  # what you typed, without the mark and the rules
 
         if home:
             for i, row in enumerate(art):
@@ -1813,9 +1915,14 @@ class Screen:
             tips = [("/", "bold"), (" commands   ", "dim"), ("ctrl+c", "bold"), (" quit", "dim")]
             self.put(scr, top + len(rows), bx, self.mode_row(), width=bw - len(flat(tips)) - 2)
             self.put(scr, top + len(rows), bx + bw - len(flat(tips)), tips)
-            version = self.version_text()
-            self.put(scr, h - 1, 2, [(os.getcwd().replace(str(Path.home()), "~", 1), "dim")], width=w - len(flat(version)) - 8)
-            self.put(scr, h - 1, w - 2 - len(flat(version)), version)
+            where = sprint.folder().replace(str(Path.home()), "~", 1)
+            # bottom left: the version, and a newer one when there is one; a passing note takes its place while it lasts
+            version = clip([(self.note_text(), "warn")], max(20, w // 2)) if self.note_text() else self.version_text()
+            self.put(scr, h - 1, 2, version, width=w - 4)
+            room = w - 8 - len(flat(version))
+            if room >= 12:
+                where = where if len(where) <= room else "…" + where[-(room - 1):]  # the end of a long path says more
+                self.put(scr, h - 1, w - 2 - len(where), [(where, "dim")])
         else:
             # conversation
             waiting = self.queue_rows()
@@ -1839,13 +1946,7 @@ class Screen:
                     self.put(scr, 1 + i, x0, spans)
                 if item:
                     self.hits[("main", 1 + i)] = item
-            if self.select:  # the text being dragged over
-                (ya, xa), (yb, xb) = sorted([self.select["a"], self.select["b"]])
-                for y in range(max(1, ya), min(top - 1, yb + 1)):
-                    left = max(x0, xa) if y == ya else x0
-                    right = min(x0 + mw - 1, xb) if y == yb else x0 + mw - 1
-                    if right >= left:
-                        self.mark(scr, y, left, right - left + 1, curses.A_REVERSE)
+            self.areas["main"] = (x0, x0 + mw - 1, 1, max(1, vh))
             self.jump_to = None
             if self.scroll:  # scrolled up: a button over the last row of the conversation takes you back down
                 button = " ↓ jump to bottom "
@@ -1870,6 +1971,7 @@ class Screen:
             self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)
             if side:  # right panel: the context window in small, then what the agent has done
                 x, inner = w - side + 1, side - 3
+                self.areas["side"] = (x, w - 2, 0, h - 1)
                 cells = sprint.context_cells(a, inner * 2)
                 self.put(scr, 1, x, [("Context", "dim"), (f"{used}%".rjust(inner - 7), "")], width=inner)
                 self.put(scr, 2, x, cells[:inner])
@@ -1885,11 +1987,12 @@ class Screen:
                     self.hits[("side", 9 + i)] = item
                 if not log:
                     self.put(scr, 9, x, [("nothing yet", "dim")])
-                self.put(scr, h - 1, x, [(os.getcwd().replace(str(Path.home()), "~", 1), "dim")], width=inner)
+                self.put(scr, h - 1, x, [(sprint.folder().replace(str(Path.home()), "~", 1), "dim")], width=inner)
                 for y in range(h):
                     self.put(scr, y, w - side - 1, [("┃" if self.drag == "right" else "│", a.mode if self.drag == "right" else "frame")])
             if lw:  # left panel: your messages, newest at the bottom
                 rows = self.outline()
+                self.areas["left"] = (1, lw - 1, 0, h - 1)
                 self.put(scr, 1, 1, [("Messages", "dim")], width=lw - 3)
                 for i, (item, title, meta) in enumerate(rows[-max(1, (h - 4) // 2):]):
                     latest = item is rows[-1][0]
@@ -1899,8 +2002,14 @@ class Screen:
                 for y in range(h):
                     self.put(scr, y, lw, [("┃" if self.drag == "left" else "│", a.mode if self.drag == "left" else "frame")])
 
-        if self.note_text() and home:
-            self.put(scr, h - 1, 2, [(self.note_text(), "warn")], width=max(20, w // 2))
+
+        if self.select and not self.popup:  # the text being dragged over, in whichever part of the screen the drag began
+            (ya, xa), (yb, xb), area = self.span(self.select)
+            left, right = self.areas.get(area, (0, w - 1, 0, 0))[:2]
+            for y in range(ya, yb + 1):
+                first, last = xa if y == ya else left, min(w - 1, xb if y == yb else right)
+                if last >= first:
+                    self.mark(scr, y, first, last - first + 1, curses.A_REVERSE)
 
         # completion popup, drawn over whatever is above the input
         every = [] if self.pending or self.popup else self.options()
@@ -1989,7 +2098,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write(("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * (self.exact and not ROUTED)) if VT else "")  # and the palette back
+        sys.stdout.write(("\033[?1003l\033[?1006l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * (self.exact and not ROUTED)) if VT else "")  # and the palette back
         sys.stdout.flush()
 
 

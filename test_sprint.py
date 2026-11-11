@@ -1332,6 +1332,34 @@ def test_compact_command_reports_what_it_freed(tmp_path, monkeypatch):
     assert "folded 6 messages" in said and "tokens" in said and len(a.msgs) == 3
 
 
+def test_compact_works_after_a_single_exchange_by_folding_the_answer_as_well():
+    """it used to say "nothing to compact yet" until there was more than one exchange"""
+    a = agent(scripted("The long answer begins here. " + "And it goes on and on. " * 60, "Short."))
+    a.run("explain how the parser works")
+    before = a.used()
+    said = texts(sprint.command(a, "/compact"))[0]
+    assert "folded 2 messages" in said and a.used() < before - 300  # the system prompt is most of what is left
+    assert [m["role"] for m in a.msgs] == ["system", "user", "assistant"]  # still your turn next, as the model expects
+    summary = a.msgs[1]["content"]
+    assert "you asked: explain how the parser works" in summary and "answered: The long answer begins here." in summary
+    assert a.run("and now?") == "Short."  # and the conversation carries on from the summary
+
+
+def test_compact_leaves_alone_what_a_summary_would_not_shorten_and_says_so():
+    a = agent(scripted("Yes."))
+    a.run("is it done?")
+    before, msgs = a.used(), list(a.msgs)
+    said = texts(sprint.command(a, "/compact"))[0]
+    assert a.msgs == msgs and a.used() == before and "already" in said and f"{before:,}" in said
+    assert "empty" in texts(sprint.command(agent(scripted()), "/compact"))[0]
+
+
+def test_the_automatic_compaction_never_folds_the_exchange_in_hand():
+    a = agent(scripted("The long answer begins here. " + "And it goes on and on. " * 60))
+    a.run("explain how the parser works")
+    assert a.compact() == 0 and len(a.msgs) == 3  # only /compact, asked for by you, folds everything
+
+
 def test_a_plain_reply_that_runs_out_of_room_is_kept_and_continued():
     chat = scripted(["The first half of the", {"cut": True}], " answer.")
     a = agent(chat)

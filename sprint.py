@@ -57,7 +57,7 @@ WINDOWS = os.name == "nt"  # there: PowerShell instead of bash, taskkill instead
 
 def here(cap=400):
     """the folder's files, for the system prompt: tiny models stop claiming they can't see them"""
-    names = ", ".join(sorted(x.name + "/" * x.is_dir() for x in Path(".").iterdir() if not x.name.startswith(".")))
+    names = ", ".join(sorted(x.name + "/" * x.is_dir() for x in Path(folder()).iterdir() if not x.name.startswith(".")))
     return "Files here: " + (names if len(names) <= cap else names[:cap] + " ...") if names else "The folder is empty."
 
 
@@ -182,6 +182,12 @@ def unthink(text):
     return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S)
 
 
+def thoughts(text, live=False):
+    """the reasoning in a reply; while it is still arriving (live), without a last piece that may yet be its closing tag"""
+    text = re.sub(r"</?t?h?i?n?k?$", "", text) if live else text
+    return " ".join(re.findall(r"<think>(.*?)(?:</think>|$)", text, re.S)).strip()
+
+
 # ---------- tools ----------
 
 def clip(s, cap):
@@ -297,12 +303,44 @@ def kill_tree(p):
         pass
 
 
+# Commands that delete. One of these is always put to you first, whatever the mode and whatever is on the allow list:
+# rm and its kin (by any path, but not a file called rm-something, and not docker's --rm), git clean, find -delete,
+# PowerShell's Remove-Item, and the ways a one-line script does it. A false alarm costs a question; a miss, your files
+DELETES = re.compile(r"""(?<![\w.-])(?:[\w./~-]*/)?(?:rm|rmdir|unlink|shred|srm|trash|rimraf)(?![\w.-])
+                         |\bgit\b[^|;&\n]*\bclean\b | \bfind\b[^|;&\n]*\s-delete\b | (?i:\bRemove-Item\b)
+                         |rmtree|\bos\.(?:remove|unlink|rmdir|removedirs)\b|\.unlink\(|\b(?:rm|rmdir|unlink)Sync\b|\bfs\.rm\b""", re.X)
+DELETES_WIN = re.compile(r"(?i)(?<![\w.-])(?:del|erase|rd|ri)(?![\w.-])")  # the classic Windows words, only looked for there
+
+
+def deletes(cmd):
+    """does this shell command delete files?"""
+    return bool(DELETES.search(cmd) or (WINDOWS and DELETES_WIN.search(cmd)))
+
+
+SEEN = [""]  # the last working folder known to exist
+
+
+def folder():
+    """the folder sprint is working in. A command can delete it (a model once removed the one it was running in), and
+    then nothing can even ask where it is: step up to the nearest folder that is still there and carry on from it"""
+    try:
+        SEEN[0] = os.getcwd()
+    except OSError:
+        at = Path(SEEN[0] or Path.home())
+        while not at.is_dir() and at != at.parent:
+            at = at.parent
+        os.chdir(at if at.is_dir() else Path.home())
+        SEEN[0] = os.getcwd()
+    return SEEN[0]
+
+
 def own_group():
     """Popen options that give a command its own process group, so stopping it never stops sprint"""
     return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {"start_new_session": True}
 
 
 def shell(cmd, cap=4000, timeout=60):
+    was = folder()
     fd, tmp = tempfile.mkstemp()
     os.close(fd)
     p = subprocess.Popen(shell_argv(cmd, tmp), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -313,8 +351,10 @@ def shell(cmd, cap=4000, timeout=60):
     try:
         out = p.communicate(timeout=timeout)[0]
         cwd = Path(tmp).read_text(encoding="utf-8-sig", errors="replace").strip()
-        if cwd:
-            os.chdir(cwd)
+        try:
+            os.chdir(cwd) if cwd else None
+        except OSError:
+            pass  # the folder it ended in is gone: it deleted it
     except (subprocess.TimeoutExpired, KeyboardInterrupt) as e:
         kill_tree(p)
         try:
@@ -329,6 +369,8 @@ def shell(cmd, cap=4000, timeout=60):
         os.unlink(tmp)
     if p.returncode and not note:
         note = f"\n[exit {p.returncode}]"
+    if not os.path.isdir(was):  # it deleted the folder it was started in: say so, and where things stand now
+        note += f"\n[the working folder {was} was deleted by this command; now working in {folder()}]"
     return (clip(out.strip(), cap) or "(no output)") + note
 
 
@@ -458,6 +500,8 @@ class Agent:
         self.model, self.url, self.ctx, self.steps, self.mode, self.key = model, url, ctx, steps, mode, key
         self.think, self.effort = think, effort  # ask the model to reason first? how much room and how many steps?
         self.custom, self.timeout = "", 60       # your own system prompt, if any; seconds a shell command may run
+        self.ask_timeout = 20                    # seconds a question waits for you before the call is set aside (0: for ever)
+        self.parked, self.passes = [], []        # calls set aside unanswered; (tool, target) you have since allowed, once
         self.allow = []                          # calls that never ask: "shell git status*", "write notes/*", ...
         self.rate, self.took = 0.0, 0.0          # tokens a second in the last reply, and how long it took
         self.tally, self.unsaved, self.started = blank(), blank(), time.time()  # this session's use; the part not yet on disk
@@ -490,16 +534,21 @@ class Agent:
         self.touched, self.cancel = [], False  # files changed so far; set cancel to stop the current turn
         self.forgotten = 0  # older turns dropped to stay inside the window
 
-    def compact(self):
+    def compact(self, everything=False):
         """fold everything before the latest exchange into one short summary of what was asked and done, so the
-        conversation can go on in less room -> how many messages that saved (0 when there is nothing to fold)"""
+        conversation can go on in less room -> how many messages were folded (0 when there is nothing to fold).
+        everything: fold the latest exchange too. Only /compact asks for that, when there is nothing older to fold;
+        the compaction that happens by itself mid-task must keep what the model is working from"""
         m = self.msgs
         tail = m[-1:] if m[-1]["role"] == "assistant" else m[-2:]
         old = m[1:len(m) - len(tail)]
+        whole = everything and len(m) > 2 and m[-1]["role"] == "assistant" and not m[-1].get("tool_calls")
+        if whole:  # a finished exchange: all of it goes, and a word from the model stands in so it is your turn next
+            old, tail = m[1:], [{"role": "assistant", "content": "Understood."}]
         if len(old) < 2:
             return 0
         asks = [x for x in old if x.get("human")]  # an earlier summary counts: it may be holding the request
-        current = None if tail[-1].get("human") else (asks[-1] if asks else None)
+        current = None if whole or tail[-1].get("human") else (asks[-1] if asks else None)
         lines, doing = [], ""
         for x in old:
             if x.get("summary"):  # an earlier summary: keep its lines, and its request becomes one more thing asked
@@ -529,7 +578,7 @@ class Agent:
         text += f"\n\nThe current request: {request}" if request else ""
         self.msgs = [m[0], {"role": "user", "content": text, "human": True, "summary": True}] + tail
         self.forgotten += len(old) // 2
-        return len(old) - 1
+        return len(old) if whole else len(old) - 1
 
     def count(self, **more):
         """add to this session's tally, and to what the next save writes into the lifetime file"""
@@ -699,7 +748,7 @@ class Agent:
         sent = self.extra() + sum(weigh(m) for m in self.msgs)
         room = self.ctx - self.used() - self.ctx // 16  # a long file needs a long reply: up to half the window,
         self.limit = max(self.max_out, min(self.ctx // 2, room))  # no more, or a rambling model wastes minutes
-        buf, cut, shown, raw, told = "", False, 0, None, False
+        buf, cut, shown, raw, told, mused = "", False, 0, None, False, ""
         keep = ("role", "content", "tool_calls", "tool_name") + (() if self.url.rstrip("/").endswith("/v1") else ("images",))
         stream = self.chat([{k: m[k] for k in keep if k in m} for m in self.msgs])
         began, wrote, secs, asked, self.thread = time.time(), 0, 0.0, 0, threading.get_ident()
@@ -717,9 +766,12 @@ class Agent:
                     wrote, secs = chunk.get("out", wrote), chunk.get("secs", secs)
                     continue
                 buf += chunk
-                text = unthink(buf).lstrip()
+                text, mind = unthink(buf).lstrip(), thoughts(buf, True) if self.think and not told else ""
                 if text and not told:  # the reasoning is over: show it before the answer
-                    told = self.thought(buf)
+                    told = self.thought(buf, mused)
+                elif len(mind) > len(mused):  # still reasoning: show how far it has got
+                    mused = mind
+                    self.show_thinking(mused)
                 peek = parse(text, final=True)  # a tool block is hidden while it streams, then drawn properly
                 vis = text[:peek.start] if peek else text
                 if not peek and vis[vis.rfind("\n") + 1:].lstrip().startswith("`"):
@@ -745,6 +797,8 @@ class Agent:
             getattr(stream, "close", lambda: None)()
             SOCKETS.pop(self.thread, None)
             self.status("")
+            if mused and not told:  # reasoning that was on show is closed however the reply ended: stopped, cut, or nothing after it
+                told = self.thought(buf, mused)
         if self.cancel:
             raise KeyboardInterrupt
         self.took = time.time() - began
@@ -784,11 +838,20 @@ class Agent:
             return f"fetch {u.scheme}://{u.netloc}/*"
         return f"{c.tool} {glob.escape(self.target(c))}"
 
-    def thought(self, buf):
-        text = " ".join(re.findall(r"<think>(.*?)(?:</think>|$)", buf, re.S)).strip()
-        if text and self.think:
+    def thought(self, buf, begun=""):
+        """the reasoning is over: hand it on whole. What was shown as it arrived (begun) is closed even if thinking went off since"""
+        text = thoughts(buf)
+        if text and (self.think or begun):
             self.show_thought(text)
         return True
+
+    def show_thinking(self, text):
+        """the reasoning so far, each time it has grown: a terminal's passing line counts its words and shows the newest,
+        as many as fit on one line. show_thought gets the whole of it once it is over"""
+        words, room = text.split(), max(0, shutil.get_terminal_size().columns - 32)
+        said = " ".join(words)
+        last = said if len(said) <= room else said[len(said) - room:].split(" ", 1)[-1]  # cut between words, not through one
+        self.status(f"thinking · {len(words)} word{'s' * (len(words) != 1)} · {last}")
 
     def show_thought(self, text):
         lines = text.splitlines()
@@ -796,14 +859,33 @@ class Agent:
         self.say("".join(f"  ┊ {x[:160]}\n" for x in lines[:6]), "2")
         self.say(f"  ┊ … +{len(lines) - 6} lines\n" if len(lines) > 6 else "", "2")
 
+    def approve(self, n):
+        """allow, once, the nth call that was set aside: it runs the next time the model asks for it -> what to tell you"""
+        c = self.parked.pop(n)
+        self.passes.append((c.tool, self.target(c)))
+        return f"allowed once: {c.tool} {self.target(c).splitlines()[0][:60]} (it runs when the model next asks for it)"
+
     def do(self, c):
+        key, risky = (c.tool, self.target(c)), c.tool == "shell" and deletes(c.body)  # a deletion is always put to you
         free = c.tool == "read" or self.mode == "auto" or (self.mode == "edits" and c.tool in ("write", "edit")) or self.allowed(c)
-        answer = free or self.ask(c)
-        if answer == "always":  # never ask about this one again
+        if key in self.passes:  # set aside earlier, and since allowed by you
+            self.passes.remove(key)
+            answer = True
+        else:
+            answer = (free and not risky) or self.ask(c)
+        if answer == "later":  # nobody answered in time: the work goes on without it, and it waits in /permissions
+            if not any((p.tool, self.target(p)) == key for p in self.parked):
+                self.parked.append(c)
+            return ("set aside: this needs the user's say-so and they have not answered. It is waiting for them. "
+                    "Carry on with whatever does not depend on it, and do not repeat it now.")
+        if answer == "always" and not risky:  # never ask about this one again (a deletion is never remembered)
             self.allow.append(self.rule_for(c))
             save_config(allow=self.allow)
         elif not answer:
-            return "denied by the user" if sys.stdin.isatty() else "denied: no terminal to ask on (start with -y)"
+            if not sys.stdin.isatty():
+                return "denied: deleting always needs the user's say-so, and there is no terminal to ask on" if risky else \
+                    "denied: no terminal to ask on (start with -y)"
+            return "denied by the user"
         try:
             if c.tool == "shell":
                 return shell(c.body, self.cap, self.timeout)
@@ -880,7 +962,7 @@ class Agent:
     def _run(self, task, chips=None):
         self.msgs[0]["content"] = self.system()  # refresh the file listing
         self.cancel = False
-        log("message", text=task[:300], model=self.model, mode=self.mode, cwd=os.getcwd())
+        log("message", text=task[:300], model=self.model, mode=self.mode, cwd=folder())
         text, images = attach(task, self.cap, chips)
         self.reply(None, text, human=True)
         if images:
@@ -1022,7 +1104,7 @@ CONFIG = config_dir() / "config.json"
 SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "think": bool, "effort": str,
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
             "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool,
-            "update_check": bool}
+            "update_check": bool, "ask_timeout": int}
 SHADE = {"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
          "tool results": "yellow", "reserved for the reply": "dim", "free": "dim"}
 ANSI = {"": "", "dim": "2", "bold": "1", "blue": "34", "magenta": "35", "cyan": "36", "green": "32", "yellow": "33", "red": "31"}
@@ -1055,7 +1137,7 @@ def log(kind, **data):
 
 def transcript(agent):
     """the conversation as markdown"""
-    out = ["# sprint conversation", "", f"{agent.model} · {time.strftime('%Y-%m-%d %H:%M')} · {os.getcwd()}", ""]
+    out = ["# sprint conversation", "", f"{agent.model} · {time.strftime('%Y-%m-%d %H:%M')} · {folder()}", ""]
     for m in agent.msgs[1:]:
         if m["role"] == "user" and m.get("human"):
             out += ["## You", "", m["content"], ""]
@@ -1343,8 +1425,13 @@ def command(agent, line):
             return note("cannot list models: is Ollama running?")
         return note("installed models (switch with /model NAME):", *("  " + n + ("   ← current" if n == agent.model else "") for n in names))
     if cmd == "/compact":
-        before, folded = agent.used(), agent.compact()
-        return note(f"folded {folded} messages into a summary: {before:,} → {agent.used():,} tokens" if folded else "nothing to compact yet")
+        before, kept, forgotten = agent.used(), agent.msgs, agent.forgotten
+        folded = agent.compact() or agent.compact(everything=True)  # nothing older to fold: then the latest exchange as well
+        if folded and agent.used() >= before:  # a summary no shorter than what it replaces: leave the conversation be
+            agent.msgs, agent.forgotten, folded = kept, forgotten, 0
+        return note(f"folded {folded} message{'s' * (folded != 1)} into a summary: {before:,} → {agent.used():,} tokens" if folded else
+                    "nothing to compact: the conversation is empty" if len(agent.msgs) < 2 else
+                    f"already as short as a summary would be: {before:,} tokens")
     if cmd == "/context":
         return context_rows(agent)
     if cmd == "/usage":
@@ -1382,7 +1469,7 @@ def command(agent, line):
                 return note(f"cannot go there: {arg} is not a folder")
             os.chdir(path)  # the file listing in the system prompt follows at the next message
             save_config(recent=([path] + [p for p in load_config().get("recent", []) if p != path])[:6])
-        return note("working in " + os.getcwd().replace(str(Path.home()), "~", 1))
+        return note("working in " + folder().replace(str(Path.home()), "~", 1))
     if cmd in ("/systemprompt", "/system"):
         if arg == "reset":
             agent.custom = ""
@@ -1404,7 +1491,7 @@ def command(agent, line):
                 return note(f"{key} cannot be {value}")
             if key == "effort":
                 agent.set_effort(new)
-            elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout"):
+            elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout"):
                 setattr(agent, key, new)
             agent.tools = agent.tools if key not in ("url", "model") else not agent.url.rstrip("/").endswith("/v1")
             save_config(**{key: new})
@@ -1412,9 +1499,9 @@ def command(agent, line):
         now = {"model": agent.model, "url": agent.url, "ctx": agent.ctx, "steps": agent.steps, "mode": agent.mode,
                "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
                "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
-               "motion": kept.get("motion", True), "timeout": agent.timeout, "theme": kept.get("theme", "sprint"),
+               "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout, "theme": kept.get("theme", "sprint"),
                "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
-        return [[(f"  {k:<10}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
+        return [[(f"  {k:<12}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
             note(f"change with /config KEY VALUE · kept in {str(CONFIG).replace(str(Path.home()), '~', 1)}")
     return None
 
@@ -1480,7 +1567,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.9"  # the same as in pyproject.toml
+VERSION = "0.4.10"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
@@ -1637,6 +1724,7 @@ def main():
                   "auto" if a.yes else a.mode or saved.get("mode", "ask"), os.environ.get("SPRINT_KEY", ""),
                   think=bool(saved.get("think")), effort=effort)
     agent.custom, agent.timeout, agent.allow = load_prompt(), saved.get("timeout", 60), list(saved.get("allow", []))
+    agent.ask_timeout = saved.get("ask_timeout", 20)
     warm(a.url, a.model)
     try:
         ready = serve(a.url, agent.status)
@@ -1663,7 +1751,7 @@ def main():
     except ImportError:
         pass
     say("◆ sprint", "1;35")
-    say(f"  {agent.model} · {os.getcwd().replace(str(Path.home()), '~', 1)}\n", "2")
+    say(f"  {agent.model} · {folder().replace(str(Path.home()), '~', 1)}\n", "2")
     say(f"  {'shift+tab' if hotkey else '/mode'} switches ask → edits → auto · /help for more\n", "2")
     line, draft, gap = " ".join(a.task), "", "\n"
     while True:

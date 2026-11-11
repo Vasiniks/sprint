@@ -132,3 +132,17 @@ def test_the_screen_shows_the_version_and_a_newer_one_beside_it():
     assert flat(s.version_text()) == "sprint " + sprint.VERSION
     s.newer = "9.9.9"
     assert flat(s.version_text()) == f"sprint {sprint.VERSION} · 9.9.9 is out: sprint update" and s.version_text()[-1][1] == "warn"
+
+
+def test_the_version_sits_bottom_left_of_the_opening_screen_and_says_when_a_newer_one_is_out(tmp_path, monkeypatch):
+    from test_popups import Scr
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tui.curses, "curs_set", lambda n: None)
+    monkeypatch.setattr(tui.curses, "color_pair", lambda n: n << 8)
+    s, scr = Screen(Agent(chat=scripted(), out=io.StringIO())), Scr(30, 120)
+    s.draw(scr)
+    bottom = scr.text(29)
+    assert bottom.startswith("  sprint " + sprint.VERSION + " ") and bottom.rstrip().endswith(tmp_path.name)  # the folder moved right
+    s.newer = "9.9.9"
+    s.draw(scr)
+    assert scr.text(29).startswith(f"  sprint {sprint.VERSION} · 9.9.9 is out: sprint update")

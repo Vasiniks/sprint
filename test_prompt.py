@@ -1,5 +1,6 @@
 """the prompt bar: its rules, the multi-line prompt, the queue, and the status line with its sprint"""
 import curses
+import itertools
 import io
 import threading
 
@@ -40,7 +41,7 @@ def test_the_working_animation_held_still_is_four_filled_cells_at_the_start_of_a
 
 
 def test_the_runner_sprints_left_to_right_faster_and_faster():
-    frames = [tui.dash(tui.LAP * f) for f in (0, 0.3, 0.6, 0.9)]
+    frames = [tui.dash(tui.LAP * f) for f in (0, 0.25, 0.5, 0.75)]  # while all of it is still on the track
     assert all(len(f) == tui.RUN for f in frames)
     heads = [max(x for x, (cell, role) in enumerate(f) if role != "ghost") for f in frames]
     steps = [b - a for a, b in zip(heads, heads[1:])]
@@ -48,6 +49,25 @@ def test_the_runner_sprints_left_to_right_faster_and_faster():
     tail = [role for cell, role in frames[2][heads[2] - 3:heads[2] + 1]]
     assert tail == ["yellow.dim", "yellow.dim", "yellow", "yellow.bold"]  # it fades out behind the head
     assert tui.dash(0.4) == tui.dash(0.4)  # nothing but the time decides the picture
+
+
+def lit(frame):
+    return [x for x, (cell, role) in enumerate(frame) if role != "ghost"]
+
+
+def test_the_runner_never_stands_still_not_even_as_a_colour_starts():
+    """it used to wait on its mark for a quarter of every lap, which read as a stutter each time the colour changed"""
+    frames = [lit(tui.dash(n * 0.08)) for n in range(int(3 * tui.LAP / 0.08))]  # three laps, a frame every 80 ms as drawn
+    longest = max(len(list(same)) for _, same in itertools.groupby(frames))
+    assert longest <= 2
+
+
+def test_the_runner_comes_in_from_the_left_edge_and_leaves_off_the_right():
+    """so one colour is all but gone when the next sets off: no four cells jumping back to the start"""
+    assert lit(tui.dash(tui.LAP * 0.001)) == [0]  # only its head is on the track yet
+    assert lit(tui.dash(tui.LAP * 0.999)) in ([], [tui.RUN - 1])  # and at the end only its tail, if anything
+    last = lit(tui.dash(tui.LAP * 0.97))
+    assert last and last[-1] == tui.RUN - 1 and len(last) < 4  # on its way out
 
 
 def test_each_lap_is_the_next_of_yellow_cyan_and_magenta():
@@ -726,3 +746,28 @@ def test_on_the_opening_screen_the_mode_is_under_the_bar_too(monkeypatch):
     bar = next(i for i, r in enumerate(rows) if tui.MARK + " Ask anything" in r)
     assert rows[bar + 2].strip().startswith(f"{tui.MODE_ICON['ask']} ask (tab to cycle)") and "ctrl+c" in rows[bar + 2]
     assert rows[bar + 2].index(tui.MODE_ICON["ask"]) == rows[bar].index(tui.MARK)  # in line with the prompt
+
+
+# ---------- what you type is coloured as it is understood ----------
+
+def bar(s, text, w=60):
+    s.buf, s.cur = text, len(text)
+    return s.input_rows(w)[0][1:-1]
+
+
+def test_a_command_you_have_typed_in_full_lights_up_in_the_prompt():
+    s = screen()
+    row = bar(s, "/model qwen")[0]
+    assert flat(row) == f"{tui.MARK} /model qwen" and ("/model", "kw") in row and (" qwen", "") in row
+    assert ("/theme", "kw") in bar(s, "/theme")[0]
+    for text in ("/mod", "/modelx", "see /model", " /model"):  # not a command yet, not one at all, or not at the start
+        assert all(role != "kw" for _, role in bar(s, text)[0]), text
+    assert all(role != "kw" for row in bar(s, "first\n/model") for _, role in row)  # only the very start of the message
+
+
+def test_attached_files_and_chips_stand_out_in_the_prompt_too():
+    s = screen()
+    row = bar(s, "look at @src/app.py and [Image #1] please", w=80)[0]
+    assert ("@src/app.py", "path") in row and ("[Image #1]", "path") in row and (" please", "") in row
+    assert all(role == "" for _, role in bar(s, "mail me@example.com")[0][2:])  # an @ inside a word attaches nothing
+    assert all(role != "path" and role != "kw" for row in bar(s, "!echo @x /model") for _, role in row)  # a shell line is left alone
