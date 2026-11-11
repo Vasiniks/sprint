@@ -468,3 +468,60 @@ def test_the_theme_popup_shows_each_theme_in_its_own_colours(scr):
     assert len(swatches) == 12 and swatches[0] >= lit[0][1] + lit[0][2]
     name = list(tui.THEMES)[4]
     assert [pair(scr.cells[(py + 5, x)][1]) for x in swatches[::2]] == [tui.SAMPLE[f"{name}.{i}"] for i in range(1, 7)]
+
+
+# ---------- the flash on a jump ----------
+
+def test_clicking_an_activity_line_flashes_that_window_then_fades(scr, tmp_path, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(tui.time, "time", lambda: now[0])
+    s = talked(tmp_path, monkeypatch)
+    s.colors = s.rich = True
+    tool = s.items[1]
+    s.draw(scr)
+    w, lw, side = s.geo
+    y = next(y for (where, y), item in s.hits.items() if where == "side" and item is tool)
+    assert not s.active()
+    s.pointer(w - 5, y, PRESS)
+    s.pointer(w - 5, y, RELEASE)
+    assert s.flash == (tool, 1000.0) and s.active()
+
+    def look():
+        s.draw(scr)
+        rows = sorted(y for (where, y), item in s.hits.items() if where == "main" and item is tool)
+        reverse = sorted(m[0] for m in scr.marks if m[3] & curses.A_REVERSE)
+        band = all(10 <= pair(scr.cells[(y, lw + 3)][1]) <= 19 for y in rows)
+        return rows, reverse, band
+
+    now[0] = 1000.2
+    rows, reverse, band = look()
+    assert len(rows) >= 3 and reverse == rows  # the whole window, and nothing else
+    now[0] = 1000.9
+    rows, reverse, band = look()
+    assert reverse == [] and band and s.active()  # fading: the shaded band
+    assert pair(scr.cells[(scr.find("all done"), lw + 4)][1]) == 0  # the rest is as it was
+    now[0] = 1001.5
+    rows, reverse, band = look()
+    assert reverse == [] and not band and not s.active()
+
+
+def test_clicking_a_message_flashes_it_too_and_it_keeps_its_band(scr, tmp_path, monkeypatch):
+    now = [50.0]
+    monkeypatch.setattr(tui.time, "time", lambda: now[0])
+    s = talked(tmp_path, monkeypatch)
+    s.draw(scr)  # no 256 colours here: a message is in reverse video anyway, and the flash adds the tool's
+    user, tool = s.items[0], s.items[1]
+    s.pointer(5, 3, PRESS)
+    s.pointer(5, 3, RELEASE)
+    assert s.flash == (user, 50.0)
+    s.draw(scr)
+    mine = sorted(y for (where, y), item in s.hits.items() if where == "main" and item is user)
+    assert sorted(m[0] for m in scr.marks if m[3] & curses.A_REVERSE) == mine
+    s.flash = (tool, 50.0)
+    now[0] = 50.9
+    s.draw(scr)
+    lit = {m[0] for m in scr.marks if m[3] & curses.A_REVERSE}
+    assert {y for (where, y), item in s.hits.items() if where == "main"} == lit  # without a shade to fade to, reverse stays
+    now[0] = 52.0
+    s.draw(scr)
+    assert sorted(m[0] for m in scr.marks if m[3] & curses.A_REVERSE) == mine

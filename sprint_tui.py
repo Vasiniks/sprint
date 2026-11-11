@@ -124,6 +124,7 @@ WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0)  # 0: a curses with no fifth 
 MOVED = getattr(curses, "REPORT_MOUSE_POSITION", 0)
 BUTTON = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON1_CLICKED
 MOUSE = curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESSED | (WHEEL_DOWN or 0x200000) | MOVED
+FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 # what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
 SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline"}
@@ -254,6 +255,7 @@ class Screen:
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
+        self.flash = (None, 0.0)  # the item last jumped to and when, so it can light up and fade
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -360,7 +362,8 @@ class Screen:
         """is anything on the screen changing by itself? When nothing is, the loop sleeps instead of redrawing."""
         wave = not self.items and self.motion
         return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave
-                    or (self.job and self.job.is_alive()) or self.esc is not None or self.pasting is not None)
+                    or (self.job and self.job.is_alive()) or self.esc is not None or self.pasting is not None
+                    or self.glow(self.flash[0]))
 
     def busy(self):
         return bool(self.worker and self.worker.is_alive())
@@ -743,7 +746,14 @@ class Screen:
         if item and where == "main" and item["t"] == "tool":
             item["open"] = not item["open"]
         elif item and where != "main":
-            self.jump = item
+            self.jump, self.flash = item, (item, time.time())
+
+    def glow(self, item):
+        """how brightly an item is lit after you jumped to it: 2 at first (reverse video), 1 as it fades (the shaded
+        band), 0 once that is over, and for every other item"""
+        lit, when = self.flash
+        age = time.time() - when
+        return 0 if item is None or item is not lit else 2 if age < FLASH[0] else 1 if age < FLASH[1] else 0
 
     def copy_range(self, a, b):
         """copy the conversation text between two screen positions, without the tool windows' side borders"""
@@ -1415,9 +1425,10 @@ class Screen:
             first = max(0, len(lines) - vh - self.scroll)
             for i, (kind, spans, item) in enumerate(lines[first:first + vh]):
                 self.screen[1 + i] = (x0, flat(spans))
-                if kind == "user":  # your own messages stand out: a shaded band, or reverse video without 256 colours
+                glow = self.glow(item)  # what you just jumped to flashes in reverse video, then fades through the band
+                if kind == "user" or glow:  # your own messages stand out: a shaded band, or reverse video without 256 colours
                     self.put(scr, 1 + i, x0, spans, panel=True, width=mw)
-                    if not self.rich:
+                    if glow > 1 or not self.rich:
                         self.mark(scr, 1 + i, x0, mw, curses.A_REVERSE)
                 else:
                     self.put(scr, 1 + i, x0, spans)
