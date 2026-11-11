@@ -105,6 +105,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
 | `/plan` | Split each message into a short list of steps first. Off by default. |
 | `/context` | What is filling the context window, as a coloured grid. |
+| `/usage` | Tokens sent, written and spent on reasoning, time, speed and tool calls: for this session, per day for the last two weeks, per model, and for all time. |
 | `/compact` | Fold the older conversation into a short summary. sprint also does this by itself. |
 | `/copy [code\|all]` | Copy the last answer, the last code block, or everything. |
 | `/paste` | Attach the picture on the clipboard. |
@@ -127,6 +128,7 @@ Everything sprint keeps lives in `~/.config/sprint/` (`%APPDATA%\sprint` on Wind
 | `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, panel sizes, allow list, recent folders |
 | `system.md` | your own system prompt, if you wrote one |
 | `sprint.log` | messages, tool calls and errors, so there is something to read when a run goes wrong |
+| `usage.json` | one tally per day of tokens, replies, time and tool calls; what `/usage` adds up |
 
 Command-line options override the environment, which overrides saved settings.
 
@@ -196,7 +198,7 @@ python -m pytest
 |---|---|
 | `sprint.py` | the agent: tools, context handling, model backends, the plain session |
 | `sprint_tui.py` | the full-screen interface (stdlib `curses`) |
-| `test_sprint.py`, `test_tui.py`, `test_prompt.py`, `test_popups.py`, `test_showthink.py` | tests; they use a scripted model and never touch your settings |
+| `test_sprint.py`, `test_tui.py`, `test_prompt.py`, `test_popups.py`, `test_showthink.py`, `test_usage.py` | tests; they use a scripted model and never touch your settings |
 | `test_windows.py` | the Windows-only paths, run on Windows in CI and skipped elsewhere |
 | `assets/logo.svg` | the logo as the opening screen, animated; drawn from the same pixel font as the app |
 

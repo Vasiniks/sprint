@@ -23,7 +23,7 @@ COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the 
             ("/model", "switch model"), ("/mode", "ask · edits · auto"),
             ("/think", "let the model reason first, on or off"), ("/showthink", "show the model's reasoning in full, or just that it thought"),
             ("/effort", "low · medium · high"),
-            ("/context", "what is filling the context window"), ("/permissions", "what runs without asking"),
+            ("/context", "what is filling the context window"), ("/usage", "tokens, time and tool calls: this session and all time"), ("/permissions", "what runs without asking"),
             ("/config", "see or change saved settings"), ("/systemprompt", "edit what the model is told at the start"),
             ("/theme", "colours"), ("/plan", "split each message into steps first, on or off"),
             ("/race", "one message, two models, side by side"),
@@ -48,7 +48,7 @@ Keys
   the mouse wheel scrolls, and so do pgup / pgdn
 Commands
   /clear  /model [name]  /mode [ask|edits|auto]  /permissions  /think  /showthink  /effort [low|medium|high]
-  /context  /config [key value]  /systemprompt  /theme  /sidebar [width]  /history [width]  /tools  /mouse
+  /context  /usage  /config [key value]  /systemprompt  /theme  /sidebar [width]  /history [width]  /tools  /mouse
   /plan  /race [model message]  /directory [path]  /copy [code|all]  /export [file]  /log  /compact  /help  /exit
 Copy and paste
   drag over text in the conversation to copy it · ctrl+y or /copy copies the last answer
@@ -1071,6 +1071,7 @@ class Screen:
         return {"/systemprompt": self.prompt_popup, "/system": self.prompt_popup, "/theme": self.theme_popup,
                 "/directory": self.dir_popup, "/dir": self.dir_popup, "/cd": self.dir_popup,
                 "/log": lambda: self.pop("Log", [row(list(r)) for r in sprint.command(self.agent, "/log")]),
+                "/usage": lambda: self.pop("Usage", [row(list(r), n) for n, r in enumerate(sprint.command(self.agent, "/usage"))]),
                 "/race": self.race_popup, "/model": self.model_popup, "/mode": self.mode_popup,
                 "/permissions": lambda: self.mode_popup("Permissions"),
                 "/effort": self.effort_popup, "/context": self.context_popup, "/config": self.config_popup, "/help": self.help_popup}
