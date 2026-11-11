@@ -119,7 +119,12 @@ ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame
 def theme(hues, bg, fg, panel, ghost):
     """a theme, as exact colours: what red, green, yellow, blue, magenta and cyan become, the background of the whole
     screen, plain text, the shade behind your messages and popups, and greyed-out text"""
-    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost}
+    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost, "band": blend(panel, fg, 0.12)}
+
+
+def blend(a, b, part):
+    """the colour that far along the way from a to b: the band behind your own messages is the panel, a step nearer the text"""
+    return "#" + "".join(f"{round(int(a[i:i + 2], 16) + (int(b[i:i + 2], 16) - int(a[i:i + 2], 16)) * part):02x}" for i in (1, 3, 5))
 
 
 PALETTE = {16 + 36 * r + 6 * g + b: tuple((0, 95, 135, 175, 215, 255)[v] for v in (r, g, b))
@@ -397,7 +402,8 @@ class Screen:
 
     def paint(self):
         """(re)define the colour pairs for the current theme: 1-7 its hues on its background, 8 its plain text, 9 ghost
-        text, 10-19 the same on the panel shade. With fewer than 256 colours the screen stays the terminal's own"""
+        text, 10-19 the same on the panel shade, 230-237 on the band behind your own messages. With fewer than 256
+        colours the screen stays the terminal's own"""
         self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
         try:
             if not curses.has_colors():
@@ -423,6 +429,8 @@ class Screen:
             curses.init_pair(8, fg, bg)
             curses.init_pair(9, ink(t.get("ghost", 244)), bg)
             curses.init_pair(19, ink(t.get("ghost", 244)), panel)
+            for i in range(8):
+                curses.init_pair(230 + i, ink(t.get(i, i)) if i else fg, ink(t.get("band", 238)))
             self.base = 8 if "bg" in t else 0
             for n, other in enumerate(THEMES.values()):
                 for i in range(7):
@@ -1562,8 +1570,9 @@ class Screen:
                     rows = self.window(it, w)
                 elif it["t"] == "user":
                     mine = it["text"].startswith("!")  # a command you ran yourself keeps its mark
-                    rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 2)]
-                    rows = [("user", ([("!" if mine else MARK, "yellow" if mine else self.agent.mode), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
+                    tone = "yellow" if mine else self.agent.mode  # a bar down the side, then the mark, then what you said
+                    rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 4)]
+                    rows = [("user", [("▌", tone), (" ", "")] + ([("!" if mine else MARK, tone), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
                 elif it["t"] == "plan":  # plan mode's checklist: done, doing now, still to do
                     at, me = it["at"], self.agent.mode
@@ -1590,7 +1599,8 @@ class Screen:
         colour, extra = ROLE.get(role, (0, 0))
         if role == "ghost" and not self.rich:
             return curses.A_DIM
-        return (curses.color_pair((10 if panel else 0) + colour or self.base) if self.colors else 0) | extra
+        on = 230 if panel == 2 and self.rich else 10 if panel else 0  # 2: the band behind your own messages
+        return (curses.color_pair(on + colour or self.base) if self.colors else 0) | extra
 
     def mark(self, scr, y, x, n, attr):
         """restyle n cells that are already drawn (a highlight); skipped where the curses at hand cannot"""
@@ -1667,7 +1677,7 @@ class Screen:
                 self.screen[1 + i] = (x0, flat(spans))
                 glow = self.glow(item)  # what you just jumped to flashes in reverse video, then fades through the band
                 if kind == "user" or glow:  # your own messages stand out: a shaded band, or reverse video without 256 colours
-                    self.put(scr, 1 + i, x0, spans, panel=True, width=mw)
+                    self.put(scr, 1 + i, x0, spans, panel=2 if kind == "user" else True, width=mw)
                     if glow > 1 or not self.rich:
                         self.mark(scr, 1 + i, x0, mw, curses.A_REVERSE)
                 else:

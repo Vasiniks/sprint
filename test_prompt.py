@@ -573,7 +573,7 @@ def test_a_command_you_ran_yourself_keeps_its_mark_in_the_conversation(tmp_path,
     s.submit("!echo hi")
     finish(s)
     first = next(spans for kind, spans, item in s.lines(60) if kind == "user")
-    assert flat(first) == "! echo hi" and first[0] == ("!", "yellow")
+    assert flat(first) == "▌ ! echo hi" and first[0] == ("▌", "yellow") and ("!", "yellow") in first
 
 
 # ---------- answering an approval: a highlighted choice, arrows to move it, enter to take it ----------

@@ -585,3 +585,35 @@ def test_clicking_a_message_flashes_it_too_and_it_keeps_its_band(scr, tmp_path, 
     now[0] = 52.0
     s.draw(scr)
     assert sorted(m[0] for m in scr.marks if m[3] & curses.A_REVERSE) == mine
+
+
+# ---------- your own messages: a brighter band and a bar down the side ----------
+
+def test_every_theme_has_a_band_brighter_than_its_panel_for_your_messages():
+    for name, t in tui.THEMES.items():
+        if "bg" in t:
+            lum = lambda c: sum(int(c[i:i + 2], 16) for i in (1, 3, 5))
+            assert t["band"] not in (t["bg"], t["panel"]), name
+            assert abs(lum(t["band"]) - lum(t["bg"])) > abs(lum(t["panel"]) - lum(t["bg"])), name  # further from the screen than the panel is
+            assert t["band"] in tui.SLOT
+
+
+def test_the_band_has_its_own_pairs_and_roles_drawn_on_it_use_them(monkeypatch):
+    s, pairs = painted(monkeypatch, "sprint")
+    t = tui.THEMES["sprint"]
+    assert pairs[230] == (s.ink(t["fg"]), s.ink(t["band"])) and pairs[236] == (s.ink(t[6]), s.ink(t["band"]))
+    monkeypatch.setattr(tui.curses, "color_pair", lambda n: n << 8)
+    s.colors = s.rich = True
+    assert pair(s.attr("bold", panel=2)) == 230 and pair(s.attr("ask", panel=2)) == 236 and pair(s.attr("ask", panel=True)) == 16
+
+
+def test_your_message_leads_with_a_bar_in_the_mode_colour_and_is_drawn_on_the_band(scr, tmp_path, monkeypatch):
+    s = talked(tmp_path, monkeypatch)
+    kind, spans, item = s.lines(60)[0]
+    assert kind == "user" and spans[0] == ("▌", s.agent.mode) and flat(spans).startswith("▌ " + tui.MARK + " ")
+    monkeypatch.setattr(tui.curses, "color_pair", lambda n: n << 8)
+    s.colors = s.rich = True
+    s.draw(scr)
+    row, left = next((y, x) for (y, x), (ch, attr) in scr.cells.items() if ch == "▌")
+    on = {pair(attr) for (y, x), (ch, attr) in scr.cells.items() if y == row and left <= x < left + 12}  # the message, not the panels beside it
+    assert on and all(230 <= n <= 237 for n in on)  # every cell of it sits on the band

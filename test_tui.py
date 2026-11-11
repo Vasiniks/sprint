@@ -345,7 +345,7 @@ def test_user_message_leads_with_the_trail_and_prose_is_indented():
     s.submit("hello there")
     finish(s)
     lines = s.lines(40)
-    assert lines[0][0] == "user" and flat(lines[0][1]) == tui.MARK + " hello there"
+    assert lines[0][0] == "user" and flat(lines[0][1]) == "▌ " + tui.MARK + " hello there"
     assert "┃" not in "".join(flat(spans) for _, spans, _ in lines)
     assert any(flat(spans) == "  Sure thing." for _, spans, _ in lines)
 
