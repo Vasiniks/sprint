@@ -4,6 +4,17 @@ A terminal coding agent for small local models. Two Python files, no dependencie
 
 <p align="center"><img src="assets/logo.svg" alt="sprint: the opening screen, with the logo above the prompt" width="760"></p>
 
+<p align="center">
+  <a href="https://sprintai.pages.dev"><img src="https://img.shields.io/badge/website-sprintai.pages.dev-ffe100?labelColor=0b0c0e&style=flat-square" alt="website"></a>
+  <a href="https://github.com/Vasiniks/sprint/releases/latest"><img src="https://img.shields.io/github/v/release/Vasiniks/sprint?color=19c2ff&labelColor=0b0c0e&style=flat-square" alt="latest release"></a>
+  <a href="https://github.com/Vasiniks/sprint/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Vasiniks/sprint/ci.yml?branch=main&label=tests&labelColor=0b0c0e&style=flat-square" alt="tests"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-ff3d9a?labelColor=0b0c0e&style=flat-square" alt="python 3.9 or newer"></a>
+  <a href="#start"><img src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-5b9dff?labelColor=0b0c0e&style=flat-square" alt="runs on macOS, Linux and Windows"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Vasiniks/sprint?color=f2f2f2&labelColor=0b0c0e&style=flat-square" alt="MIT licence"></a>
+</p>
+
+<p align="center"><a href="https://sprintai.pages.dev"><b>sprintai.pages.dev</b></a>: the website, with a tour of what it looks like</p>
+
 Small models are fast and private, but they lose track of long conversations, garble tool calls and go in circles. sprint is built around those failings: it keeps the context small, checks every tool call, stops loops, and shows you each action before it runs.
 
 ## Start
