@@ -106,11 +106,11 @@ open(f"{OUT}/favicon.svg", "w").write(
     + streak((64 - MARK_W) / 2, 12) + "</svg>\n")  # 12 down, not 10: at 16 px every line then covers three whole pixels
 
 # logo.svg: the app's opening screen as a card, for the README and anywhere else that wants the logo on dark.
-# Under the word, the prompt: a rule with the model on the right, the trail and ">" and the placeholder, a rule carrying the mode
+# Under the word, the prompt: a rule with the model on the right, ">" and the placeholder, a rule carrying the mode
 CW = 8.4  # one character at 14px
 BOLD = ' font-weight="700"'
 GREY, FRAME = "#8a8a8a", "#5a5a5a"
-model, hint = "Qwen3.5-0.8B:Q4_K_M · 0%", "Ask anything…  / for commands"
+model, hint = "Qwen3.5-0.8B:Q4_K_M · 0%", "Ask anything…  / for commands  ! for shell"
 tips = [("tab", W), (" mode   ", GREY), ("/", W), (" commands   ", GREY), ("ctrl+c", W), (" quit", GREY)]
 tx = 380 - sum(len(t) for t, _ in tips) * CW / 2
 tip_text = ""
@@ -127,11 +127,9 @@ card = (
     f'<g transform="translate(90,52)">{letters()}</g>'
     f'<line x1="56" y1="212" x2="704" y2="212" stroke="{FRAME}"/>'
     f'<rect x="{mx - CW:.1f}" y="202" width="{(len(model) + 2) * CW:.1f}" height="20" fill="{K}"/>{cells(model, f"{mx:.1f}", 217, GREY)}'
-    f'<g fill="{C}"><rect x="56" y="232" width="{CW}" height="17" opacity=".3"/><rect x="{56 + CW}" y="232" width="{CW}" height="17" opacity=".52"/>'
-    f'<rect x="{56 + 2 * CW}" y="232" width="{CW}" height="17" opacity=".76"/><rect x="{56 + 3 * CW}" y="232" width="{CW}" height="17"/></g>'
-    f'{cells(">", f"{56 + 5 * CW:.1f}", 245, C, weight=BOLD)}'
-    f'<rect class="caret" x="{56 + 7 * CW:.1f}" y="232" width="{CW}" height="17" fill="{W}"/>'
-    f'{cells(hint, f"{56 + 8.5 * CW:.1f}", 245, GREY)}'
+    f'{cells(">", "56", 245, C, weight=BOLD)}'
+    f'<rect class="caret" x="{56 + 2 * CW:.1f}" y="232" width="{CW}" height="17" fill="{W}"/>'
+    f'{cells(hint, f"{56 + 3.5 * CW:.1f}", 245, GREY)}'
     f'<line x1="56" y1="270" x2="704" y2="270" stroke="{FRAME}"/>'
     f'<rect x="{56 + 2 * CW:.1f}" y="260" width="{5 * CW:.1f}" height="20" fill="{K}"/>{cells("ask", f"{56 + 3 * CW:.1f}", 275, C, weight=BOLD)}'
     f"{tip_text}</svg>\n")

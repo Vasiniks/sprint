@@ -94,8 +94,8 @@ section > h2 + p { margin-top: 14px; }
 .status span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .lap { --cells: 14; flex: none; position: relative; width: calc(var(--cells) * .6em); height: 1.05em; margin: 0 .3em; background: #242424; overflow: hidden; transform: skewX(-26.565deg); color: var(--y); }
 .lap b { position: absolute; inset: 0 auto 0 0; display: flex; transform: translateX(3em); }
-.lap i, .trail i { width: .6em; height: 1.05em; background: currentColor; }
-.lap i:nth-child(1), .trail i:nth-child(1) { opacity: .3; } .lap i:nth-child(2), .trail i:nth-child(2) { opacity: .52; } .lap i:nth-child(3), .trail i:nth-child(3) { opacity: .76; }
+.lap i { width: .6em; height: 1.05em; background: currentColor; }
+.lap i:nth-child(1) { opacity: .3; } .lap i:nth-child(2) { opacity: .52; } .lap i:nth-child(3) { opacity: .76; }
 .rule { display: flex; align-items: center; gap: 10px; margin-top: 4px; color: var(--dim); white-space: nowrap; }
 .rule::before, .rule::after { content: ""; width: 14px; border-top: 1px solid var(--line); }
 .rule.over::before, .rule.under::after { content: none; }
@@ -103,7 +103,6 @@ section > h2 + p { margin-top: 14px; }
 #mode, .gt { color: var(--c); font-weight: 700; }
 #meta { overflow: hidden; text-overflow: ellipsis; }
 .line { display: flex; align-items: flex-start; gap: .6em; margin-top: 4px; color: #fff; }
-.trail { display: inline-flex; flex: none; margin-top: .25em; color: var(--c); }
 .gt { flex: none; }
 .entry { min-width: 0; overflow-wrap: anywhere; }
 .caret { display: inline-block; width: .55em; height: 1.05em; background: #fff; vertical-align: -.2em; }
@@ -176,8 +175,6 @@ footer span { color: var(--grey); margin-left: auto; }
   .hero h1, .pitch > * { animation: rise .45s .3s cubic-bezier(.2, .7, .2, 1) both; }
   .pitch > * { animation-delay: .4s; } .pitch > * + * { animation-delay: .5s; }
   .track i::after { animation: zip var(--t) cubic-bezier(.5, 0, .8, .4) infinite; }
-  .busy .trail i { animation: ripple .9s ease-in-out infinite; }
-  .busy .trail i:nth-child(2) { animation-delay: .12s; } .busy .trail i:nth-child(3) { animation-delay: .24s; } .busy .trail i:nth-child(4) { animation-delay: .36s; }
   .busy .lap { animation: tint 3.3s steps(1) infinite; }
   .busy .lap b { animation: lap 1.1s steps(18) infinite; }
   @media (max-width: 760px) { .busy .lap b { animation-timing-function: steps(14); } }
@@ -253,9 +250,9 @@ hello world</div></div>
 <span class="plus">+ print("hello sprint")</span></div></div>
         <div class="say">Changed. hello.py now prints hello sprint.</div>
       </div>
-      <div class="status"><div class="lap"><b><i></i><i></i><i></i><i></i></b></div><span>working (<span id="secs">0</span>s · ↓ <span id="toks">0</span> tokens<span class="wide"> · medium</span>)</span></div>
+      <div class="status"><div class="lap"><b><i></i><i></i><i></i><i></i></b></div><span>answering (<span id="secs">0</span>s | ↓ <span id="toks">0</span> tokens<span class="wide"> | medium effort</span>)</span></div>
       <div class="rule over"><i></i><span id="meta">Qwen3.5-0.8B:Q4_K_M · 9%</span></div>
-      <div class="line"><span class="trail"><i></i><i></i><i></i><i></i></span><span class="gt">&gt;</span><span class="entry"><span id="typed"></span><span class="caret"></span><span class="hint">Ask anything…  / for commands</span></span></div>
+      <div class="line"><span class="gt">&gt;</span><span class="entry"><span id="typed"></span><span class="caret"></span><span class="hint">Ask anything…  / for commands</span></span></div>
       <div class="rule under"><span id="mode">ask</span><i></i></div>
     </div>
     <aside class="side">
