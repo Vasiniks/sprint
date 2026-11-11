@@ -79,7 +79,7 @@ def test_one_thought_can_be_opened_by_itself_and_showthink_is_a_listed_command()
     s.show_thought("Check the tests first.")
     s.items[-1]["open"] = True
     assert "Check the tests first." in "\n".join(flat(spans) for _, spans, _ in s.window(s.items[-1], 70))
-    assert "/showthink" in dict(tui.COMMANDS) and "/showthink" in tui.HELP
+    assert "/showthink" in dict(tui.COMMANDS)
 
 
 # ---------- Windows details of pasting, found by reading the code against PDCurses ----------

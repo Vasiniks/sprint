@@ -92,7 +92,7 @@ def test_a_damaged_lifetime_file_is_ignored_not_fatal():
 def test_usage_opens_in_the_popup_and_can_be_scrolled():
     s = Screen(agent([{"prompt": 10}, "Ok.", {"out": 2, "secs": 0.1}]))
     s.submit("/usage")
-    assert s.popup and s.popup["title"] == "Usage" and "/usage" in dict(tui.COMMANDS) and "/usage" in tui.HELP and "/usage" in sprint.HELP
+    assert s.popup and s.popup["title"] == "Usage" and "/usage" in dict(tui.COMMANDS) and "/usage" in dict(sprint.HELP)
     _, can = s.shown()
     assert len(can) > 10  # every line can be moved to, so a long report scrolls
     s.popup_key("\n")

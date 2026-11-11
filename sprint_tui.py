@@ -4,6 +4,7 @@ import json
 import locale
 import os
 import re
+import select
 import shlex
 import sys
 import threading
@@ -34,27 +35,31 @@ COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the 
             ("/history", "show or hide the message list, or set its width"),
             ("/tools", "expand or collapse all tool windows"), ("/mouse", "mouse on or off, for selecting text"),
             ("/help", "keys and commands"), ("/exit", "quit")]
-HELP = """In a message
-  @path attaches that file (tab completes) · a line starting with ! runs the rest as a command yourself
-  paste or drag a file in and it becomes a chip like [Image #1] or [PDF #1] that travels with the message
-  a large paste becomes a chip too, like [Pasted #1 +42 lines]; the model gets the full text
-  ctrl+v, alt+v or /paste attaches the picture on the clipboard (a screenshot, or a copied file)
-Keys
-  enter send · shift+enter, ctrl+j, or a \\ before enter: new line
-  while it works: enter queues your message · enter on an empty prompt runs the queue now
-  esc interrupt (queued messages come back to the prompt) · ctrl+l clear · ctrl+c twice to quit
-  tab switch mode (ask → edits → auto) · up / down recall earlier messages
-  ctrl+o expand or collapse all tool windows · click a window to toggle just that one
-  the mouse wheel scrolls, and so do pgup / pgdn
-Commands
-  /clear  /model [name]  /mode [ask|edits|auto]  /permissions  /think  /showthink  /effort [low|medium|high]
-  /context  /usage  /config [key value]  /systemprompt  /theme  /sidebar [width]  /history [width]  /tools  /mouse
-  /plan  /race [model message]  /directory [path]  /copy [code|all]  /export [file]  /log  /compact  /help  /exit
-Copy and paste
-  drag over text in the conversation to copy it · ctrl+y or /copy copies the last answer
-  paste as usual (files become chips) · /mouse hands the mouse back to the terminal
-Mouse
-  drag the line beside either panel to resize it · click a message or an activity line to jump to it"""
+# /help: what you can type and press, a thing to a line; the commands above join it as its last section
+HELP = [("In a message", [("@path", "attach that file; tab completes the name"),
+                          ("!command", "run the command yourself, without the model"),
+                          ("paste or drag a file", "becomes a chip like [Image #1] that travels with the message"),
+                          ("a large paste", "becomes a chip, [Pasted #1 +42 lines]; the model gets it all"),
+                          ("ctrl+v  alt+v", "attach the clipboard's picture (a screenshot or a copied file)")]),
+        ("Keys", [("enter", "send; while it works, your message waits in the queue"),
+                  ("shift+enter  ctrl+j", "new line (so does a \\ before enter)"),
+                  ("enter, nothing typed", "run what is queued now"),
+                  ("esc", "interrupt; queued messages come back to the prompt"),
+                  ("tab", "switch mode: ask → edits → auto"),
+                  ("up  down", "recall earlier messages"),
+                  ("pgup  pgdn  end", "scroll the conversation; end jumps to the newest"),
+                  ("ctrl+o", "expand or collapse all tool windows"),
+                  ("ctrl+y", "copy the last answer"),
+                  ("ctrl+l", "clear the conversation"),
+                  ("ctrl+c twice", "quit")]),
+        ("Mouse", [("wheel", "scroll the conversation"),
+                   ("drag over text", "copy it"),
+                   ("click a tool window", "open or close just that one"),
+                   ("click a message", "jump to it; so does a line under Activity"),
+                   ("drag a panel's edge", "resize the panel")])]
+ARGS = {"/model": "[name]", "/mode": "[name]", "/effort": "[level]", "/config": "[key value]", "/sidebar": "[width]",
+        "/history": "[width]", "/race": "[model message]", "/directory": "[path]", "/copy": "[code|all]", "/export": "[file]"}
+HELP_WIDE = 24  # the column the names and keys share, so every description starts at the same place
 
 # the wordmark: "sprint" in a 5-row pixel font, shaded from light to solid, leaning forward
 WORD = "sprint"
@@ -111,15 +116,16 @@ ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame
         "title": (3, curses.A_BOLD), "code": (6, 0), "path": (5, 0), "url": (4, curses.A_UNDERLINE),
         "bullet": (6, 0), "kw": (5, 0), "string": (2, 0), "comment": (0, curses.A_DIM), "number": (3, 0),
         "add": (2, 0), "del": (1, 0), "err": (1, 0), "ok": (2, 0), "warn": (3, 0),
-        "ask": (6, curses.A_BOLD), "edits": (3, curses.A_BOLD), "auto": (5, curses.A_BOLD),
+        "ask": (6, curses.A_BOLD), "edits": (3, curses.A_BOLD), "auto": (5, curses.A_BOLD), "shell": (2, curses.A_BOLD),
         "red": (1, 0), "green": (2, 0), "yellow": (3, 0), "blue": (4, 0), "magenta": (5, 0), "cyan": (6, 0),
         "ghost": (9, 0)}  # ghost: greyed out, for a placeholder and for the screen behind a popup; plain dim without 256 colours
 
 
-def theme(hues, bg, fg, panel, ghost):
+def theme(hues, bg, fg, panel, ghost, band=None):
     """a theme, as exact colours: what red, green, yellow, blue, magenta and cyan become, the background of the whole
-    screen, plain text, the shade behind your messages and popups, and greyed-out text"""
-    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost, "band": blend(panel, fg, 0.12)}
+    screen, plain text, the shade behind popups and tool windows, greyed-out text, and the band behind your own messages
+    (unless given, the panel a step nearer the text)"""
+    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost, "band": band or blend(panel, fg, 0.12)}
 
 
 def blend(a, b, part):
@@ -157,20 +163,20 @@ def can_exact():
 THEMES = {
     "sprint": theme(("#ff5c5c", "#3ddc7e", "#ffe100", "#5b9dff", "#ff3d9a", "#19c2ff"), "#0b0c0e", "#f2f2f2", "#1d2024", "#7d8086"),
     "terminal": {}, "mono": {i: -1 for i in range(1, 8)},
-    "sapphire": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#181e29", "#efefef", "#28324a", "#7b8496"),
-    "sapphire-dim": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#080d14", "#efefef", "#141c2a", "#6b7386"),
+    # Tyriar's Sapphire: its editor and terminal colours, its dropdowns for the panel, its line numbers, its selection
+    "sapphire": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#181e29", "#efefef", "#263041", "#5d6269", "#153958"),
     "midnight": theme(("#ff5555", "#50fa7b", "#f1fa8c", "#6ea8ff", "#ff79c6", "#8be9fd"), "#000000", "#ffffff", "#181818", "#6e6e6e"),
     "slate": theme(("#e88388", "#a8cc8c", "#dbab79", "#71bef2", "#d290e4", "#66c2cd"), "#262a33", "#e6e9ef", "#363c49", "#8a92a3"),
     "ocean": theme(("#ff7a90", "#3ee6b0", "#ffd479", "#4aa8ff", "#a99bff", "#2fd6ff"), "#071a2b", "#d6ecff", "#10304d", "#5f86a8"),
-    "forest": theme(("#e06c5a", "#7fd88b", "#e3d27a", "#6fb3a8", "#d9a3c7", "#58d1b0"), "#0f1a14", "#d7e8d5", "#1d2e24", "#6f8a78"),
+    "forest": theme(("#e06c5a", "#7fd88b", "#e3d27a", "#5b9bd5", "#d9a3c7", "#4fd0d0"), "#0f1a14", "#d7e8d5", "#1d2e24", "#6f8a78"),
     "grape": theme(("#ff7eb6", "#9cf0a8", "#ffe58a", "#9aa7ff", "#d48cff", "#7fe3ff"), "#1b1030", "#ece4ff", "#2e1c4e", "#8f7fb3"),
     "sunset": theme(("#ff6b6b", "#c5e17a", "#ffc857", "#9d8cff", "#ff5fa2", "#ffa26b"), "#1f1020", "#ffe9d6", "#361c38", "#a07a8c"),
-    "amber": theme(("#ff6a3d", "#c8a400", "#ffd24a", "#d98c00", "#ff9248", "#ffe08a"), "#171000", "#ffb000", "#2b1f00", "#8a6a1a"),
-    "matrix": theme(("#ff5f5f", "#00ff41", "#b6ff00", "#00c896", "#7dffb0", "#39ffb0"), "#000a00", "#33ff66", "#0a2412", "#1f8f3a"),
+    "amber": theme(("#ff5a36", "#9fb000", "#ffc400", "#c97a00", "#ff8a3c", "#fff1c9"), "#171000", "#ffb000", "#2b1f00", "#8a6a1a"),
+    "matrix": theme(("#ff5f5f", "#00ff41", "#e4ff00", "#00a878", "#c8ffd0", "#00e0e0"), "#000a00", "#33ff66", "#0a2412", "#1f8f3a"),
     "paper": theme(("#c0392b", "#2e7d32", "#a86400", "#1f5fbf", "#a0308c", "#0b7285"), "#f6f3ea", "#24262b", "#e2dccb", "#8b8778")}
 THEME_ABOUT = {"sprint": "near-black, with the logo's colours", "terminal": "your terminal's own colours",
                "mono": "no colour, only bold and dim", "sapphire": "after Tyriar's Sapphire for VS Code",
-               "sapphire-dim": "Sapphire on a darker ground", "midnight": "true black, bright colours",
+               "midnight": "true black, bright colours",
                "slate": "soft colours on blue-grey", "ocean": "blues and teals on deep navy",
                "forest": "greens on dark moss", "grape": "purple, with candy colours",
                "sunset": "orange, pink and violet at dusk", "amber": "an old amber monitor",
@@ -178,6 +184,85 @@ THEME_ABOUT = {"sprint": "near-black, with the logo's colours", "terminal": "you
 # where the terminal can take exact colours, each one a theme names gets a spare slot of the palette (88 and up); elsewhere
 # the nearest of the 256 stands in for it
 SLOT = {c: 88 + n for n, c in enumerate(sorted({v for t in THEMES.values() for v in t.values() if isinstance(v, str)}))}
+# Curses cannot name a colour outside the 256. So on a terminal that shows 24-bit colour, what curses writes goes through
+# a pipe on its way there, and the codes that set one of those slots leave as the exact colour instead: nothing in the
+# terminal's own palette is touched
+RGB = {n: tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c, n in SLOT.items()}
+SET256 = re.compile(rb"\x1b\[([34])8;5;(\d+)m")  # curses setting the text (3) or the background (4) to one of the 256
+CUT = re.compile(rb"\x1b(\[([34](8(;(5(;\d*)?)?)?)?)?)?\Z")  # the start of such a code, with the rest still to come
+ROUTED = False  # is what curses writes going through truecolour() now?
+
+
+def truecolour(data):
+    """what curses wrote, with each code for a theme slot turned into the exact colour the slot stands for"""
+    return SET256.sub(lambda m: b"\x1b[%c8;2;%d;%d;%dm" % (m[1], *RGB[int(m[2])]) if int(m[2]) in RGB else m[0], data)
+
+
+def whole(data):
+    """-> (what can go to the terminal now, an unfinished colour code at the very end that has to wait for its rest)"""
+    m = CUT.search(data)
+    return (data[:m.start()], data[m.start():]) if m else (data, b"")
+
+
+def can_route():
+    """should the screen go through truecolour()? Where the terminal says it shows 24-bit colour, and curses still has
+    a terminal (stderr) to ask about its size once stdout is a pipe. Not on Windows: curses there writes no codes"""
+    return bool(VT and os.environ.get("COLORTERM") in ("truecolor", "24bit") and os.isatty(1) and os.isatty(2))
+
+
+def speaks_256():
+    """does curses set a colour with the codes truecolour() looks for? (true of every xterm-like terminal description)"""
+    try:
+        return all(curses.tparm(curses.tigetstr(cap), 88) == b"\x1b[%d8;5;88m" % n for cap, n in (("setaf", 3), ("setab", 4)))
+    except (curses.error, TypeError, AttributeError):
+        return False
+
+
+def route(fd=1):
+    """send everything written to fd through truecolour() from now on -> a function that puts fd back as it was"""
+    global ROUTED
+    real, (r, w) = os.dup(fd), os.pipe()
+    os.dup2(w, fd)
+    os.close(w)
+    done = threading.Event()
+
+    def pump():
+        held = b""
+        while True:
+            if select.select([r], [], [], 0.05)[0]:
+                data = os.read(r, 65536)
+                ready, held = whole(held + data) if data else (held, b"")
+            elif done.is_set():
+                data, ready = b"", held
+            else:
+                data, (ready, held) = b"-", (held, b"")  # nothing followed it: not the start of a code after all
+            try:
+                ready = truecolour(ready)
+                while ready:
+                    ready = ready[os.write(real, ready):]
+            except OSError:
+                pass  # the terminal is gone; keep emptying the pipe so nothing writing to it ever blocks
+            if not data:
+                return
+
+    worker = threading.Thread(target=pump, daemon=True)
+    worker.start()
+    ROUTED = True
+
+    def back():
+        global ROUTED
+        try:
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
+        done.set()
+        worker.join(2)  # it stops once the pipe is empty
+        os.dup2(real, fd)
+        os.close(real)
+        os.close(r)
+        ROUTED = False
+
+    return back
 # colour pairs from 20 up show every theme in its own colours, for the theme popup: "ocean.0" is its text, "ocean.1"-"ocean.6"
 # its hues, all on its background. (No pair goes past 255: older curses cannot name one.)
 SAMPLE = {f"{name}.{i}": 20 + 7 * n + i for n, name in enumerate(THEMES) for i in range(7)}
@@ -419,8 +504,9 @@ class Screen:
         self.sidebar, self.history = kept.get("sidebar", True), kept.get("history", True)
         self.side_w, self.left_w = kept.get("sidebar_w", SIDE), kept.get("history_w", 26)
         self.motion, self.plan = kept.get("motion", True), bool(kept.get("plan", False))
-        saved = kept.get("theme")  # "default" was the old name of the terminal's own colours
-        self.theme = saved if saved in THEMES else "terminal" if saved == "default" else "sprint"
+        saved = kept.get("theme")  # names that are gone: the terminal's own colours were "default", and Sapphire came in two
+        saved = {"default": "terminal", "sapphire-dim": "sapphire"}.get(saved, saved)
+        self.theme = saved if saved in THEMES else "sprint"
         self.peek = kept["peek"] if isinstance(kept.get("peek"), int) and kept["peek"] > 0 else PEEK
         self.showthink = bool(kept.get("showthink", False))  # the model's reasoning in full, or one line saying it thought
         self.paint()
@@ -434,12 +520,15 @@ class Screen:
         text, 10-19 the same on the panel shade, 230-237 on the band behind your own messages. With fewer than 256
         colours the screen stays the terminal's own"""
         self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
+        self.stale = True  # what is on the screen is in the old colours: the next frame sends every cell again (see draw)
         try:
             if not curses.has_colors():
                 return
             curses.use_default_colors()
             rich = self.rich = curses.COLORS >= 256
-            if rich and can_exact():
+            if rich and ROUTED and speaks_256():
+                self.exact = True  # the slots leave as exact colours on their way to the terminal
+            elif rich and can_exact():
                 try:
                     for c, slot in SLOT.items():
                         curses.init_color(slot, *(int(c[i:i + 2], 16) * 1000 // 255 for i in (1, 3, 5)))
@@ -1454,7 +1543,23 @@ class Screen:
         self.pop("Context", [row(list(r)) for r in sprint.context_rows(self.agent)])
 
     def help_popup(self):
-        self.pop("Help", [row([(line, "bold" if line and not line.startswith(" ") else "")]) for line in HELP.split("\n")])
+        """everything you can type and press, in sections; type to narrow it, and enter on a command starts it for you"""
+        rows = []
+        for title, items in HELP + [("Commands", COMMANDS)]:
+            rows += [row("")] * bool(rows) + [row([(title, "title")])]
+            for name, about in items:
+                cmd = name.startswith("/")
+                takes = " " + ARGS[name] if name in ARGS else ""
+                rows.append(row([("  " + name, "kw" if cmd else "code"), (takes.ljust(HELP_WIDE - len(name)), "dim"), (about, "")],
+                                name if cmd else ""))
+
+        def pick(name):
+            self.popup = None
+            if name:  # a command: ready in the prompt, with room for what it takes
+                self.buf = name + " " * (name in ARGS)
+                self.cur = len(self.buf)
+
+        self.pop("Help", rows, pick=pick, field={"label": "›", "text": "", "filter": True})
 
     def config_popup(self, sel=0):
         a = self.agent
@@ -1486,7 +1591,7 @@ class Screen:
     def mode_row(self):
         """what sits under the bar: the mode's icon and name, and how to change it; or that this line is a command"""
         if self.buf.startswith("!") and not self.pending:
-            return [("!", "yellow"), (" shell", "yellow"), (" (runs it yourself, no model)", "dim")]
+            return [("!", "shell"), (" shell", "shell"), (" (runs it yourself, no model)", "dim")]
         mode = self.agent.mode
         return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")]
 
@@ -1527,7 +1632,7 @@ class Screen:
         A line that starts with ! is shell mode: the mark becomes !, and the rules take the shell colour"""
         a, tw = self.agent, bw - 2
         shell = self.buf.startswith("!") and not self.pending
-        tone, line_role = ("yellow", "yellow") if shell else (a.mode, "frame")
+        tone, line_role = ("shell", "shell") if shell else (a.mode, "frame")
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
         foot = [("─" * bw, line_role)]
@@ -1616,7 +1721,7 @@ class Screen:
                     rows = self.window(it, w)
                 elif it["t"] == "user":
                     mine = it["text"].startswith("!")  # a command you ran yourself keeps its mark
-                    tone = "yellow" if mine else self.agent.mode  # a bar down the side, then the mark, then what you said
+                    tone = "shell" if mine else self.agent.mode  # a bar down the side, then the mark, then what you said
                     rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 4)]
                     rows = [("user", [("▌", tone), (" ", "")] + ([("!" if mine else MARK, tone), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
@@ -1673,8 +1778,12 @@ class Screen:
 
     def draw(self, scr):
         h, w = scr.getmaxyx()
-        scr.bkgdset(" ", self.attr(""))  # the whole screen takes the theme's background
+        if self.stale:  # the pairs were just given new colours. The curses macOS ships then sends the first thing drawn
+            self.stale = False  # in the pair it used last with no colour at all (a previewed theme kept the terminal's
+            scr.clearok(True)  # own background up top); clearing first puts it back in step, and every cell is resent
         scr.erase()
+        for y in range(h):  # the whole screen takes the theme's background, a written cell at a time: the curses macOS
+            self.put(scr, y, 0, " " * w)  # ships loses the colour of cells cleared to a window background (bkgdset)
         self.hits, self.screen, self.jump_to = {}, {}, None
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")
@@ -1880,7 +1989,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write(("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * self.exact) if VT else "")  # and the palette back
+        sys.stdout.write(("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * (self.exact and not ROUTED)) if VT else "")  # and the palette back
         sys.stdout.flush()
 
 
@@ -1889,4 +1998,9 @@ def run(agent, first=""):
     os.environ.setdefault("ESCDELAY", "25")
     screen = Screen(agent)
     threading.Thread(target=lambda: setattr(screen, "newer", sprint.check_update()), daemon=True).start()  # once a day, off the screen's back
-    curses.wrapper(screen.loop, first)
+    back = route() if can_route() else None  # exact colours, where the terminal shows them
+    try:
+        curses.wrapper(screen.loop, first)
+    finally:
+        if back:
+            back()

@@ -31,7 +31,7 @@ Type a request and press Enter. In the default mode sprint asks before it runs a
 |---|---|
 | `sprint` | open sprint in this folder |
 | `sprint "fix the typo"` | open it with a first message |
-| `sprint help` | list these |
+| `sprint help` | list these, in sections (in colour on a terminal) |
 | `sprint config` | open the settings file in your editor (`$VISUAL`, `$EDITOR`, else the system's text editor) |
 | `sprint serve`, `sprint serve stop`, `sprint serve status` | start the local Ollama server, stop it, or say whether it is running |
 | `sprint update` | get the newest sprint: `git pull` for a checkout, `pip install --upgrade` otherwise |
@@ -71,7 +71,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | you type | what happens |
 |---|---|
 | `@notes.txt` | That file is attached to the message, so the model doesn't have to go and read it. Tab completes the name. |
-| `!git status` | Shell mode: the prompt's `❯` becomes `!` and the bar changes colour. The command runs yourself: no model, no approval. Its output joins the conversation. |
+| `!git status` | Shell mode: the prompt's `❯` becomes `!` and the bar takes the shell colour (green in most themes; ask, edits, auto and shell each have their own, in every theme). The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |
 | `ctrl+v`, `alt+v` or `/paste` | The picture on the clipboard (a screenshot, or a copied file) is attached as `[Image #1]`. Terminals paste text only, so sprint asks the system. In Windows Terminal use `alt+v` or `/paste`. |
@@ -126,12 +126,13 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/export [file]` | Save the conversation as markdown. |
 | `/directory [path]` | Change the folder sprint works in, with a small folder browser. |
 | `/systemprompt` | Edit what the model is told at the start. |
-| `/theme` | sprint (the one you get: near-black with the logo's colours), terminal (your terminal's own colours), mono, sapphire, sapphire-dim, midnight, slate, ocean, forest, grape, sunset, amber, matrix, paper. A theme sets the whole screen, background included; the list previews each in its own colours. Terminals that show 24-bit colour get the exact colours; others, Apple's Terminal among them, get the nearest of their 256. Sapphire follows [Tyriar's Sapphire](https://marketplace.visualstudio.com/items?itemName=Tyriar.theme-sapphire) for VS Code. |
+| `/theme` | sprint (the one you get: near-black with the logo's colours), terminal (your terminal's own colours), mono, sapphire, midnight, slate, ocean, forest, grape, sunset, amber, matrix, paper. A theme sets the whole screen, background included; the list previews each in its own colours. Terminals that say they show 24-bit colour (`COLORTERM=truecolor`; Apple's Terminal does from macOS 26) get the exact colours, without anything in the terminal's own palette being changed; others get the nearest of their 256. Sapphire follows [Tyriar's Sapphire](https://marketplace.visualstudio.com/items?itemName=Tyriar.theme-sapphire) for VS Code. |
 | `/config [key value]` | Every setting in one list. |
 | `/sidebar`, `/history` | Hide, show or size the side panels. |
 | `/tools`, `/mouse` | Expand or collapse all tool windows; turn mouse capture on or off. |
 | `/log` | The last things that happened, and where the full log is. |
-| `/clear` (or `/new`), `/help`, `/exit` | Start fresh, help, quit. |
+| `/help` | Every key and command, in sections, a thing to a line. Type to narrow the list; Enter on a command puts it in the prompt. |
+| `/clear` (or `/new`), `/exit` | Start fresh, quit. |
 
 ## Settings and files
 

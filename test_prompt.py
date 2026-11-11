@@ -191,7 +191,7 @@ class Canvas:
     def chgat(self, *a):
         pass
 
-    def bkgdset(self, *a):
+    def clearok(self, yes):
         pass
 
     def move(self, y, x):
@@ -556,9 +556,9 @@ def test_a_line_starting_with_a_bang_turns_the_bar_into_shell_mode():
     s = screen(mode="ask")
     s.buf, s.cur = "!git status", 11
     top, prompt, bottom = s.input_rows(60)[0]
-    assert flat(prompt) == "! git status" and prompt[0] == ("!", "yellow")  # the ! is the mark; it is not shown twice
-    assert top[0][1] == "yellow" and bottom[0][1] == "yellow"  # both rules change colour
-    assert flat(s.mode_row()).startswith("! shell") and s.mode_row()[0] == ("!", "yellow") and "ask" not in flat(s.mode_row())
+    assert flat(prompt) == "! git status" and prompt[0] == ("!", "shell")  # the ! is the mark; it is not shown twice
+    assert top[0][1] == "shell" and bottom[0][1] == "shell"  # both rules change colour
+    assert flat(s.mode_row()).startswith("! shell") and s.mode_row()[0] == ("!", "shell") and "ask" not in flat(s.mode_row())
     assert len(flat(top)) == len(flat(bottom)) == 60 and s.caret == (1, 12)
     s.buf, s.cur = "!", 1
     assert s.input_rows(60)[0][1][-1] == ("a command to run yourself", "ghost")
@@ -573,7 +573,7 @@ def test_a_command_you_ran_yourself_keeps_its_mark_in_the_conversation(tmp_path,
     s.submit("!echo hi")
     finish(s)
     first = next(spans for kind, spans, item in s.lines(60) if kind == "user")
-    assert flat(first) == "▌ ! echo hi" and first[0] == ("▌", "yellow") and ("!", "yellow") in first
+    assert flat(first) == "▌ ! echo hi" and first[0] == ("▌", "shell") and ("!", "shell") in first
 
 
 # ---------- answering an approval: a highlighted choice, arrows to move it, enter to take it ----------

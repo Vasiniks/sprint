@@ -1,5 +1,6 @@
 """popups you can point at, themes with their own background, a sturdier wheel, and the flash on a jump"""
 import curses
+import itertools
 import re
 import io
 
@@ -41,7 +42,7 @@ class Scr:
     """a stand-in for the curses window: remembers what was written where, and every restyle"""
 
     def __init__(self, h=30, w=120):
-        self.h, self.w, self.cells, self.marks, self.bkgd = h, w, {}, [], None
+        self.h, self.w, self.cells, self.marks, self.bkgd, self.redrawn = h, w, {}, [], None, 0
 
     def getmaxyx(self):
         return self.h, self.w
@@ -58,6 +59,9 @@ class Scr:
 
     def chgat(self, y, x, n, attr):
         self.marks.append((y, x, n, attr))
+
+    def clearok(self, yes):
+        self.redrawn += bool(yes)
 
     def text(self, y):
         return "".join(self.cells.get((y, x), (" ", 0))[0] for x in range(self.w))
@@ -387,7 +391,7 @@ def test_without_256_colours_the_backdrop_is_dimmed(scr, tmp_path, monkeypatch):
 
 def test_every_theme_has_a_line_about_it_and_ten_exact_colours():
     assert set(tui.THEME_ABOUT) == set(tui.THEMES) and len(tui.THEMES) >= 12
-    assert list(tui.THEMES)[0] == "sprint" and {"sapphire", "sapphire-dim", "terminal", "mono", "paper"} <= set(tui.THEMES)
+    assert list(tui.THEMES)[0] == "sprint" and {"sapphire", "terminal", "mono", "paper"} <= set(tui.THEMES)
     for name, t in tui.THEMES.items():
         assert len(tui.THEME_ABOUT[name]) <= 36, name
         if name not in ("terminal", "mono"):
@@ -395,6 +399,27 @@ def test_every_theme_has_a_line_about_it_and_ten_exact_colours():
             assert len({t["bg"], t["fg"], t["panel"], t["ghost"]}) == 4, name
     assert "bg" not in tui.THEMES["terminal"] and "bg" not in tui.THEMES["mono"]
     assert 20 + 7 * len(tui.THEMES) <= 230  # older curses cannot name a pair past 255, and the top ones are spoken for
+
+
+def lab(colour):
+    """a colour such as "#181e29" as lightness, green-red and blue-yellow: distances there match what the eye tells apart"""
+    rgb = [int(colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    r, g, b = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
+    f = lambda v: v ** (1 / 3) if v > 0.008856 else 7.787 * v + 16 / 116
+    x, y, z = f((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047), f(0.2126 * r + 0.7152 * g + 0.0722 * b), f((0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883)
+    return 116 * y - 16, 500 * (x - y), 200 * (y - z)
+
+
+def test_ask_edits_auto_and_shell_have_four_colours_no_theme_lets_you_mistake():
+    hues = {mode: tui.ROLE[mode][0] for mode in ("ask", "edits", "auto", "shell")}
+    assert len(set(hues.values())) == 4  # shell mode used to borrow the yellow of edits
+    for name, t in tui.THEMES.items():
+        if "bg" not in t:
+            continue  # the terminal's own colours, or none at all
+        for a, b in itertools.combinations(hues, 2):
+            apart = sum((p - q) ** 2 for p, q in zip(lab(t[hues[a]]), lab(t[hues[b]]))) ** 0.5
+            assert apart >= 30, f"{name}: {a} and {b} are only {apart:.0f} apart"
+        assert len({tui.near(t[h]) for h in hues.values()}) == 4, name  # and still four where only 256 colours can be shown
 
 
 def test_the_sprint_theme_is_nearly_black_not_black_with_the_logos_colours():
@@ -405,10 +430,18 @@ def test_the_sprint_theme_is_nearly_black_not_black_with_the_logos_colours():
 
 
 def test_sapphire_carries_the_colours_of_the_theme_it_is_named_after():
-    for name, ground in (("sapphire", "#181e29"), ("sapphire-dim", "#080d14")):
-        t = tui.THEMES[name]
-        assert t["bg"] == ground and t["fg"] == "#efefef"
-        assert [t[i] for i in range(1, 7)] == ["#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"]
+    """Tyriar's Sapphire for VS Code: its editor, its terminal colours, its dropdowns, its selection, its line numbers"""
+    t = tui.THEMES["sapphire"]
+    assert t["bg"] == "#181e29" and t["fg"] == "#efefef"
+    assert [t[i] for i in range(1, 7)] == ["#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"]
+    assert t["panel"] == "#263041" and t["band"] == "#153958"
+    assert t["ghost"] == tui.blend(t["bg"], "#ffffff", 0.3)  # its line numbers: white, three tenths strong
+
+
+def test_there_is_one_sapphire_and_a_saved_sapphire_dim_becomes_it(tmp_path, monkeypatch):
+    assert [name for name in tui.THEMES if "sapphire" in name] == ["sapphire"]
+    sprint.save_config(theme="sapphire-dim")
+    assert screen().theme == "sapphire"
 
 
 def test_the_nearest_of_the_256_stands_in_for_an_exact_colour():
@@ -436,6 +469,21 @@ def test_a_theme_paints_its_own_background_text_panel_and_ghost(monkeypatch):
     assert [pairs[i] for i in range(1, 7)] == [(t[i], t["bg"]) for i in range(1, 7)]
     assert pairs[10] == (t["fg"], t["panel"]) and pairs[13] == (t[3], t["panel"])
     assert pairs[9] == (t["ghost"], t["bg"]) and pairs[19] == (t["ghost"], t["panel"])
+
+
+def test_routed_through_the_filter_the_colours_are_exact_and_the_palette_is_left_alone(monkeypatch):
+    def never(*a):
+        raise AssertionError("the palette was redefined")
+    monkeypatch.setattr(tui.curses, "init_color", never, raising=False)
+    monkeypatch.setattr(tui, "can_exact", lambda: False)
+    monkeypatch.setattr(tui, "speaks_256", lambda: True)
+    monkeypatch.setattr(tui, "ROUTED", True)
+    s, pairs = painted(monkeypatch, "sapphire")
+    t = tui.THEMES["sapphire"]
+    assert s.exact and pairs[8] == (tui.SLOT[t["fg"]], tui.SLOT[t["bg"]])
+    monkeypatch.setattr(tui, "speaks_256", lambda: False)  # a terminal description that sets colours some other way
+    s, pairs = painted(monkeypatch, "sapphire")
+    assert not s.exact and pairs[8] == (tui.near(t["fg"]), tui.near(t["bg"]))
 
 
 def test_where_the_terminal_can_take_them_the_colours_are_exact(monkeypatch):
@@ -506,8 +554,35 @@ def test_a_highlight_sits_on_the_theme_and_the_screen_is_cleared_to_it(scr, tmp_
     s.mark(scr, 2, 3, 4, curses.A_REVERSE)
     s.mark(scr, 2, 3, 4, 5 << 8)
     assert scr.marks == [(2, 3, 4, curses.A_REVERSE | 8 << 8), (2, 3, 4, 5 << 8)]
+
+
+@pytest.mark.parametrize("talk", [False, True])
+def test_every_cell_is_written_in_the_theme_not_left_to_the_background(scr, tmp_path, monkeypatch, talk):
+    """the curses macOS ships drops the colour of cells it clears to a window's background, so empty rows came out in
+    the terminal's own colour: nothing may rely on that background, every cell is written"""
+    s = talked(tmp_path, monkeypatch) if talk else screen()
+    s.colors = s.rich = True
+    s.base = 8
     s.draw(scr)
-    assert scr.bkgd == 8 << 8
+    assert not scr.bkgd  # the window's own background stays the terminal's
+    bare = [(y, x) for y in range(scr.h) for x in range(scr.w) if (y, x) not in scr.cells]
+    assert not bare
+    assert 0 not in {pair(attr) for _, attr in scr.cells.values()}  # and none in the terminal's own colours
+    assert pair(scr.cells[(0, scr.w - 1)][1]) == 8  # an empty corner: the theme's plain pair
+
+
+def test_a_repainted_theme_redraws_the_whole_window_once(scr):
+    """the same curses does not notice a colour pair being given new colours: what was already on the screen in that
+    pair kept the old ones (a previewed theme left the top of the window in the last theme's background)"""
+    s = screen()
+    s.draw(scr)
+    scr.redrawn = 0
+    s.draw(scr)
+    assert scr.redrawn == 0  # an ordinary frame sends only what changed
+    s.paint()
+    s.draw(scr)
+    s.draw(scr)
+    assert scr.redrawn == 1
 
 
 def test_the_theme_popup_shows_each_theme_in_its_own_colours(scr):

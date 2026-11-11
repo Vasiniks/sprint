@@ -1459,25 +1459,46 @@ def race(agent, rival, task, tell=lambda model: None):
 TINT = {"ask": "36", "edits": "33", "auto": "35"}
 ABOUT = {"ask": "asks before every action", "edits": "file edits run without asking",
          "auto": "everything runs without asking"}
-HELP = ("@file attaches a file · !command runs it yourself · /model [NAME] · /mode · /permissions · /think · /effort [LEVEL]\n"
-        "  /context · /usage · /compact · /copy [code|all] · /export [FILE] · /log · /directory [PATH] · /plan · /race MODEL MESSAGE\n"
-        "  /systemprompt · /config · /clear · /bye")
+# what plain mode understands, a thing to a line: (what you type, what it does)
+HELP = [("@file", "attach a file"), ("!command", "run the command yourself, without the model"),
+        ("/model [NAME]", "switch model"), ("/mode", "ask, edits or auto"), ("/permissions", "what runs without asking"),
+        ("/think", "let the model reason first, on or off"), ("/effort [LEVEL]", "low, medium or high"),
+        ("/context", "what is filling the context window"), ("/usage", "tokens, time and tool calls"),
+        ("/compact", "fold the older conversation into a short summary"), ("/copy [code|all]", "copy the last answer"),
+        ("/export [FILE]", "save the conversation as markdown"), ("/log", "what happened recently"),
+        ("/directory [PATH]", "change the folder sprint works in"), ("/plan", "split each message into steps first, on or off"),
+        ("/race MODEL MESSAGE", "one message, two models, side by side"),
+        ("/systemprompt", "edit what the model is told at the start"), ("/config", "see or change saved settings"),
+        ("/clear", "clear the conversation and start fresh"), ("/bye", "quit")]
+
+
+def help_rows():
+    """plain mode's help as rows of (text, colour): the name, what it takes greyed, then what it does, in one column"""
+    wide = max(len(what) for what, _ in HELP) + 2
+    return [[("  " + what.split(" ")[0], "cyan"), (what[len(what.split(" ")[0]):].ljust(wide - len(what.split(" ")[0])), "dim"), (about, "")]
+            for what, about in HELP]
+
+
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.8"  # the same as in pyproject.toml
+VERSION = "0.4.9"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
-USAGE = f"""sprint {VERSION} - a terminal coding agent for small local models
+# sprint help: the words sprint takes on the command line, in sections
+USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
+         ("Local server", [("sprint serve", "start the local Ollama server if it is not running"), ("sprint serve stop", "stop it"),
+                           ("sprint serve status", "say whether it is running")]),
+         ("Settings and updates", [("sprint config", "open the settings file in your editor"), ("sprint update", "get the newest sprint"),
+                                   ("sprint help", "this list (sprint --help lists the options)"),
+                                   ("sprint --version", "say which version this is")])]
 
-  sprint                   open sprint in this folder
-  sprint "fix the typo"    open it with a first message
-  sprint help              this list (sprint --help lists the options)
-  sprint config            open the settings file in your editor
-  sprint serve             start the local Ollama server if it is not running
-  sprint serve stop        stop it
-  sprint serve status      say whether it is running
-  sprint update            get the newest sprint
-  sprint --version
 
-Inside sprint, /help lists the keys and commands."""
+def usage(colour=False):
+    """what `sprint help` prints: headings bold and commands in colour on a terminal, the same text bare anywhere else"""
+    paint = (lambda s, code: f"\033[{code}m{s}\033[0m") if colour else (lambda s, code: s)
+    wide = max(len(cmd) for _, rows in USAGE for cmd, _ in rows) + 4
+    out = [paint("sprint " + VERSION, "1") + paint("  a terminal coding agent for small local models", "2")]
+    for title, rows in USAGE:
+        out += ["", paint(title, "1")] + ["  " + paint(cmd, "36") + " " * (wide - len(cmd)) + about for cmd, about in rows]
+    return "\n".join(out + ["", "Inside sprint, " + paint("/help", "36") + " lists the keys and commands."])
 
 
 def open_file(path):
@@ -1557,7 +1578,10 @@ def cli(argv):
     if word in ("--version", "version") and not rest:
         print("sprint " + VERSION)
     elif word == "help" and not rest:
-        print(USAGE)
+        colour = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+        if colour and WINDOWS:
+            os.system("")  # switches on colour codes in the classic Windows console
+        print(usage(colour))
     elif word == "update" and not rest:
         return update()
     elif word == "config" and not rest:
@@ -1676,7 +1700,10 @@ def main():
                         say(text, ANSI[colour])
                     say("\n")
             elif cmd.startswith("/"):
-                say(f"  {HELP}\n", "2")
+                for row in help_rows():
+                    for text, colour in row:
+                        say(text, ANSI[colour])
+                    say("\n")
             elif cmd.startswith("!") and (cmd + _ + arg)[1:].strip():
                 agent.bang((cmd + _ + arg)[1:].strip())
             elif cmd:
