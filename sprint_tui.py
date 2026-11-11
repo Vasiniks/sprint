@@ -113,7 +113,9 @@ MOUSE = (curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED | curses.BUTTON4_PRESS
          | getattr(curses, "REPORT_MOUSE_POSITION", 0))
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
 # what may follow an escape: the start of a marked paste, alt+v, and the ways terminals send alt+enter and shift+enter
-SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline"}
+SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "newline", "[27;2;13~": "newline", "[13;2u": "newline",
+        "[27;5;13~": "newline", "[13;5u": "newline"}  # and ctrl+enter, which the same terminals report the same way
+MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports with its modifiers, whole or still arriving
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 ENDS = "◢◤" if VT else "//"  # the slanted ends of the working animation; Windows console fonts lack the triangles
 
@@ -233,6 +235,7 @@ class Screen:
         self.pastes = {}  # large pasted texts by their chip label
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
+        self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
         self.load_ui()
         agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
@@ -469,7 +472,11 @@ class Screen:
         if self.popup:
             return self.popup_key(k)
         opts, n = self.options(), len(self.buf)
-        if k in ("\n", "\r", curses.KEY_ENTER):
+        if k in ("\n", "\r", curses.KEY_ENTER) and self.buf[:self.cur].endswith("\\"):  # a backslash, then Enter:
+            self.buf = self.buf[:self.cur - 1] + "\n" + self.buf[self.cur:]              # a new line instead of a send
+        elif k == "\n" and self.nl:  # ctrl+j, now that Enter arrives as "\r"
+            self.newline()
+        elif k in ("\n", "\r", curses.KEY_ENTER):
             if opts:
                 self.complete(opts)
             line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
@@ -499,10 +506,10 @@ class Screen:
             self.buf = self.buf[:self.cur] + self.buf[self.cur + 1:]
         elif k in (curses.KEY_LEFT, curses.KEY_RIGHT):
             self.cur = max(0, min(n, self.cur + (1 if k == curses.KEY_RIGHT else -1)))
-        elif k in (curses.KEY_HOME, "\x01"):
-            self.cur = 0
+        elif k in (curses.KEY_HOME, "\x01"):  # to the start of this line, and the end of it
+            self.cur = self.buf.rfind("\n", 0, self.cur) + 1
         elif k in (curses.KEY_END, "\x05"):
-            self.cur = n
+            self.cur = self.buf.find("\n", self.cur) % (n + 1)  # no line break ahead: -1 becomes the very end
         elif k == "\x15":  # ctrl+u
             self.buf, self.cur = "", 0
         elif k == "\x17":  # ctrl+w
@@ -628,9 +635,9 @@ class Screen:
             return
         if self.esc is not None:
             held = self.esc + k if isinstance(k, str) else None
-            if held and any(seq.startswith(held) for seq in SEQS):
+            if held and (any(seq.startswith(held) for seq in SEQS) or MODIFIED.fullmatch(held)):
                 self.esc, what = held, SEQS.get(held)
-                if what:
+                if what or held[-1] in "~u":  # a whole key: one sprint knows, or a modified key it has no use for
                     self.esc = None
                     self.pasting = "" if what == "paste" else None
                     self.paste_image() if what == "image" else self.newline() if what == "newline" else None
@@ -1179,20 +1186,29 @@ class Screen:
         return [("".join("░▒▓█"[(i - k) % 4] for i in range(4)), self.agent.mode)]
 
     def input_rows(self, bw, used=0, side=0):
-        """a rule carrying the mode and model, then the prompt (or the approval question) -> (rows, typed lines)"""
-        a, tw = self.agent, bw - 5
-        typed = [self.buf[i:i + tw] for i in range(0, len(self.buf) + 1, tw)][-5:]
-        left = [("── ", "frame"), (a.mode, a.mode), (" ", "")]
+        """the bar: a rule carrying the model, the prompt (or the approval question), a rule carrying the mode
+        -> (rows, the typed lines on show). Where the cursor belongs is left in self.caret"""
+        a, tw = self.agent, bw - 7
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
-        rule = left + [("─" * max(0, bw - len(flat(left)) - len(right) - 2), "frame"), (right, "dim"), ("──", "frame")]
+        rule = [("─" * max(0, bw - len(right) - 2), "frame"), (right, "dim"), ("──", "frame")]
+        foot = [("── ", "frame"), (a.mode, a.mode), (" " + "─" * max(0, bw - len(a.mode) - 4), "frame")]
         if self.pending:
             c = self.pending
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
             keys = [("     y", "bold"), (" once   ", "dim"), ("a", "bold"), (" always this   ", "dim"), ("n", "bold"), (" no   ", "dim"),
                     ("esc", "bold"), (" stop", "dim")]
-            return [rule, self.trail() + [(" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys], typed
-        body = [[(t, "")] for t in typed] if self.buf else [[("Ask anything…  / for commands", "dim")]]
-        return [rule] + [(self.trail() if n == 0 else [("    ", "")]) + [(" ", "")] + r for n, r in enumerate(body)], typed
+            return [rule, self.trail() + [(" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
+        typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
+        for line in self.buf.split("\n"):
+            if start <= self.cur <= start + len(line):
+                at, col = len(typed) + (self.cur - start) // tw, (self.cur - start) % tw
+            typed += [line[i:i + tw] for i in range(0, len(line) + 1, tw)]
+            start += len(line) + 1
+        first = min(at, max(0, len(typed) - 6))  # six lines at most: the last ones, or from the cursor's line down
+        typed, self.caret = typed[first:first + 6], (1 + at - first, 7 + col)
+        body = [[(t, "")] for t in typed] if self.buf else [[("Ask anything…  / for commands", "ghost")]]
+        lead = self.trail() + [(" ", ""), (">", a.mode), (" ", "")]
+        return [rule] + [(lead if n == 0 else [(" " * 7, "")]) + r for n, r in enumerate(body)] + [foot], typed
 
     # --- conversation -> lines of (kind, spans, item)
 
@@ -1427,17 +1443,16 @@ class Screen:
             curses.curs_set(0)
         else:
             curses.curs_set(1)
-            tw = bw - 5
-            row = len(typed) - 1 if self.cur >= (len(typed) - 1) * tw else self.cur // tw
-            col = self.cur - (len(self.buf) // tw - (len(typed) - 1) + row) * tw
             try:
-                scr.move(top + 1 + row, bx + 5 + max(0, min(col, tw)))
+                scr.move(top + self.caret[0], bx + self.caret[1])
             except curses.error:
                 pass
         scr.refresh()
 
     def loop(self, scr, first=""):
         curses.raw()
+        curses.nonl()  # Enter now arrives as "\r", which leaves ctrl+j ("\n") free to mean a new line
+        self.nl = True
         scr.keypad(True)
         scr.timeout(80)
         self.colors = curses.has_colors()
@@ -1445,8 +1460,8 @@ class Screen:
         self.set_mouse()
         if first:
             self.submit(first)
-        if VT:
-            sys.stdout.write("\033[?2004h")  # ask the terminal to mark pastes, so a dropped file can become a chip
+        if VT:  # ask the terminal to mark pastes, so a dropped file can become a chip, and to report shift+enter
+            sys.stdout.write("\033[?2004h\033[>4;1m")
             sys.stdout.flush()
         fresh = was = True
         while not self.quit:
@@ -1463,7 +1478,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write("\033[?1002l\033[?2004l" if VT else "")
+        sys.stdout.write("\033[?1002l\033[?2004l\033[>4;0m" if VT else "")
         sys.stdout.flush()
 
 

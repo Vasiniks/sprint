@@ -507,9 +507,9 @@ def test_input_area_is_a_titled_rule_and_a_trail_prompt_not_a_box():
     s.buf = "make it so"
     rows, typed = s.input_rows(60, used=7)
     text = [flat(r) for r in rows]
-    assert len(rows) == 2 and len(text[0]) == 60
-    assert "ask" in text[0] and "Qwen3.5-0.8B" in text[0] and "7%" in text[0]
-    assert text[1].startswith("░▒▓█ make it so") and "┃" not in "".join(text)
+    assert len(rows) == 3 and len(text[0]) == len(text[2]) == 60  # a rule above and a rule below
+    assert "Qwen3.5-0.8B" in text[0] and "7%" in text[0] and "ask" in text[2]
+    assert text[1].startswith("░▒▓█ > make it so") and "┃" not in "".join(text)
 
 
 def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
@@ -518,7 +518,7 @@ def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
     assert "Ask anything" in flat(rows[1])
     s.buf = "x" * 50
     rows, typed = s.input_rows(40)
-    assert len(typed) == 2 and flat(rows[2]).startswith("     x")
+    assert len(typed) == 2 and flat(rows[2]).startswith("       x")
 
 
 def test_permission_prompt_names_the_call_and_the_keys(tmp_path, monkeypatch):
