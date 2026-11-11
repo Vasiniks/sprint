@@ -1412,7 +1412,7 @@ def command(agent, line):
         now = {"model": agent.model, "url": agent.url, "ctx": agent.ctx, "steps": agent.steps, "mode": agent.mode,
                "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
                "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
-               "motion": kept.get("motion", True), "timeout": agent.timeout, "theme": kept.get("theme", "default"),
+               "motion": kept.get("motion", True), "timeout": agent.timeout, "theme": kept.get("theme", "sprint"),
                "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
         return [[(f"  {k:<10}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
             note(f"change with /config KEY VALUE · kept in {str(CONFIG).replace(str(Path.home()), '~', 1)}")
@@ -1463,7 +1463,7 @@ HELP = ("@file attaches a file · !command runs it yourself · /model [NAME] · 
         "  /context · /usage · /compact · /copy [code|all] · /export [FILE] · /log · /directory [PATH] · /plan · /race MODEL MESSAGE\n"
         "  /systemprompt · /config · /clear · /bye")
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.0"  # the same as in pyproject.toml
+VERSION = "0.4.8"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 USAGE = f"""sprint {VERSION} - a terminal coding agent for small local models
 

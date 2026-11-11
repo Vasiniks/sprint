@@ -117,27 +117,67 @@ ROLE = {"": (0, 0), "dim": (0, curses.A_DIM), "bold": (0, curses.A_BOLD), "frame
 
 
 def theme(hues, bg, fg, panel, ghost):
-    """a theme, in the terminal's 256 colours: what red, green, yellow, blue, magenta and cyan become, the background of
-    the whole screen, plain text, the shade behind your messages and popups, and greyed-out text"""
-    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost}
+    """a theme, as exact colours: what red, green, yellow, blue, magenta and cyan become, the background of the whole
+    screen, plain text, the shade behind your messages and popups, and greyed-out text"""
+    return {**dict(enumerate(hues, 1)), "bg": bg, "fg": fg, "panel": panel, "ghost": ghost, "band": blend(panel, fg, 0.12)}
 
 
-# default and mono leave the screen to the terminal; every other theme brings its own background
-THEMES = {"default": {}, "mono": {i: -1 for i in range(1, 8)},
-          "amber": theme((203, 178, 214, 172, 208, 220), 233, 222, 236, 94),
-          "forest": theme((167, 114, 185, 109, 150, 79), 234, 151, 237, 65),
-          "ocean": theme((204, 49, 80, 33, 105, 39), 17, 153, 19, 67),
-          "sunset": theme((203, 150, 221, 141, 205, 215), 52, 223, 53, 131),
-          "midnight": theme((203, 120, 227, 75, 213, 87), 16, 255, 235, 242),
-          "cmyk": theme((199, 51, 226, 45, 201, 51), 16, 231, 236, 244),
-          "matrix": theme((210, 46, 190, 35, 84, 120), 16, 40, 235, 28),
-          "slate": theme((210, 150, 222, 110, 182, 116), 237, 253, 235, 246),
-          "grape": theme((204, 156, 228, 111, 213, 123), 54, 189, 17, 103),
-          "paper": theme((124, 28, 130, 25, 127, 24), 230, 235, 187, 243)}
-THEME_ABOUT = {"default": "your terminal's own colours", "mono": "no colour, only bold and dim", "amber": "warm ambers, like an old monitor",
-               "forest": "soft greens on charcoal", "ocean": "blues and teals on deep navy", "sunset": "orange, pink and violet at dusk",
-               "midnight": "true black, bright colours", "cmyk": "black with cyan, magenta, yellow", "matrix": "green on black",
-               "slate": "soft pastels on grey", "grape": "purple, with candy colours", "paper": "light, with dark ink"}
+def blend(a, b, part):
+    """the colour that far along the way from a to b: the band behind your own messages is the panel, a step nearer the text"""
+    return "#" + "".join(f"{round(int(a[i:i + 2], 16) + (int(b[i:i + 2], 16) - int(a[i:i + 2], 16)) * part):02x}" for i in (1, 3, 5))
+
+
+PALETTE = {16 + 36 * r + 6 * g + b: tuple((0, 95, 135, 175, 215, 255)[v] for v in (r, g, b))
+           for r in range(6) for g in range(6) for b in range(6)}
+PALETTE.update({232 + n: (8 + 10 * n,) * 3 for n in range(24)})  # the terminal's 256 colours, less the 16 a user may have restyled
+
+
+def near(colour, seen={}):
+    """the closest of the terminal's 256 colours to an exact one such as "#181e29". Closest in colour more than in
+    brightness: a dark green should stay green, not turn into the grey that happens to be as dark"""
+    if colour not in seen:
+        want = tuple(int(colour[i:i + 2], 16) for i in (1, 3, 5))
+        tint = lambda c: [v - sum(c) / 3 for v in c]  # how far each channel stands from the colour's own grey
+        apart = lambda a, b: sum((x - y) ** 2 for x, y in zip(a, b))
+        seen[colour] = min(PALETTE, key=lambda n: apart(PALETTE[n], want) + 2 * apart(tint(PALETTE[n]), tint(want)))
+    return seen[colour]
+
+
+def can_exact():
+    """can this terminal be given exact colours (by redefining spare slots of its palette)? Only where it says it
+    shows 24-bit colour; Apple's Terminal says it can and then does not"""
+    try:
+        return bool(os.environ.get("COLORTERM") in ("truecolor", "24bit") and os.environ.get("TERM_PROGRAM") != "Apple_Terminal"
+                    and curses.can_change_color())
+    except curses.error:
+        return False  # no screen to ask
+
+
+# sprint is the theme you get; terminal and mono leave the screen to the terminal; every other brings its own background
+THEMES = {
+    "sprint": theme(("#ff5c5c", "#3ddc7e", "#ffe100", "#5b9dff", "#ff3d9a", "#19c2ff"), "#0b0c0e", "#f2f2f2", "#1d2024", "#7d8086"),
+    "terminal": {}, "mono": {i: -1 for i in range(1, 8)},
+    "sapphire": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#181e29", "#efefef", "#28324a", "#7b8496"),
+    "sapphire-dim": theme(("#da6771", "#4eb071", "#fff099", "#399ef4", "#b168df", "#21c5c7"), "#080d14", "#efefef", "#141c2a", "#6b7386"),
+    "midnight": theme(("#ff5555", "#50fa7b", "#f1fa8c", "#6ea8ff", "#ff79c6", "#8be9fd"), "#000000", "#ffffff", "#181818", "#6e6e6e"),
+    "slate": theme(("#e88388", "#a8cc8c", "#dbab79", "#71bef2", "#d290e4", "#66c2cd"), "#262a33", "#e6e9ef", "#363c49", "#8a92a3"),
+    "ocean": theme(("#ff7a90", "#3ee6b0", "#ffd479", "#4aa8ff", "#a99bff", "#2fd6ff"), "#071a2b", "#d6ecff", "#10304d", "#5f86a8"),
+    "forest": theme(("#e06c5a", "#7fd88b", "#e3d27a", "#6fb3a8", "#d9a3c7", "#58d1b0"), "#0f1a14", "#d7e8d5", "#1d2e24", "#6f8a78"),
+    "grape": theme(("#ff7eb6", "#9cf0a8", "#ffe58a", "#9aa7ff", "#d48cff", "#7fe3ff"), "#1b1030", "#ece4ff", "#2e1c4e", "#8f7fb3"),
+    "sunset": theme(("#ff6b6b", "#c5e17a", "#ffc857", "#9d8cff", "#ff5fa2", "#ffa26b"), "#1f1020", "#ffe9d6", "#361c38", "#a07a8c"),
+    "amber": theme(("#ff6a3d", "#c8a400", "#ffd24a", "#d98c00", "#ff9248", "#ffe08a"), "#171000", "#ffb000", "#2b1f00", "#8a6a1a"),
+    "matrix": theme(("#ff5f5f", "#00ff41", "#b6ff00", "#00c896", "#7dffb0", "#39ffb0"), "#000a00", "#33ff66", "#0a2412", "#1f8f3a"),
+    "paper": theme(("#c0392b", "#2e7d32", "#a86400", "#1f5fbf", "#a0308c", "#0b7285"), "#f6f3ea", "#24262b", "#e2dccb", "#8b8778")}
+THEME_ABOUT = {"sprint": "near-black, with the logo's colours", "terminal": "your terminal's own colours",
+               "mono": "no colour, only bold and dim", "sapphire": "after Tyriar's Sapphire for VS Code",
+               "sapphire-dim": "Sapphire on a darker ground", "midnight": "true black, bright colours",
+               "slate": "soft colours on blue-grey", "ocean": "blues and teals on deep navy",
+               "forest": "greens on dark moss", "grape": "purple, with candy colours",
+               "sunset": "orange, pink and violet at dusk", "amber": "an old amber monitor",
+               "matrix": "green on black", "paper": "light, with dark ink"}
+# where the terminal can take exact colours, each one a theme names gets a spare slot of the palette (88 and up); elsewhere
+# the nearest of the 256 stands in for it
+SLOT = {c: 88 + n for n, c in enumerate(sorted({v for t in THEMES.values() for v in t.values() if isinstance(v, str)}))}
 # colour pairs from 20 up show every theme in its own colours, for the theme popup: "ocean.0" is its text, "ocean.1"-"ocean.6"
 # its hues, all on its background. (No pair goes past 255: older curses cannot name one.)
 SAMPLE = {f"{name}.{i}": 20 + 7 * n + i for n, name in enumerate(THEMES) for i in range(7)}
@@ -157,17 +197,33 @@ MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports 
 DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching"}  # a tool at work
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
-CELLS = "▰▱" if VT else "//"  # a filled and an empty cell of the working animation; Windows console fonts lack the parallelograms
+MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
+CELLS = "▰▱" if VT else "■□"  # a filled and an empty cell: the working animation and the mode icons (Windows fonts lack the slanted ones)
+MODE_ICON = {"ask": CELLS[0] + CELLS[1] * 2, "edits": CELLS[0] * 2 + CELLS[1], "auto": CELLS[0] * 3}  # fuller, the more runs unasked
 
 CODE = re.compile(
     r"(?P<comment>#.*|//.*)|(?P<string>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|(?P<number>\b\d+(?:\.\d+)?\b)"
     r"|(?P<kw>\b(?:def|class|return|if|elif|else|for|while|import|from|as|try|except|finally|with|lambda|yield|async"
     r"|await|function|const|let|var|new|public|private|static|void|fn|struct|impl|package|func|type|interface|export"
-    r"|default|switch|case|break|continue|in|not|and|or|is|None|True|False|null|true|false|this|self)\b)")
+    r"|default|switch|case|break|continue|in|not|and|or|is|None|True|False|null|true|false|this|self)\b)"
+    r"|(?P<deco>(?<!\S)@[\w.]+)|(?P<func>\b[^\W\d]\w*(?=\())|(?P<const>\b[A-Z][A-Z0-9_]+\b)")
+# emphasis has to hug its text and stand clear of a word, so 2 * 3 * 4, snake_case and *args stay as they are; a path is
+# tried before the underscores, so __init__.py is one. Each group is named for the role its text is shown in
 PROSE = re.compile(
-    r"(?P<code>`[^`\n]+`)|(?P<bold>\*\*[^*\n]+\*\*)|(?P<url>https?://[^\s)>\]]+)"
+    r"(?P<code>`[^`\n]+`)|(?P<struck>~~(?=\S)[^~\n]+(?<=\S)~~)|(?P<url>https?://[^\s)>\]]+)"
     r"|(?P<path>(?<![\w/])(?:~/|\.{0,2}/)?(?:[\w.-]+/)+[\w.-]*\w"
-    r"|(?<![\w/.-])[\w-]+\.(?:py|js|ts|tsx|jsx|json|md|txt|toml|ya?ml|sh|html|css|go|rs|c|h|cpp|java|rb|cfg|ini)\b)")
+    r"|(?<![\w/.-])[\w-]+\.(?:py|js|ts|tsx|jsx|json|md|txt|toml|ya?ml|sh|html|css|go|rs|c|h|cpp|java|rb|cfg|ini)\b)"
+    r"|(?P<strong>\*\*\*?(?=[^\s*])[^*\n]+(?<=[^\s*])\*\*\*?|(?<![\w.])__(?=[^\s_])[^_\n]+(?<=[^\s_])__(?!\w))"
+    r"|(?P<em>(?<![\w*])\*(?=[^\s*])[^*\n]+(?<=[^\s*])\*(?![\w*])|(?<!\w)_(?=[^\s_])[^_\n]+(?<=[^\s_])_(?!\w))")
+RULE = re.compile(r"\s*([-*_])(?:\s*\1){2,}\s*")  # --- or * * *: a line across
+ITEM = re.compile(r"(\s*(?:[-*+•]|(\d+[.)]))\s+)(\[[ xX]\](?=\s))?")  # a list mark, and a task box after it
+# a word that says what the line is, then a colon; any other key of up to three words counts only at the start of a list item
+LABEL = re.compile(r"(?i)\s*(?:(?P<note>note|tip|hint|info)|(?P<warn>warning|caution|important|todo|fixme)|(?P<err>error|failed|failure)"
+                   r"|(?P<ok>done|fixed|success|passed)|(?P<label>[^\W\d][\w-]*(?: [\w-]+){0,2})):(?=\s|$)")
+ROLE.update({"strong": (3, curses.A_BOLD), "em": (2, getattr(curses, "A_ITALIC", 0)), "struck": (0, curses.A_DIM),
+             "h1": (5, curses.A_BOLD), "h2": (6, curses.A_BOLD), "h3": (3, curses.A_BOLD), "ordinal": (3, 0), "bar": (4, 0),
+             "note": (4, 0), "label": (6, 0), "func": (6, 0), "deco": (4, 0), "const": (3, 0),
+             "thought": (0, curses.A_DIM | getattr(curses, "A_ITALIC", 0))})  # the model's reasoning: quieter than what it says
 
 
 # ---------- text: highlighting and wrapping. A line is a list of (text, role) spans ----------
@@ -187,21 +243,35 @@ def code(line):
 
 
 def prose(text):
-    """assistant text -> highlighted lines: titles, bullets, `code`, **bold**, paths, URLs, fenced code"""
+    """assistant text -> highlighted lines: headings by level, lists, task boxes, quotes, rules, labels, `code`, **bold**,
+    *italic*, ~~struck~~, paths, URLs, fenced code. The marks stay in the text, in the colour of what they mark"""
     out, fenced = [], False
     for line in text.split("\n"):
-        bullet = re.match(r"\s*(?:[-*•]|\d+[.)])\s+", line)
+        head, quote = re.match(r"\s*(#+)\s*", line), re.match(r"(?:\s*>)+", line)
         if line.strip().startswith("```"):
             fenced = not fenced
             out.append([(line, "dim")])
         elif fenced:
             out.append(code(line))
-        elif line.lstrip().startswith("#") or (0 < len(line) <= 40 and line.rstrip().endswith(":") and not bullet):
+        elif RULE.fullmatch(line):
+            out.append([("─" * 24, "dim")])
+        elif head:
+            out.append([(t, r) for t, r in ((head.group(), "dim"), (line[head.end():], f"h{min(3, len(head.group(1)))}")) if t])
+        elif 0 < len(line) <= 40 and line.rstrip().endswith(":") and not quote and not ITEM.match(line):
             out.append([(line, "title")])
-        elif bullet:
-            out.append([(bullet.group(), "bullet")] + marks(line[bullet.end():], PROSE))
         else:
-            out.append(marks(line, PROSE))
+            lead, base, rest = [], "", line
+            if quote:  # a bar where the > was, and what is quoted in dim
+                lead, base, rest = [(quote.group().replace(">", "▌"), "bar")], "dim", line[quote.end():]
+            item = ITEM.match(rest)
+            if item:
+                lead += [(item.group(1), "ordinal" if item.group(2) else "bullet")]
+                lead += [(item.group(3), "ok" if item.group(3) != "[ ]" else "warn")] * bool(item.group(3))
+                rest = rest[item.end():]
+            label = LABEL.match(rest)
+            if label and (item or label.lastgroup != "label"):
+                lead, rest = lead + [(label.group(), label.lastgroup)], rest[label.end():]
+            out.append(lead + marks(rest, PROSE, base))
     return out
 
 
@@ -262,6 +332,46 @@ def took(it):
     return "" if secs is None else f"{int(secs)}s" if live or secs >= 10 else f"{secs:.1f}s"
 
 
+def shift_reader():
+    """a function that says whether Shift is down right now, where the system can be asked (macOS, Windows), else None"""
+    import ctypes
+    if sys.platform == "darwin":
+        cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cg.CGEventSourceFlagsState.restype, cg.CGEventSourceFlagsState.argtypes = ctypes.c_uint64, [ctypes.c_int32]
+        return lambda: bool(cg.CGEventSourceFlagsState(1) & 0x20000)
+    if sprint.WINDOWS:
+        return lambda: bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+    return None
+
+
+SHIFT = []  # the reader above, once it has been tried: [None] where the keyboard cannot be asked
+
+
+def shift_held():
+    """is Shift down? For shift+enter in terminals that send it as a plain Enter (Apple's Terminal, the Windows
+    console). Never over ssh, where the keyboard in question belongs to another machine"""
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False
+    if not SHIFT:
+        got = []
+
+        def first():
+            try:
+                read = shift_reader()
+                read() if read else None
+                got.append(read)
+            except Exception:
+                got.append(None)
+        t = threading.Thread(target=first, daemon=True)
+        t.start()
+        t.join(0.3)  # no answer in time (no window server to ask): never ask again
+        SHIFT.append(got[0] if got else None)
+    try:
+        return bool(SHIFT[0] and SHIFT[0]())
+    except Exception:
+        return False
+
+
 def kilo(n):
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
@@ -290,6 +400,8 @@ class Screen:
         self.pastes = {}  # large pasted texts by their chip label
         self.newer = ""  # a newer published version, once the daily look has found one
         self.choice = 0  # which answer to an approval is highlighted: once, always, no
+        self.live = False  # is this a real screen with a person at it? Only then is the keyboard asked about Shift
+        self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -307,36 +419,51 @@ class Screen:
         self.sidebar, self.history = kept.get("sidebar", True), kept.get("history", True)
         self.side_w, self.left_w = kept.get("sidebar_w", SIDE), kept.get("history_w", 26)
         self.motion, self.plan = kept.get("motion", True), bool(kept.get("plan", False))
-        self.theme = kept.get("theme") if kept.get("theme") in THEMES else "default"
+        saved = kept.get("theme")  # "default" was the old name of the terminal's own colours
+        self.theme = saved if saved in THEMES else "terminal" if saved == "default" else "sprint"
         self.peek = kept["peek"] if isinstance(kept.get("peek"), int) and kept["peek"] > 0 else PEEK
         self.showthink = bool(kept.get("showthink", False))  # the model's reasoning in full, or one line saying it thought
         self.paint()
 
+    def ink(self, colour):
+        """the terminal's number for a theme's colour: an exact one's own slot, or the nearest of the 256"""
+        return colour if isinstance(colour, int) else SLOT[colour] if self.exact else near(colour)
+
     def paint(self):
         """(re)define the colour pairs for the current theme: 1-7 its hues on its background, 8 its plain text, 9 ghost
-        text, 10-19 the same on the panel shade. With fewer than 256 colours the screen stays the terminal's own"""
-        self.base = 0  # the pair plain text is drawn in: 8 when the theme has a background, else the terminal's own
+        text, 10-19 the same on the panel shade, 230-237 on the band behind your own messages. With fewer than 256
+        colours the screen stays the terminal's own"""
+        self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
         try:
             if not curses.has_colors():
                 return
             curses.use_default_colors()
             rich = self.rich = curses.COLORS >= 256
-            t = THEMES[self.theme]
-            bg, fg, panel = (t.get("bg", -1), t.get("fg", -1), t.get("panel", 236)) if rich else (-1, -1, -1)
+            if rich and can_exact():
+                try:
+                    for c, slot in SLOT.items():
+                        curses.init_color(slot, *(int(c[i:i + 2], 16) * 1000 // 255 for i in (1, 3, 5)))
+                    self.exact = True
+                except curses.error:
+                    pass  # it said it could and cannot: the nearest colours, then
+            t, ink = THEMES[self.theme], self.ink
+            bg, fg, panel = (ink(t.get("bg", -1)), ink(t.get("fg", -1)), ink(t.get("panel", 236))) if rich else (-1, -1, -1)
             for i in range(8):
-                colour = t.get(i, i) if rich or self.theme == "mono" else i
+                colour = ink(t.get(i, i)) if rich or self.theme == "mono" else i
                 if i:
                     curses.init_pair(i, colour, bg)
                 curses.init_pair(10 + i, colour if i else fg, panel)
             if not rich:
                 return
             curses.init_pair(8, fg, bg)
-            curses.init_pair(9, t.get("ghost", 244), bg)
-            curses.init_pair(19, t.get("ghost", 244), panel)
+            curses.init_pair(9, ink(t.get("ghost", 244)), bg)
+            curses.init_pair(19, ink(t.get("ghost", 244)), panel)
+            for i in range(8):
+                curses.init_pair(230 + i, ink(t.get(i, i)) if i else fg, ink(t.get("band", 238)))
             self.base = 8 if "bg" in t else 0
             for n, other in enumerate(THEMES.values()):
                 for i in range(7):
-                    curses.init_pair(20 + 7 * n + i, other.get(i, i) if i else other.get("fg", -1), other.get("bg", -1))
+                    curses.init_pair(20 + 7 * n + i, ink(other.get(i, i) if i else other.get("fg", -1)), ink(other.get("bg", -1)))
         except curses.error:
             pass  # no screen yet
 
@@ -584,6 +711,8 @@ class Screen:
             self.buf = self.buf[:self.cur - 1] + "\n" + self.buf[self.cur:]              # a new line instead of a send
         elif k == "\n" and self.nl:  # ctrl+j, now that Enter arrives as "\r"
             self.newline()
+        elif k in ("\n", "\r", curses.KEY_ENTER) and self.buf.strip() and self.live and shift_held():
+            self.newline()  # shift+enter in a terminal that sends it as a plain Enter
         elif k in ("\n", "\r", curses.KEY_ENTER):
             if opts:
                 self.complete(opts)
@@ -621,6 +750,8 @@ class Screen:
             self.cur = max(0, min(n, self.cur + (1 if k == curses.KEY_RIGHT else -1)))
         elif k in (curses.KEY_HOME, "\x01"):  # to the start of this line, and the end of it
             self.cur = self.buf.rfind("\n", 0, self.cur) + 1
+        elif k == curses.KEY_END and not self.buf and self.scroll:
+            self.scroll = 0  # nothing typed: End is the end of the conversation
         elif k in (curses.KEY_END, "\x05"):
             self.cur = self.buf.find("\n", self.cur) % (n + 1)  # no line break ahead: -1 becomes the very end
         elif k == "\x15":  # ctrl+u
@@ -686,6 +817,7 @@ class Screen:
 
     def paste(self, text):
         """pasted text: files become chips like [Image #1]; anything else goes in as typed, on one line"""
+        text = text.replace("\r\n", "\n").replace("\r", "\n")  # terminals send a paste's line breaks as returns
         if self.popup:
             for ch in text.replace("\n", " "):
                 self.popup_key(ch)
@@ -828,6 +960,9 @@ class Screen:
 
     def click(self, x, y):
         w, lw, side = self.geo
+        if self.jump_to and y == self.jump_to[0] and self.jump_to[1] <= x < self.jump_to[2]:
+            self.scroll = 0  # the button that takes you back to the newest message
+            return
         where = "left" if lw and x < lw else "side" if side and x > w - side - 1 else "main"
         item = self.hits.get((where, y))
         if item and where == "main" and item["t"] == "tool":
@@ -849,7 +984,7 @@ class Screen:
         for y in range(ya, yb + 1):
             x0, text = self.screen.get(y, (0, ""))
             piece = text[max(0, xa - x0) if y == ya else 0:(xb - x0 + 1) if y == yb else None]
-            lines.append(re.sub(r" *│\s*$", "", re.sub(r"^\s*│ ?", "", piece)).rstrip() if y in self.screen else "")
+            lines.append(re.sub(r" *[│┆]\s*$", "", re.sub(r"^\s*[│┆] ?", "", piece)).rstrip() if y in self.screen else "")
         indent = min((len(ln) - len(ln.lstrip()) for ln in lines if ln.strip()), default=0)  # keep code's own indentation
         text = "\n".join(ln[indent:] for ln in lines).strip("\n")
         if text.strip():
@@ -918,6 +1053,10 @@ class Screen:
         rows = [r for r in p["rows"] if not q or r["keep"] or (r["v"] is not None and q in flat(r["s"]).lower())]
         return rows, [r for r in rows if r["v"] is not None]
 
+    def popup_size(self, h, w):
+        """how wide and how tall the open popup may be on a screen this size: the text editor takes most of it"""
+        return (max(40, min(120, w - 4)) if self.popup["edit"] else max(40, min(92, w - 6))), h - 4
+
     def popup_lines(self, w, tall=20):
         """the popup as a window exactly w wide -> (lines, index of the chosen line, index of the typing line)"""
         p = self.popup
@@ -930,7 +1069,8 @@ class Screen:
             e, room = p["edit"], max(3, tall - 2)
             e["top"] = max(e["row"] - room + 1, min(e["top"], e["row"]))
             shift = max(0, e["col"] - (w - 6))
-            for i, text in enumerate(e["lines"][e["top"]:e["top"] + room], e["top"]):
+            shown = e["lines"][e["top"]:e["top"] + room]
+            for i, text in enumerate(shown + [""] * (room - len(shown)), e["top"]):  # a full window, however short the text
                 lines.append([("│ ", "frame")] + clip([(text[shift:] if i == e["row"] else text, "")], w - 4) + [(" │", "frame")])
             p["cursor"] = (1 + e["row"] - e["top"], e["col"] - shift)
             hint = " ctrl+s save · ctrl+r default · esc cancel "
@@ -1076,9 +1216,9 @@ class Screen:
 
         # every row is a strip of its own theme: name, the six hues and a few words, on that theme's background.
         # The highlight covers only the mark and the name, so the hues of the chosen row stay in view
-        rows = [row([("● " if n == was else "  ", self.agent.mode), (f" {n:<9}", n + ".0")] + [("██", f"{n}.{i}") for i in range(1, 7)]
+        rows = [row([("● " if n == was else "  ", self.agent.mode), (f" {n:<13}", n + ".0")] + [("██", f"{n}.{i}") for i in range(1, 7)]
                     + [(f"  {THEME_ABOUT[n]:<34} ", n + ".0")], n) for n in THEMES]
-        self.pop("Theme", rows, pick=keep, move=show, back=lambda: show(was), sel=list(THEMES).index(was), lit=12)
+        self.pop("Theme", rows, pick=keep, move=show, back=lambda: show(was), sel=list(THEMES).index(was), lit=16)
 
     def popups(self):
         return {"/systemprompt": self.prompt_popup, "/system": self.prompt_popup, "/theme": self.theme_popup,
@@ -1203,7 +1343,7 @@ class Screen:
     def mode_popup(self, title="Mode"):
         a = self.agent
         free = {"read": True, "write": a.mode != "ask", "edit": a.mode != "ask", "shell": a.mode == "auto", "fetch": a.mode == "auto"}
-        rows = [row([("● " if m == a.mode else "  ", m), (f"{m:<7}", m), (ABOUT[m], "")], m) for m in MODES]
+        rows = [row([("● " if m == a.mode else "  ", m), (MODE_ICON[m] + " ", m), (f"{m:<7}", m), (ABOUT[m], "")], m) for m in MODES]
         rows += [row(""), row([(f"in {a.mode} mode", "dim")])]
         rows += [row([(f"  {tool:<7}", ""), ("runs without asking", "green") if ok else ("asks first", "yellow")]) for tool, ok in free.items()]
         if title == "Permissions":  # the calls that never ask, whatever the mode: enter removes one
@@ -1343,6 +1483,13 @@ class Screen:
 
     # --- the input area
 
+    def mode_row(self):
+        """what sits under the bar: the mode's icon and name, and how to change it; or that this line is a command"""
+        if self.buf.startswith("!") and not self.pending:
+            return [("!", "yellow"), (" shell", "yellow"), (" (runs it yourself, no model)", "dim")]
+        mode = self.agent.mode
+        return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")]
+
     def version_text(self):
         """this version, and beside it a newer one when there is one to get"""
         return [("sprint " + sprint.VERSION, "dim")] + ([(" · ", "dim"), (f"{self.newer} is out: sprint update", "warn")] if self.newer else [])
@@ -1383,10 +1530,7 @@ class Screen:
         tone, line_role = ("yellow", "yellow") if shell else (a.mode, "frame")
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
-        label = "shell" if shell else a.mode
-        hint = " runs it yourself, no model " if shell and bw > 50 else ""
-        foot = [("── ", line_role), (label, tone), (" " + "─" * max(0, bw - len(label) - len(hint) - 6), line_role), (hint, "dim"),
-                ("──", line_role)]
+        foot = [("─" * bw, line_role)]
         if self.pending:
             c = self.pending
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
@@ -1395,7 +1539,7 @@ class Screen:
                 keys += [(f" {text} ", "chosen")] if n == self.choice else [(" " + text[0], "bold"), (text[1:] + " ", "dim")]
                 keys += [("  ", "")]
             keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
-            return [rule, [(">", a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
+            return [rule, [(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
         typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
         for line in text.split("\n"):
@@ -1407,17 +1551,25 @@ class Screen:
         typed, self.caret = typed[first:first + 6], (1 + at - first, 2 + col)
         empty = "a command to run yourself" if shell else "Ask anything…  / for commands  ! for shell"
         body = [[(t, "")] for t in typed] if text else [[(empty, "ghost")]]
-        lead = [("!" if shell else ">", tone), (" ", "")]
+        lead = [("!" if shell else MARK, tone), (" ", "")]
         return [rule] + [(lead if n == 0 else [("  ", "")]) + r for n, r in enumerate(body)] + [foot], typed
 
     # --- conversation -> lines of (kind, spans, item)
 
     def window(self, it, w):
-        """a tool call as a bordered window, every line exactly w wide"""
+        """a tool call as a bordered window, every line exactly w wide; a thought in a dashed frame, so it never looks like one"""
         c, inner = it["call"], w - 4
         full = it["open"] or (c.tool == "think" and self.showthink)
-        if c.tool == "think" and not full:  # folded: one line saying it thought; click it, or /showthink for all
-            return [("", [("  ▸ ", "frame"), ("thought", "dim"), (f"  {len((it['result'] or '').split())} words", "dim")], it)]
+        if c.tool == "think":  # reasoning is not an action: no status and no time, only how much of it there is
+            said = it["result"] or ""
+            name = [("thought", "dim"), (f"  {len(said.split())} words ", "dim")]
+            if not full:  # folded: one line saying it thought; click it, or /showthink for all
+                return [("", clip([("  ┄ ", "frame")] + name, w), it)]
+            top = [("┌┄ ", "frame")] + name
+            rows = [r for x in said.splitlines() for r in wrap([(x.replace("\t", "    "), "thought")], inner)]  # wrapped, never cut
+            return [("", top + [("┄" * (w - len(flat(top)) - 1) + "┐", "frame")], it)] + \
+                   [("", [("┆ ", "frame")] + clip(r, inner) + [(" ┆", "frame")], it) for r in rows] + \
+                   [("", [("└" + "┄" * (w - 2) + "┘", "frame")], it)]
         body = []
         if c.tool == "shell":
             body = [[("$ " if i == 0 else "  ", "dim"), (x, "bold")] for i, x in enumerate(c.body.splitlines())]
@@ -1444,8 +1596,7 @@ class Screen:
         elif c.tool == "write":
             flag = "  replaces file" if it["old"] else "  new file"
         flag = flag if room > 24 else ""
-        target = c.body.split("\n")[0] if c.tool == "shell" else c.arg
-        target = (f"{len((it['result'] or '').split())} words" if c.tool == "think" else target)[:max(0, room - len(flag))]
+        target = (c.body.split("\n")[0] if c.tool == "shell" else c.arg)[:max(0, room - len(flag))]
         mid = [("  " + target, "url" if c.tool == "fetch" else "" if c.tool == "shell" else "path"),
                (flag, "warn" if it["old"] else "dim")]
         gap = w - len(flat(head + mid + tail))
@@ -1465,8 +1616,9 @@ class Screen:
                     rows = self.window(it, w)
                 elif it["t"] == "user":
                     mine = it["text"].startswith("!")  # a command you ran yourself keeps its mark
-                    rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 2)]
-                    rows = [("user", ([("!" if mine else ">", "yellow" if mine else self.agent.mode), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
+                    tone = "yellow" if mine else self.agent.mode  # a bar down the side, then the mark, then what you said
+                    rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 4)]
+                    rows = [("user", [("▌", tone), (" ", "")] + ([("!" if mine else MARK, tone), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
                 elif it["t"] == "plan":  # plan mode's checklist: done, doing now, still to do
                     at, me = it["at"], self.agent.mode
@@ -1493,7 +1645,8 @@ class Screen:
         colour, extra = ROLE.get(role, (0, 0))
         if role == "ghost" and not self.rich:
             return curses.A_DIM
-        return (curses.color_pair((10 if panel else 0) + colour or self.base) if self.colors else 0) | extra
+        on = 230 if panel == 2 and self.rich else 10 if panel else 0  # 2: the band behind your own messages
+        return (curses.color_pair(on + colour or self.base) if self.colors else 0) | extra
 
     def mark(self, scr, y, x, n, attr):
         """restyle n cells that are already drawn (a highlight); skipped where the curses at hand cannot"""
@@ -1522,7 +1675,7 @@ class Screen:
         h, w = scr.getmaxyx()
         scr.bkgdset(" ", self.attr(""))  # the whole screen takes the theme's background
         scr.erase()
-        self.hits, self.screen = {}, {}
+        self.hits, self.screen, self.jump_to = {}, {}, None
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")
             return scr.refresh()
@@ -1548,9 +1701,9 @@ class Screen:
         if home:
             for i, row in enumerate(art):
                 self.put(scr, top - logo_h + i, (w - len(flat(art[0]))) // 2, row)
-            tips = [("tab", "bold"), (" mode   ", "dim"), ("/", "bold"), (" commands   ", "dim"),
-                    ("ctrl+c", "bold"), (" quit", "dim")]
-            self.put(scr, top + len(rows) + 1, (w - len(flat(tips))) // 2, tips)
+            tips = [("/", "bold"), (" commands   ", "dim"), ("ctrl+c", "bold"), (" quit", "dim")]
+            self.put(scr, top + len(rows), bx, self.mode_row(), width=bw - len(flat(tips)) - 2)
+            self.put(scr, top + len(rows), bx + bw - len(flat(tips)), tips)
             version = self.version_text()
             self.put(scr, h - 1, 2, [(os.getcwd().replace(str(Path.home()), "~", 1), "dim")], width=w - len(flat(version)) - 8)
             self.put(scr, h - 1, w - 2 - len(flat(version)), version)
@@ -1570,7 +1723,7 @@ class Screen:
                 self.screen[1 + i] = (x0, flat(spans))
                 glow = self.glow(item)  # what you just jumped to flashes in reverse video, then fades through the band
                 if kind == "user" or glow:  # your own messages stand out: a shaded band, or reverse video without 256 colours
-                    self.put(scr, 1 + i, x0, spans, panel=True, width=mw)
+                    self.put(scr, 1 + i, x0, spans, panel=2 if kind == "user" else True, width=mw)
                     if glow > 1 or not self.rich:
                         self.mark(scr, 1 + i, x0, mw, curses.A_REVERSE)
                 else:
@@ -1584,18 +1737,28 @@ class Screen:
                     right = min(x0 + mw - 1, xb) if y == yb else x0 + mw - 1
                     if right >= left:
                         self.mark(scr, y, left, right - left + 1, curses.A_REVERSE)
+            self.jump_to = None
+            if self.scroll:  # scrolled up: a button over the last row of the conversation takes you back down
+                button = " ↓ jump to bottom "
+                at = x0 + mw - len(button) - 1
+                self.put(scr, vh, at, [(button, "chosen")])
+                self.jump_to = (vh, at, at + len(button))
             # the status line, on the blank row above the bar; what is queued, between the two; and the footer
-            keys = [("tab", "bold"), (" mode  ", "dim"), ("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
+            keys = [("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
             for i, r in enumerate(waiting):
                 self.put(scr, top - len(waiting) + i, x0, r, width=mw)
             if self.busy():
                 self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
-                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys[2:]
+                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys
                 keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + keys
-            if self.scroll:
-                self.put(scr, h - 1, x0, [("↓ newer messages below", "warn")])
-            keys = keys if len(flat(keys)) < mw - 24 else keys[:4]
-            self.put(scr, h - 1, max(x0, w - side - 2 - len(flat(keys))), keys)
+            under = self.mode_row()
+            if self.note_text():
+                keys = [(self.note_text(), "warn")]
+            elif self.scroll:
+                keys = [("end", "bold"), (" or click ↓ for the newest", "dim")]
+            keys = keys if len(flat(keys)) < mw - len(flat(under)) - 2 else keys[:2] if len(keys) > 2 else clip(keys, max(4, mw - len(flat(under)) - 2))
+            self.put(scr, h - 1, x0, under, width=mw)
+            self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)
             if side:  # right panel: the context window in small, then what the agent has done
                 x, inner = w - side + 1, side - 3
                 cells = sprint.context_cells(a, inner * 2)
@@ -1604,7 +1767,7 @@ class Screen:
                 self.put(scr, 3, x, cells[inner:])
                 self.put(scr, 4, x, [(f"{kilo(a.used())} of {kilo(a.ctx)} tokens", "dim")], width=inner)
                 self.put(scr, 5, x, [(self.speed_text(), "dim")], width=inner)
-                self.put(scr, 6, x, [("● " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
+                self.put(scr, 6, x, [(MODE_ICON[a.mode] + " " + a.mode, a.mode), ("  " + short(a.model), "dim")] + ([("  plan", "dim")] if self.plan else []),
                          width=inner)
                 self.put(scr, 8, x, [("Activity", "dim")], width=inner)
                 log = self.activity()[-max(1, h - 12):]
@@ -1627,8 +1790,8 @@ class Screen:
                 for y in range(h):
                     self.put(scr, y, lw, [("┃" if self.drag == "left" else "│", a.mode if self.drag == "left" else "frame")])
 
-        if self.note_text():
-            self.put(scr, h - 1, 2 if home else x0, [(self.note_text(), "warn")], width=max(20, (w - side - lw) // 2))
+        if self.note_text() and home:
+            self.put(scr, h - 1, 2, [(self.note_text(), "warn")], width=max(20, w // 2))
 
         # completion popup, drawn over whatever is above the input
         every = [] if self.pending or self.popup else self.options()
@@ -1649,8 +1812,8 @@ class Screen:
         if self.popup:  # the standard popup: a raised box on the panel shade, centred over a greyed-out screen
             for y in range(h):
                 self.mark(scr, y, 0, w, self.attr("ghost"))
-            pw = max(40, min(78, w - 6))
-            plines, sel_at, field_at = self.popup_lines(pw, tall=h - 6)
+            pw, tall = self.popup_size(h, w)
+            plines, sel_at, field_at = self.popup_lines(pw, tall=tall)
             py, px = max(1, (h - len(plines)) // 2), (w - pw) // 2
             self.popup["box"] = (py, px, pw, len(plines))  # where it is, for the mouse
             for i, spans in enumerate(plines):
@@ -1689,6 +1852,7 @@ class Screen:
     def loop(self, scr, first=""):
         curses.raw()
         self.free_ctrl_j()
+        self.live = True
         scr.keypad(True)
         scr.timeout(80)
         self.colors = curses.has_colors()
@@ -1716,7 +1880,7 @@ class Screen:
                 fresh = self.esc is not None  # no key in time: a held escape was just escape
                 self.idle()
         self.interrupt()
-        sys.stdout.write("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" if VT else "")
+        sys.stdout.write(("\033[?1003l\033[?1002l\033[?2004l\033[>4;0m" + "\033]104\007" * self.exact) if VT else "")  # and the palette back
         sys.stdout.flush()
 
 

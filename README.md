@@ -44,9 +44,9 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 | part | what it shows |
 |---|---|
 | Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. |
-| Conversation (middle) | Your messages on a shaded band, the model's replies, and one window per tool call. Under each answer, what the message cost: tokens up and down, and the time. |
+| Conversation (middle) | Your messages on a bright band with a bar down the side in the mode's colour, the model's replies, and one window per tool call. Under each answer, what the message cost: tokens up and down, and the time. |
 | Sidebar (right) | The context window in small, the model's speed, then a log of every tool call and how it ended. |
-| Prompt (bottom) | The line you type on, between two rules: the model and context above it, the mode below it. |
+| Prompt (bottom) | The line you type on, between two rules, with the model and context on the upper one. Under it, the mode with its icon (`▰▱▱` ask, `▰▰▱` edits, `▰▰▰` auto: fuller, the more runs without asking) and a reminder that Tab cycles it. |
 | Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. |
 
 Tool windows start collapsed to a few lines, and each says how long the call took:
@@ -62,6 +62,8 @@ Tool windows start collapsed to a few lines, and each says how long the call too
 ╰───────────────────────────────────────────────────────────────╯
 ```
 
+Answers are coloured by what they are, not just printed: **bold** and *italic* each in a colour of their own, three levels of heading, list numbers and bullets, task boxes, quotes behind a bar, labels such as `Note:` `Warning:` `Error:` `Done:`, and in code blocks keywords, strings, numbers, function names, decorators and constants. A paragraph of ordinary sentences stays plain. Every theme recolours all of it.
+
 Drag the line beside either side panel to resize it. A panel that would squeeze the conversation below 44 columns hides itself.
 
 ## Writing a message
@@ -69,7 +71,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | you type | what happens |
 |---|---|
 | `@notes.txt` | That file is attached to the message, so the model doesn't have to go and read it. Tab completes the name. |
-| `!git status` | Shell mode: the prompt's `>` becomes `!` and the bar changes colour. The command runs yourself: no model, no approval. Its output joins the conversation. |
+| `!git status` | Shell mode: the prompt's `❯` becomes `!` and the bar changes colour. The command runs yourself: no model, no approval. Its output joins the conversation. |
 | a pasted or dragged file | It becomes a chip: `[Image #1]`, `[PDF #1]` or `[File #1]`. Pictures go to the model as pictures, other files as text. |
 | a large paste | It becomes a chip too, such as `[Pasted #1 +42 lines]`, so the prompt stays readable. The model gets the full text. |
 | `ctrl+v`, `alt+v` or `/paste` | The picture on the clipboard (a screenshot, or a copied file) is attached as `[Image #1]`. Terminals paste text only, so sprint asks the system. In Windows Terminal use `alt+v` or `/paste`. |
@@ -81,13 +83,13 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | key | |
 |---|---|
 | `enter` | send; while a turn runs, queue the message; on an empty prompt with messages queued, stop the turn and run them now |
-| `shift+enter`, `alt+enter`, `ctrl+j`, or `\` then `enter` | a new line (shift+enter needs a terminal that reports it; on Windows use `\` then `enter`) |
+| `shift+enter`, `alt+enter`, `ctrl+j`, or `\` then `enter` | a new line. Where the terminal sends shift+enter as a plain Enter (Apple's Terminal, the Windows console), sprint asks the system whether Shift is down; that cannot work over ssh, where the other keys do. |
 | `tab`, `shift+tab` | switch mode: ask → edits → auto |
 | `esc` | stop the turn at once (hangs up on the model, kills a running command); queued messages go back on the prompt |
 | `ctrl+o` | expand or collapse all tool windows; click one to toggle just it |
 | `ctrl+y` | copy the last answer |
 | `ctrl+l` | clear the conversation |
-| mouse wheel, `pgup`, `pgdn` | scroll |
+| mouse wheel, `pgup`, `pgdn` | scroll. Scrolled up, a `↓ jump to bottom` button appears at the foot of the conversation: click it, or press `end` on an empty prompt. |
 | `up`, `down` | recall earlier messages |
 | `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit |
 
@@ -113,7 +115,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/race [model message]` | Send one message to two models and compare answers, time and speed. They may read files but change nothing. |
 | `/mode`, `/permissions` | Change the mode; manage the always-allowed list. |
 | `/think` | Let the model reason before answering. |
-| `/showthink` | Show that reasoning in full. Otherwise it is one line saying the model thought; click one to open it. |
+| `/showthink` | Show that reasoning in full, in a dashed frame of its own so it never looks like an action. Otherwise it is one line saying the model thought; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
 | `/plan` | Split each message into a short list of steps first. Off by default. |
 | `/context` | What is filling the context window, as a coloured grid. |
@@ -124,7 +126,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/export [file]` | Save the conversation as markdown. |
 | `/directory [path]` | Change the folder sprint works in, with a small folder browser. |
 | `/systemprompt` | Edit what the model is told at the start. |
-| `/theme` | default, mono, amber, forest, ocean, sunset, midnight, cmyk, matrix, slate, grape, paper. A theme sets the whole screen, background included; the list previews each in its own colours. |
+| `/theme` | sprint (the one you get: near-black with the logo's colours), terminal (your terminal's own colours), mono, sapphire, sapphire-dim, midnight, slate, ocean, forest, grape, sunset, amber, matrix, paper. A theme sets the whole screen, background included; the list previews each in its own colours. Terminals that show 24-bit colour get the exact colours; others, Apple's Terminal among them, get the nearest of their 256. Sapphire follows [Tyriar's Sapphire](https://marketplace.visualstudio.com/items?itemName=Tyriar.theme-sapphire) for VS Code. |
 | `/config [key value]` | Every setting in one list. |
 | `/sidebar`, `/history` | Hide, show or size the side panels. |
 | `/tools`, `/mouse` | Expand or collapse all tool windows; turn mouse capture on or off. |

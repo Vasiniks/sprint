@@ -48,12 +48,12 @@ def test_wrap_splits_words_longer_than_the_line_and_keeps_roles():
 def test_prose_colours_paths_inline_code_urls_and_bold():
     r = roles(prose("Edit `main()` in src/app.py, see https://example.com and **note** this.")[0])
     assert r["`main()`"] == "code" and r["src/app.py"] == "path"
-    assert r["https://example.com"] == "url" and r["**note**"] == "bold"
+    assert r["https://example.com"] == "url" and r["**note**"] == "strong"  # bold in a colour of its own
 
 
 def test_prose_marks_headings_and_short_title_lines():
     lines = prose("# Plan\nSteps:\n- first do a thing\nplain text here")
-    assert lines[0][0][1] == "title" and lines[1][0][1] == "title"
+    assert lines[0] == [("# ", "dim"), ("Plan", "h1")] and lines[1][0][1] == "title"  # the # is dim, a heading has its level's colour
     assert lines[2][0][1] == "bullet" and lines[3][0][1] == ""
 
 
@@ -345,7 +345,7 @@ def test_user_message_leads_with_the_trail_and_prose_is_indented():
     s.submit("hello there")
     finish(s)
     lines = s.lines(40)
-    assert lines[0][0] == "user" and flat(lines[0][1]) == "> hello there"
+    assert lines[0][0] == "user" and flat(lines[0][1]) == "▌ " + tui.MARK + " hello there"
     assert "┃" not in "".join(flat(spans) for _, spans, _ in lines)
     assert any(flat(spans) == "  Sure thing." for _, spans, _ in lines)
 
@@ -386,7 +386,7 @@ def test_thinking_shows_up_as_its_own_window_before_the_answer():
     assert len(folded) == 1 and "thought" in flat(folded[0][1]) and "5 words" in flat(folded[0][1])
     thought["open"] = True
     head = flat(s.window(thought, 60)[0][1])
-    assert "think" in head and "5 words" in head
+    assert "thought" in head and "5 words" in head  # the open box is titled as the folded line is
 
 
 def test_new_commands_complete_with_their_arguments():
@@ -525,8 +525,8 @@ def test_input_area_is_a_titled_rule_and_a_trail_prompt_not_a_box():
     rows, typed = s.input_rows(60, used=7)
     text = [flat(r) for r in rows]
     assert len(rows) == 3 and len(text[0]) == len(text[2]) == 60  # a rule above and a rule below
-    assert "Qwen3.5-0.8B" in text[0] and "7%" in text[0] and "ask" in text[2]
-    assert text[1].startswith("> make it so") and "┃" not in "".join(text)
+    assert "Qwen3.5-0.8B" in text[0] and "7%" in text[0] and set(text[2]) == {"─"} and "ask" in flat(s.mode_row())
+    assert text[1].startswith(tui.MARK + " make it so") and "┃" not in "".join(text)
 
 
 def test_empty_input_shows_a_hint_and_long_input_wraps_under_the_text():
@@ -786,21 +786,21 @@ def test_theme_popup_previews_as_you_move_and_esc_puts_it_back():
     s = screen()
     s.submit("/theme")
     names = [n for n in tui.THEMES]
-    assert s.popup["title"] == "Theme" and names[0] == "default" and len(names) >= 5 and "mono" in names
+    assert s.popup["title"] == "Theme" and names[0] == "sprint" and len(names) >= 5 and "mono" in names
     s.key(curses.KEY_DOWN)
     assert s.theme == names[1]
     s.key("\x1b")
-    assert s.theme == "default" and "theme" not in sprint.load_config()
+    assert s.theme == "sprint" and "theme" not in sprint.load_config()
     s.submit("/theme")
     s.key(curses.KEY_DOWN)
     s.key("\n")
     assert s.theme == names[1] and sprint.load_config()["theme"] == names[1] and s.popup is None
 
 
-def test_an_unknown_theme_in_the_settings_file_falls_back_to_default():
+def test_an_unknown_theme_in_the_settings_file_falls_back_to_sprint():
     import sprint
     sprint.save_config(theme="nope")
-    assert screen().theme == "default"
+    assert screen().theme == "sprint"
 
 
 def test_settings_popup_offers_theme_peek_and_timeout(tmp_path, monkeypatch):
