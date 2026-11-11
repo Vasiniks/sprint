@@ -552,17 +552,13 @@ def test_permission_prompt_names_the_call_and_the_keys(tmp_path, monkeypatch):
     finish(s)
 
 
-def test_trail_ripples_only_while_working(monkeypatch):
+def test_the_prompt_trail_holds_still_even_while_working(monkeypatch):
     s = screen()
     assert flat(s.trail()) == "░▒▓█"
     monkeypatch.setattr(s, "busy", lambda: True)
-    seen = set()
-    for tick in range(8):
+    for tick in range(8):  # the sprint above the bar is the one animation now
         monkeypatch.setattr(tui.time, "time", lambda tick=tick: tick / 8)
-        seen.add(flat(s.trail()))
-    assert len(seen) == 4 and all(sorted(x) == sorted("░▒▓█") for x in seen)
-    s.motion = False
-    assert flat(s.trail()) == "░▒▓█"
+        assert flat(s.trail()) == "░▒▓█"
 
 
 

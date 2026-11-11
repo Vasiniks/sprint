@@ -27,6 +27,18 @@ sprint
 
 Type a request and press Enter. In the default mode sprint asks before it runs a command or changes a file.
 
+| from the shell | |
+|---|---|
+| `sprint` | open sprint in this folder |
+| `sprint "fix the typo"` | open it with a first message |
+| `sprint help` | list these |
+| `sprint config` | open the settings file in your editor (`$VISUAL`, `$EDITOR`, else the system's text editor) |
+| `sprint serve`, `sprint serve stop`, `sprint serve status` | start the local Ollama server, stop it, or say whether it is running |
+| `sprint update` | get the newest sprint: `git pull` for a checkout, `pip install --upgrade` otherwise |
+| `sprint --version` | the version |
+
+Once a day sprint looks at this repository for a newer version and, if there is one, says so beside the version on the opening screen. The look sends nothing but the request itself; `/config update_check off` stops it.
+
 ## The screen
 
 | part | what it shows |
@@ -129,6 +141,7 @@ Everything sprint keeps lives in `~/.config/sprint/` (`%APPDATA%\sprint` on Wind
 | `system.md` | your own system prompt, if you wrote one |
 | `sprint.log` | messages, tool calls and errors, so there is something to read when a run goes wrong |
 | `usage.json` | one tally per day of tokens, replies, time and tool calls; what `/usage` adds up |
+| `update.json` | the newest version seen and when sprint last looked |
 
 Command-line options override the environment, which overrides saved settings.
 
@@ -198,7 +211,7 @@ python -m pytest
 |---|---|
 | `sprint.py` | the agent: tools, context handling, model backends, the plain session |
 | `sprint_tui.py` | the full-screen interface (stdlib `curses`) |
-| `test_sprint.py`, `test_tui.py`, `test_prompt.py`, `test_popups.py`, `test_showthink.py`, `test_usage.py` | tests; they use a scripted model and never touch your settings |
+| `test_sprint.py`, `test_tui.py`, `test_prompt.py`, `test_popups.py`, `test_showthink.py`, `test_usage.py`, `test_cli.py` | tests; they use a scripted model and never touch your settings |
 | `test_windows.py` | the Windows-only paths, run on Windows in CI and skipped elsewhere |
 | `site/`, `wrangler.jsonc` | the website: static files, published to Cloudflare Pages with `npx wrangler pages deploy --branch site` |
 | `sitegen/` | what builds them: `python3 sitegen/gen.py site sitegen/page.html assets/logo.svg` |

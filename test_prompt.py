@@ -237,16 +237,18 @@ def test_the_status_line_says_what_is_happening_for_how_long_and_how_much():
     s.began -= 12
     row = s.status_row()
     assert flat(row).startswith(" " + tui.ENDS[0]) and row[1][1] in tui.HUES  # the sprint leads it
-    assert f"{tui.ENDS[1]} working (12s · ↑ {tui.kilo(s.agent.used())} tokens · medium)" in flat(row)
+    assert f"{tui.ENDS[1]} working (12s | ↑ {tui.kilo(s.agent.used())} tokens | medium effort)" in flat(row)
     s.emit("x" * 35)  # the reply has begun: count what comes down, by the agent's own measure of a token
-    assert "(12s · ↓ 10 tokens · medium)" in flat(s.status_row())
+    assert "answering (12s | ↓ 10 tokens | medium effort)" in flat(s.status_row())
     s.show_thought("y" * 7000)
     assert "↓ 2.0k tokens" in flat(s.status_row())
     s.status("thinking")  # the next step: the conversation goes up again
     assert "↑" in flat(s.status_row())
     s.began -= 113
     s.note, s.agent.effort = "", "high"
-    assert "working (2m 05s · " in flat(s.status_row()) and "· high)" in flat(s.status_row())
+    assert "working (2m 05s | " in flat(s.status_row()) and "| high effort)" in flat(s.status_row())
+    s.agent.think = True
+    assert "thinking (2m 05s | " in flat(s.status_row()) and "| thinking with high effort)" in flat(s.status_row())
     chat.go.set()
     finish(s)
 
@@ -271,7 +273,7 @@ def test_while_a_turn_runs_the_status_is_above_the_bar_and_the_footer_is_free_fo
     assert chat.started.wait(5)
     s.tell("copied 12 characters")
     rows, c = drawn(s, monkeypatch)
-    assert rows[19].startswith("   " + tui.ENDS[0]) and "working (0s · ↑" in rows[19]  # where the blank row was
+    assert rows[19].startswith("   " + tui.ENDS[0]) and "working (0s | ↑" in rows[19]  # where the blank row was
     assert rows[20].startswith("  ───") and "Qwen3.5-0.8B" in rows[20]
     assert sorted(rows[21][2:6]) == sorted("░▒▓█") and "> Ask anything" in rows[21] and c.at == (21, 9)
     assert rows[22].startswith("  ── auto ───")
@@ -487,7 +489,7 @@ def test_the_loop_asks_for_enter_as_a_return_and_for_shift_enter_to_be_reported(
     monkeypatch.setattr(s, "draw", lambda scr: None)
     s.loop(Window(s))
     out = capsys.readouterr().out
-    assert "nonl" in called and s.nl is True
+    assert ("nonl" in called and s.nl is True) if tui.VT else ("nonl" not in called and s.nl is False)
     assert ("\033[>4;1m" in out and out.endswith("\033[>4;0m")) if tui.VT else out == ""
 
 
@@ -523,3 +525,20 @@ def test_a_terminal_that_refuses_to_change_enter_still_starts(monkeypatch):
     s = screen()
     s.free_ctrl_j()
     assert not s.nl
+
+
+def test_the_verb_follows_what_is_happening(monkeypatch):
+    s = screen()
+    assert s.verb() == "working"
+    s.down = True
+    assert s.verb() == "answering"  # the reply is streaming
+    s.down, s.note = False, "write hello.py · 3 lines"
+    assert s.verb() == "write hello.py · 3 lines"  # a tool call being written out
+    s.note = ""
+    for tool, doing in (("shell", "running"), ("read", "reading"), ("write", "writing"), ("edit", "editing"), ("fetch", "fetching")):
+        s.show_call(sprint.Call(tool, "a.txt", "ls", 0, 0))
+        assert s.verb() == doing
+    s.show_result("ok")
+    assert s.verb() == "working"  # the tool is done: back to the model
+    s.pending = object()
+    assert s.verb() == "waiting for you"

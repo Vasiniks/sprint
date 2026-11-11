@@ -76,7 +76,9 @@ def scr(monkeypatch):
 
 
 def pair(attr):
-    return (attr & curses.A_COLOR) >> 8
+    """the pair number in an attribute built by the stand-in color_pair these tests install (n << 8); every real
+    attribute bit sits higher than that on both the Unix and the Windows curses"""
+    return (attr >> 8) & 0xff
 
 
 def talked(tmp_path, monkeypatch):
