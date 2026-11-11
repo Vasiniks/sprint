@@ -745,7 +745,7 @@ class Screen:
     def choices(self):
         """what the question can be answered with, its key first. A deletion can be allowed once, never for ever"""
         c = self.pending
-        return ("y once", "n no") if c.tool == "shell" and sprint.deletion(c.body) else ("y once", "a always this", "n no")
+        return ("y once", "n no") if sprint.guarded(c) else ("y once", "a always this", "n no")
 
     def ask(self, call):
         """put a call to you. A question nobody answers must not hold the work up: after the wait (20 seconds unless
@@ -1965,8 +1965,9 @@ class Screen:
             if self.deadline:  # how long the question still waits before the call is set aside
                 keys += [(f"waits {max(0, round(self.deadline - time.time()))}s   ", "dim")]
             keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
-            kind = sprint.deletion(c.body) if c.tool == "shell" else ""  # why this one is asked whatever the mode
-            why = [("  " + {"own": "deletes this very folder", "outside": "deletes outside this folder"}.get(kind, "deletes: cannot tell what"), "err")] * bool(kind)
+            kind = sprint.guarded(c)  # why this one is asked whatever the mode
+            why = [("  " + {"own": "deletes this very folder", "outside": "deletes outside this folder",
+                            "settings": "changes sprint's own settings"}.get(kind, "deletes: cannot tell what"), "err")] * bool(kind)
             return [rule, clip([(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], max(8, bw - len(flat(why)))) + why,
                     keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself

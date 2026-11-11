@@ -110,6 +110,8 @@ When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One o
 
 **Deleting beyond the folder's contents always asks.** Files and folders inside the folder sprint is working in are the model's to tidy, under the mode's ordinary rules. But a command that would delete that folder itself (or everything in it, or a folder that holds it), or anything outside it, is put to you in every mode, `auto` included, and so is a deletion sprint cannot read (a `cd` first, a variable, `find -delete`, `git clean`, a one-line script). Such a call can be allowed once but never for ever; no allow rule covers it. If a command does remove the working folder, sprint steps up to the nearest folder that still exists and tells the model.
 
+**sprint's own files always ask.** A model may read sprint's settings, your system prompt, the usage tallies and the log, but writing, editing or running a command that could change one of them (or `sprint config`) is put to you in every mode and can never be allowed for ever. A model that can rewrite the settings could put itself on the allow list.
+
 **A question nobody answers does not stall the work.** After 20 seconds (`/config ask_timeout N`; `0` waits for ever; any key starts the wait again) the call is set aside, not run: the model is told to carry on without it, and the prompt shows that something is waiting. `/permissions` lists what was set aside; Enter on one allows it once, and it runs the next time the model asks for it. (Plain mode, `--plain`, waits as long as it takes.)
 
 ## Commands

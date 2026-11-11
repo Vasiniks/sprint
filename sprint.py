@@ -382,6 +382,39 @@ def target_kind(arg, cwd, home):
     return "" if at.startswith(cwd + os.sep) else "outside"
 
 
+LOOKS = ("cat", "less", "more", "head", "tail", "ls", "grep", "wc", "file", "stat", "type", "bat", "jq")  # commands that only read
+
+
+def own_files():
+    """sprint's own files: the settings, your system prompt, the tallies, what it last saw of updates, the log"""
+    return [CONFIG, prompt_file(), usage_file(), update_file(), log_file()]
+
+
+def touches_own(cmd):
+    """could this shell command change one of sprint's own files? It names one (or sprint's settings folder) and
+    does more than look at it, or it is `sprint config`, which opens the settings to be edited"""
+    if re.search(r"(?:^|[;&|]\s*)sprint\s+config\b", cmd):
+        return True
+    home, paths = str(Path.home()), own_files() + [CONFIG.parent] * (CONFIG.parent.name == "sprint")
+    names = {s for f in paths for full in (str(f), f.as_posix()) for s in (full, full.replace(home, "~", 1), full.replace(home, "$HOME", 1))}
+    if not any(name in cmd for name in names):
+        return False
+    firsts = [(part.split() or [""])[0] for part in re.split(r"[;&|]+", cmd)]
+    return bool(re.search(r">|\btee\b", cmd)) or not all(os.path.basename(w) in LOOKS for w in firsts if w)
+
+
+def guarded(c):
+    """why a call is always put to you, whatever the mode and the allow list, and can never be allowed for ever:
+    "" it is not; a kind of deletion (see deletion); or "settings": it would change one of sprint's own files. A
+    model that can rewrite the settings can put itself on the allow list, or switch the questions off"""
+    if c.tool in ("write", "edit"):
+        at = os.path.normcase(os.path.realpath(os.path.expanduser(c.arg)))
+        return "settings" if any(at == os.path.normcase(os.path.realpath(f)) for f in own_files()) else ""
+    if c.tool != "shell":
+        return ""
+    return deletion(c.body) or ("settings" if touches_own(c.body) else "")
+
+
 SEEN = [""]  # the last working folder known to exist
 
 
@@ -937,7 +970,7 @@ class Agent:
         return f"allowed once: {c.tool} {self.target(c).splitlines()[0][:60]} (it runs when the model next asks for it)"
 
     def do(self, c):
-        key, risky = (c.tool, self.target(c)), c.tool == "shell" and deletion(c.body)  # of this folder, or beyond it: always put to you
+        key, risky = (c.tool, self.target(c)), guarded(c)  # deleting this folder or beyond it, or changing sprint's own files
         free = c.tool == "read" or self.mode == "auto" or (self.mode == "edits" and c.tool in ("write", "edit")) or self.allowed(c)
         if key in self.passes:  # set aside earlier, and since allowed by you
             self.passes.remove(key)
@@ -955,7 +988,8 @@ class Agent:
             save_config(allow=self.allow)
         elif not answer:
             if not sys.stdin.isatty():
-                return "denied: deleting always needs the user's say-so, and there is no terminal to ask on" if risky else \
+                what = "changing sprint's own settings" if risky == "settings" else "deleting"
+                return f"denied: {what} always needs the user's say-so, and there is no terminal to ask on" if risky else \
                     "denied: no terminal to ask on (start with -y)"
             return "denied by the user"
         try:

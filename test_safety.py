@@ -317,3 +317,59 @@ def test_changing_the_mode_is_remembered_and_starting_in_one_is_not(tmp_path):
     assert sprint.load_config()["mode"] == "edits"
     sprint.command(a, "/permissions auto")
     assert sprint.load_config()["mode"] == "auto"
+
+
+# ---------- sprint's own files: a model may read them, never change them without your yes ----------
+# (a model in auto mode once rewrote the settings file: it could as well have put itself on the allow list)
+
+def own(name="config"):
+    return {"config": sprint.CONFIG, "prompt": sprint.prompt_file(), "usage": sprint.usage_file()}[name]
+
+
+@pytest.mark.parametrize("which", ["config", "prompt", "usage"])
+def test_writing_or_editing_one_of_sprints_own_files_always_asks(proj, which):
+    target = own(which)
+    target.write_text('{"mode": "ask"}')
+    a = asking(False)
+    for call in (sprint.Call("write", str(target), '{"mode": "auto", "allow": ["shell *"]}', 0, 0),
+                 sprint.Call("edit", str(target), "<<<<<<< SEARCH\nask\n=======\nauto\n>>>>>>> REPLACE", 0, 0)):
+        assert sprint.guarded(call) == "settings"
+        assert a.do(call).startswith("denied")
+    assert len(a.asked) == 2 and target.read_text() == '{"mode": "ask"}'
+
+
+def test_always_is_never_remembered_for_them_and_no_allow_rule_frees_one(proj, monkeypatch):
+    saved = []
+    monkeypatch.setattr(sprint, "save_config", lambda **kw: saved.append(kw))
+    a = asking("always")
+    a.allow = ["write *", "edit *"]
+    a.do(sprint.Call("write", str(sprint.CONFIG), "{}", 0, 0))
+    assert len(a.asked) == 1 and a.allow == ["write *", "edit *"] and saved == []
+
+
+def test_reading_them_is_as_free_as_reading_anything(proj):
+    sprint.CONFIG.write_text('{"mode": "ask"}')
+    a = asking(False)
+    assert "ask" in a.do(sprint.Call("read", str(sprint.CONFIG), "", 0, 0)) and a.asked == []
+    assert sprint.guarded(sprint.Call("shell", "", f"cat {sprint.CONFIG.as_posix()}", 0, 0)) == ""
+
+
+@pytest.mark.parametrize("cmd", ["echo '{}' > {P}", "sed -i '' s/ask/auto/ {P}", "cp /tmp/x {P}", "mv {P} /tmp/y", "python3 -c \"open('{P}','w').write('{}')\"",
+                                 "sprint config", "tee {P} < /dev/null", "cat {P} | sed s/a/b/ > {P}"])
+def test_a_command_that_could_change_them_always_asks_too(proj, cmd):
+    cmd = cmd.replace("{P}", sprint.CONFIG.as_posix())
+    assert sprint.guarded(sprint.Call("shell", "", cmd, 0, 0)) == "settings", cmd
+
+
+def test_ordinary_files_are_not_mistaken_for_them(proj):
+    for call in (sprint.Call("write", "config.json", "{}", 0, 0), sprint.Call("write", "notes.txt", "x", 0, 0),
+                 sprint.Call("shell", "", "echo hi > out.txt", 0, 0), sprint.Call("shell", "", "cat config.json", 0, 0)):
+        assert sprint.guarded(call) == "", call
+
+
+def test_the_question_says_it_is_sprints_own_settings():
+    call = sprint.Call("write", str(sprint.CONFIG), "{}", 0, 0)
+    s = waiting(call)
+    s.pending, s.choice = call, 0
+    question, keys = s.input_rows(110)[0][1:3]
+    assert "sprint's own settings" in flat(question) and "always" not in flat(keys)
