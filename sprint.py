@@ -1929,6 +1929,102 @@ def check_update():
     return latest if newer(latest, VERSION) else ""
 
 
+# ---------- the plain session ----------
+# Line by line, for where there is no full screen: a pipe, a terminal without curses, or --plain.
+
+def show_rows(agent, rows):
+    """rows of (text, colour) spans, printed a row to a line"""
+    for row in rows:
+        for text, colour in row:
+            agent.say(text, ANSI[colour])
+        agent.say("\n")
+
+
+def plain_prompt(agent, rl, tty, draft, gap):
+    """ask for the next line at a prompt in the mode's colour -> what was typed. gap is written before the prompt;
+    draft is text to begin the line with (what was there when shift+tab changed the mode), which takes readline"""
+    on, off = (f"\033[1;{TINT[agent.mode]}m", "\033[0m") if tty else ("", "")
+    if on and rl:  # tell readline the colour codes take no room
+        on, off = f"\001{on}\002", f"\001{off}\002"
+    if rl:
+        rl.set_startup_hook((lambda d=draft: rl.insert_text(d)) if draft else None)
+    sys.stdout.write(gap)
+    try:
+        return input(f"{on}{agent.mode} ❯{off} ").strip()
+    finally:
+        if rl:
+            rl.set_startup_hook(None)  # or the draft would be typed into the next prompt too
+
+
+def plain_message(agent, text):
+    """send a message to the model, then say what it cost and how full the window is"""
+    say = agent.say
+    before, began = dict(agent.tally), time.time()
+    stop = (agent.run_plan if load_config().get("plan") else agent.run)(text)
+    say(f"  {stop}\n" if stop.startswith("stopped:") else "", "33")
+    say(f"  {agent.receipt(before, began)}\n", "2")
+    n = round(min(agent.used() / agent.ctx, 1) * 10)
+    speed = f" · {agent.rate:.0f} tok/s" if agent.rate else ""
+    say(f"  {'━' * n}{'─' * (10 - n)} {agent.used() * 100 // agent.ctx}% of {agent.ctx} ctx{speed}\n", "2")
+
+
+def plain_line(agent, text):
+    """act on one line: a slash command, a !command of your own, or else a message for the model"""
+    cmd = text.partition(" ")[0]
+    if cmd == "/clear":
+        agent.reset()
+        agent.say("  context cleared\n", "2")
+    elif (rows := command(agent, text)) is not None:
+        show_rows(agent, rows)
+    elif cmd.startswith("/"):  # not a command there is: list the ones there are
+        show_rows(agent, help_rows())
+    elif cmd.startswith("!") and text[1:].strip():
+        agent.bang(text[1:].strip())
+    elif cmd:
+        plain_message(agent, text)
+
+
+def plain_session(agent, first=""):
+    """the session itself: prompt, act on the line, again, until /bye or the end of input. first is a message to
+    start with, as if it had been typed at the first prompt"""
+    say, tty, rl, hotkey = agent.say, sys.stdout.isatty(), None, False
+    try:
+        import readline as rl
+        if tty and "libedit" not in (rl.__doc__ or ""):
+            rl.parse_and_bind(r'"\e[Z": "\C-a/~ \C-m"')  # shift+tab submits the line as "/~ <draft>"
+            hotkey = True
+    except ImportError:
+        pass
+    say("◆ sprint", "1;35")
+    say(f"  {agent.model} · {tilde(folder())}\n", "2")
+    say(f"  {'shift+tab' if hotkey else '/mode'} switches ask → edits → auto · /help for more\n", "2")
+    line, draft, gap = first, "", "\n"
+    while True:
+        if not line:
+            try:
+                line = plain_prompt(agent, rl, tty, draft, gap)
+            except (EOFError, KeyboardInterrupt):
+                return print()
+            draft, gap = "", "\n"
+        text, line = line, ""
+        cmd, _, arg = text.partition(" ")
+        try:
+            if cmd == "/~":  # shift+tab: next mode, prompt redrawn in place, typed text kept
+                agent.cycle()
+                draft, gap = arg, "\033[A\033[2K\r" if tty else ""
+                rl.remove_history_item(rl.get_current_history_length() - 1)
+            elif cmd in ("/bye", "/quit", "/exit"):
+                return
+            else:
+                plain_line(agent, text)
+        except KeyboardInterrupt:
+            say("\n  interrupted\n", "33")
+        except (RuntimeError, OSError) as e:
+            say(f"  {e}\n", "31")
+
+
+# ---------- starting: the command line, then a session ----------
+
 def cli(argv):
     """the words sprint takes besides a message: help, config, serve, update -> exit code, or None to carry on"""
     word, rest = (argv[0], argv[1:]) if argv else ("", [])
@@ -1969,10 +2065,8 @@ def cli(argv):
     return 0
 
 
-def main():
-    done = cli(sys.argv[1:])
-    if done is not None:
-        return done
+def arguments():
+    """the options a session takes, read from the command line"""
     ap = argparse.ArgumentParser(prog="sprint", description=__doc__, epilog="sprint help lists the other commands: config, serve, update")
     ap.add_argument("task", nargs="*", help="optional first message")
     ap.add_argument("-m", "--model", help="model name (default: the one used last, else Qwen 3.5 0.8B Q4_K_M)")
@@ -1983,28 +2077,48 @@ def main():
                     help="ask: confirm every action (default) · edits: accept file edits · auto: run everything")
     ap.add_argument("-y", "--yes", action="store_true", help="same as --mode auto")
     ap.add_argument("--plain", action="store_true", help="line-by-line session instead of the full screen")
-    a = ap.parse_args()
-    if WINDOWS:
-        os.system("")  # switches on colour codes in the classic Windows console
-    saved = load_config()  # flags beat the environment, which beats saved settings
-    a.model = a.model or os.environ.get("SPRINT_MODEL") or saved.get("model", DEFAULT_MODEL)
-    a.url = a.url or os.environ.get("SPRINT_URL") or saved.get("url", "http://localhost:11434")
+    return ap.parse_args()
+
+
+def build_agent(a):
+    """the agent as this run asks for it: flags beat the environment, which beats saved settings"""
+    saved = load_config()
+    model = a.model or os.environ.get("SPRINT_MODEL") or saved.get("model", DEFAULT_MODEL)
+    url = a.url or os.environ.get("SPRINT_URL") or saved.get("url", "http://localhost:11434")
     effort = saved.get("effort", "medium") if saved.get("effort") in EFFORT else "medium"
-    agent = Agent(a.model, a.url, a.ctx or saved.get("ctx", 8192), a.steps or saved.get("steps", EFFORT[effort][1]),
+    agent = Agent(model, url, a.ctx or saved.get("ctx", 8192), a.steps or saved.get("steps", EFFORT[effort][1]),
                   "auto" if a.yes else a.mode or saved.get("mode", "ask"), os.environ.get("SPRINT_KEY", ""),
                   think=bool(saved.get("think")), effort=effort)
     agent.custom, agent.timeout, agent.allow = load_prompt(), saved.get("timeout", 60), list(saved.get("allow", []))
     agent.ask_timeout = saved.get("ask_timeout", 20)
-    warm(a.url, a.model)
+    return agent
+
+
+def get_ready(agent):
+    """before the session opens: ask for the model to be loaded, start a local model server that is not up, and
+    offer to pull a model that is not installed"""
+    warm(agent.url, agent.model)
     try:
-        ready = serve(a.url, agent.status)
+        ready = serve(agent.url, agent.status)
         agent.status("")
-        if ready and not v1(a.url) and not installed(a.url, a.model) and sys.stdin.isatty():
-            if input(f"  {a.model} is not installed - pull it now? [Y/n] ").strip().lower()[:1] in ("", "y"):
-                subprocess.run(["ollama", "pull", a.model],
-                               env={**os.environ, "OLLAMA_HOST": urllib.parse.urlparse(a.url).netloc})
+        if ready and not v1(agent.url) and not installed(agent.url, agent.model) and sys.stdin.isatty():
+            if input(f"  {agent.model} is not installed - pull it now? [Y/n] ").strip().lower()[:1] in ("", "y"):
+                subprocess.run(["ollama", "pull", agent.model],
+                               env={**os.environ, "OLLAMA_HOST": urllib.parse.urlparse(agent.url).netloc})
     except (OSError, ValueError, KeyboardInterrupt):
         pass  # the first message will report whatever is wrong
+
+
+def main():
+    """sprint as it is started: one of its own words (see cli), or else a session, full-screen where that can be had"""
+    done = cli(sys.argv[1:])
+    if done is not None:
+        return done
+    a = arguments()
+    if WINDOWS:
+        os.system("")  # switches on colour codes in the classic Windows console
+    agent = build_agent(a)
+    get_ready(agent)
     if sys.stdin.isatty() and sys.stdout.isatty() and not a.plain:
         try:
             import sprint_tui
@@ -2012,70 +2126,7 @@ def main():
         except ImportError:  # no curses here: fall through to the line-by-line session
             if WINDOWS:
                 print("for the full screen on Windows: pip install windows-curses")
-    say, tty, rl, hotkey = agent.say, sys.stdout.isatty(), None, False
-    try:
-        import readline as rl
-        if tty and "libedit" not in (rl.__doc__ or ""):
-            rl.parse_and_bind(r'"\e[Z": "\C-a/~ \C-m"')  # shift+tab submits the line as "/~ <draft>"
-            hotkey = True
-    except ImportError:
-        pass
-    say("◆ sprint", "1;35")
-    say(f"  {agent.model} · {tilde(folder())}\n", "2")
-    say(f"  {'shift+tab' if hotkey else '/mode'} switches ask → edits → auto · /help for more\n", "2")
-    line, draft, gap = " ".join(a.task), "", "\n"
-    while True:
-        if not line:
-            on, off = (f"\033[1;{TINT[agent.mode]}m", "\033[0m") if tty else ("", "")
-            if on and rl:  # tell readline the colour codes take no room
-                on, off = f"\001{on}\002", f"\001{off}\002"
-            if rl:
-                rl.set_startup_hook((lambda d=draft: rl.insert_text(d)) if draft else None)
-            sys.stdout.write(gap)
-            try:
-                line = input(f"{on}{agent.mode} ❯{off} ").strip()
-            except (EOFError, KeyboardInterrupt):
-                return print()
-            finally:
-                if rl:
-                    rl.set_startup_hook(None)  # or the draft would be typed into the next prompt too
-            draft, gap = "", "\n"
-        cmd, _, arg = line.partition(" ")
-        line = ""
-        try:
-            if cmd == "/~":  # shift+tab: next mode, prompt redrawn in place, typed text kept
-                agent.cycle()
-                draft, gap = arg, "\033[A\033[2K\r" if tty else ""
-                rl.remove_history_item(rl.get_current_history_length() - 1)
-            elif cmd in ("/bye", "/quit", "/exit"):
-                return
-            elif cmd == "/clear":
-                agent.reset()
-                say("  context cleared\n", "2")
-            elif (rows := command(agent, cmd + _ + arg)) is not None:
-                for row in rows:
-                    for text, colour in row:
-                        say(text, ANSI[colour])
-                    say("\n")
-            elif cmd.startswith("/"):
-                for row in help_rows():
-                    for text, colour in row:
-                        say(text, ANSI[colour])
-                    say("\n")
-            elif cmd.startswith("!") and (cmd + _ + arg)[1:].strip():
-                agent.bang((cmd + _ + arg)[1:].strip())
-            elif cmd:
-                before, began = dict(agent.tally), time.time()
-                stop = (agent.run_plan if load_config().get("plan") else agent.run)(cmd + _ + arg)
-                say(f"  {stop}\n" if stop.startswith("stopped:") else "", "33")
-                say(f"  {agent.receipt(before, began)}\n", "2")
-                n = round(min(agent.used() / agent.ctx, 1) * 10)
-                speed = f" · {agent.rate:.0f} tok/s" if agent.rate else ""
-                say(f"  {'━' * n}{'─' * (10 - n)} {agent.used() * 100 // agent.ctx}% of {agent.ctx} ctx{speed}\n", "2")
-        except KeyboardInterrupt:
-            say("\n  interrupted\n", "33")
-        except (RuntimeError, OSError) as e:
-            say(f"  {e}\n", "31")
+    return plain_session(agent, " ".join(a.task))
 
 
 if __name__ == "__main__":
