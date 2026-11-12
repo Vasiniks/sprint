@@ -489,6 +489,11 @@ def short(model):
     return re.sub(r"^hf\.co/[^/]+/|-GGUF", "", model)
 
 
+def tilde(path):
+    """a path as you would write it: your home folder as ~"""
+    return path.replace(str(Path.home()), "~", 1)
+
+
 def size(n):
     return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
 
@@ -1772,7 +1777,6 @@ class Screen:
     def dir_popup(self, at=None):
         """a small folder browser: enter goes into a folder; nothing changes until you choose to work there"""
         at = os.path.abspath(at or sprint.folder())
-        tilde = lambda p: p.replace(str(Path.home()), "~", 1)
         try:
             subs = sorted(d.name for d in os.scandir(at) if d.is_dir() and not d.name.startswith("."))
         except OSError:
@@ -2170,7 +2174,7 @@ class Screen:
             tips = [("/", "bold"), (" commands   ", "dim"), ("ctrl+c", "bold"), (" quit", "dim")]
             self.put(scr, top + len(rows), bx, self.mode_row(), width=bw - len(flat(tips)) - 2)
             self.put(scr, top + len(rows), bx + bw - len(flat(tips)), tips)
-            where = sprint.folder().replace(str(Path.home()), "~", 1)
+            where = tilde(sprint.folder())
             # bottom left: the version, and a newer one when there is one; a passing note takes its place while it lasts
             version = clip([(self.note_text(), "warn")], max(20, w // 2)) if self.note_text() else self.version_text()
             self.put(scr, h - 1, 2, version, width=w - 4)
@@ -2256,7 +2260,7 @@ class Screen:
                     self.hits[("side", act + 1 + i)] = item
                 if not log:
                     self.put(scr, act + 1, x, [("nothing yet", "dim")])
-                self.put(scr, h - 1, x, [(sprint.folder().replace(str(Path.home()), "~", 1), "dim")], width=inner)
+                self.put(scr, h - 1, x, [(tilde(sprint.folder()), "dim")], width=inner)
                 for y in range(h):
                     self.put(scr, y, w - side - 1, [("┃" if self.drag == "right" else "│", a.mode if self.drag == "right" else "frame")])
             if lw:  # left panel: your messages, newest at the bottom
