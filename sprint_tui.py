@@ -78,6 +78,10 @@ GLINT = 14           # columns a glint covers: about three letters
 RUN = 14             # cells of track the working animation sprints along
 LAP = 1.2            # seconds one lap of it takes
 PACE = 0.4           # how much of its speed the runner has from the first moment; the rest it gathers
+GLINT_EVERY_PASS = 2.4  # seconds from one glint over the words beside it to the next: two laps
+GLINT_PASS = 1.0     # how long that glint takes to cross them
+GLINT_LETTERS = 4    # letters it covers
+QUIET = 1.0          # seconds without a word from a model that had begun its reply: it is writing a tool call
 
 
 def wave(x, t):
@@ -114,6 +118,18 @@ def dash(t=None):
     hue = HUES[int(lap) % 3]
     fade = (hue + ".bold", hue, hue + ".dim", hue + ".dim")  # the head, then a tail that fades behind it
     return [(CELLS[0], fade[head - x]) if 0 <= head - x < 4 else (CELLS[1], "ghost") for x in range(RUN)]
+
+
+def glint(text, t=None):
+    """the words that say what is happening, as spans: bold, and every few seconds a glint of colour crosses them
+    from the left, each time in the next colour, as it does the wordmark. t in seconds; None holds them plain"""
+    turn, into = divmod(t, GLINT_EVERY_PASS) if t is not None else (0, GLINT_EVERY_PASS)
+    front = int(into / GLINT_PASS * (len(text) + GLINT_LETTERS))  # the letter the glint has reached; past the end, it rests
+    hue, spans = HUES[int(turn) % 3] + ".bold", []
+    for i, ch in enumerate(text):
+        role = hue if 0 <= front - i < GLINT_LETTERS else "bold"
+        spans[-1:] = [(spans[-1][0] + ch, role)] if spans and spans[-1][1] == role else spans[-1:] + [(ch, role)]
+    return spans
 
 
 # what each kind of text looks like: (colour, attribute). 0 = plain text, 1-6 the theme's hues, 9 its grey
@@ -2102,21 +2118,31 @@ class Screen:
             return "waiting for you"
         if self.asking:
             return "waiting for your answer"
+        if self.quiet():
+            return "preparing the next step"
         if last and last["t"] == "tool" and last["state"] == "running" and last["call"].tool in DOING:
             return DOING[last["call"].tool]
         if self.note and self.note != "thinking":
             return self.note  # the tool call being written: its name, target and length so far
         return "answering" if self.down else "thinking" if self.agent.think else "working"
 
+    def quiet(self):
+        """has the reply now arriving gone quiet? Once a model has begun, it only stops sending to write a tool call:
+        the server holds a call back until it is whole, a long file and all, and until now the screen just sat there
+        after the last of the reasoning as if nothing were happening"""
+        heard = self.agent.heard
+        return bool(heard and time.time() - heard > QUIET)
+
     def status_row(self):
-        """the line above the bar while a turn runs: the sprint, a verb, then (how long | tokens going up with the
-        conversation or coming down with the reply | the effort, and whether the model reasons first)"""
+        """the line above the bar while a turn runs: the sprint, a verb with a glint crossing it, then (how long |
+        tokens going up with the conversation or coming down with the reply | the effort, and whether the model
+        reasons first)"""
         a, secs = self.agent, int(time.time() - self.began)
         took = f"{secs // 60}m {secs % 60:02d}s" if secs >= 60 else f"{secs}s"
         flow = f"↓ {kilo(int(self.got / a.cpt))}" if self.down else f"↑ {kilo(a.used())}"
         effort = f"thinking with {a.effort} effort" if a.think else f"{a.effort} effort"
-        return [(" ", "")] + dash(time.time() - self.began if self.motion else None) + \
-            [(f" {self.verb()} ", "bold"), (f"({took} | {flow} tokens | {effort})", "dim")]
+        t = time.time() - self.began if self.motion else None
+        return [(" ", "")] + dash(t) + glint(f" {self.verb()} ", t) + [(f"({took} | {flow} tokens | {effort})", "dim")]
 
     def queue_rows(self):
         """the messages sent while the agent worked, in the order they will run: three at most, then how many more"""
@@ -2180,8 +2206,9 @@ class Screen:
         c, inner = it["call"], w - 4
         full = it["open"] or (c.tool == "think" and self.showthink)
         if c.tool == "think":  # reasoning is not an action: no status and no time, only how much of it there is
-            said, live = it["result"] or "", it["state"] == "running"  # live: still being written, and growing on the screen
-            name = [("thinking" if live else "thought", "dim"), (f"  {len(said.split())} words ", "dim")]
+            said = it["result"] or ""
+            live = it["state"] == "running" and not self.quiet()  # live: still being written, and growing on the screen
+            name = [("thinking" if live else "thought", "dim"), (f"  {sprint.size(said, self.agent.cpt)} ", "dim")]
             if not full:  # folded: one line saying it thought, or is thinking and its newest words; click it, or /showthink for all
                 last, room = " ".join(said.split()), max(0, w - len(flat(name)) - 7)
                 last = last if len(last) <= room else "… " + last[len(last) - room:].split(" ", 1)[-1]  # cut between words
@@ -2260,7 +2287,8 @@ class Screen:
             if it["t"] == "plan" and self.aside:
                 continue  # it is on show in the right-hand panel instead
             key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
-                   self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""))  # a thought grows
+                   self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""),  # a thought grows,
+                   it.get("state") == "running" and self.quiet())  # and is over once the model has gone quiet to write its call
             if self.cache.get(id(it), (None,))[0] != key:
                 if it["t"] == "tool":
                     rows = self.window(it, w)

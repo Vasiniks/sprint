@@ -670,6 +670,7 @@ class Agent:
         self.rate, self.took = 0.0, 0.0          # tokens a second in the last reply, and how long it took
         self.tally, self.unsaved, self.started = blank(), blank(), time.time()  # this session's use; the part not yet on disk
         self.thread = 0                          # the thread running the current turn, so stop() can hang up on it
+        self.heard = None                        # when the last piece of the reply now arriving came (None: none has, or no reply is)
         self.limit = 0                           # tokens the next reply may use: free room, up to half the window
         self.cpt = 3.5            # chars per token; only ever revised downward, which is the safe side
         self.tools = not v1(url)  # native tool calls on Ollama, until a model refuses them
@@ -961,6 +962,7 @@ class Agent:
         self.status("thinking")
         try:
             for chunk in stream:
+                self.heard = time.time()  # a model writing a tool call sends nothing till it is whole: a front end can say so
                 if self.cancel:
                     raise KeyboardInterrupt
                 if isinstance(chunk, dict):
@@ -1002,6 +1004,7 @@ class Agent:
         finally:
             getattr(stream, "close", lambda: None)()
             SOCKETS.pop(self.thread, None)
+            self.heard = None
             self.status("")
             if mused and not told:  # reasoning that was on show is closed however the reply ended: stopped, cut, or nothing after it
                 told = self.thought(buf, mused)
@@ -1054,12 +1057,11 @@ class Agent:
         return True
 
     def show_thinking(self, text):
-        """the reasoning so far, each time it has grown: a terminal's passing line counts its words and shows the newest,
-        as many as fit on one line. show_thought gets the whole of it once it is over"""
-        words, room = text.split(), max(0, shutil.get_terminal_size().columns - 32)
-        said = " ".join(words)
+        """the reasoning so far, each time it has grown: a terminal's passing line says how much of it there is and
+        shows the newest words, as many as fit on one line. show_thought gets the whole of it once it is over"""
+        said, room = " ".join(text.split()), max(0, shutil.get_terminal_size().columns - 46)
         last = said if len(said) <= room else said[len(said) - room:].split(" ", 1)[-1]  # cut between words, not through one
-        self.status(f"thinking · {len(words)} word{'s' * (len(words) != 1)} · {last}")
+        self.status(f"thinking · {size(text, self.cpt)} · {last}")
 
     def show_thought(self, text):
         lines = text.splitlines()
@@ -1522,6 +1524,13 @@ def keep_usage(more):
 
 def human(n):
     return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.1f}k" if n >= 1000 else str(int(n))
+
+
+def size(text, cpt):
+    """how much reasoning there is, both ways: "14 tokens · 10 words". The tokens are reckoned from its length by the
+    agent's own measure of one (the server counts a reply's tokens only as a whole, reasoning and answer together)"""
+    tokens, words = max(1, int(len(text) / cpt)), len(text.split())
+    return f"{human(tokens)} token{'s' * (tokens != 1)} · {words} word{'s' * (words != 1)}"
 
 
 def clock(secs):
