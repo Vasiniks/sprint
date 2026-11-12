@@ -44,12 +44,12 @@ def test_a_click_far_to_the_right_lands_where_it_was_made(wide):
 def test_the_wheel_is_told_apart_from_a_move(wide):
     s, scr = wide
     s.scroll = 6
-    send(s, sgr(65, 20, 5))
+    send(s, sgr(65, 60, 5))  # (over the conversation: over a side panel the wheel scrolls that panel's list)
     assert s.scroll == 3
-    send(s, sgr(64, 20, 5))
+    send(s, sgr(64, 60, 5))
     assert s.scroll == 6
-    send(s, sgr(35, 21, 5))  # the mouse moving with no button down: not the wheel, whatever the older form made of it
-    send(s, sgr(35, 22, 5))
+    send(s, sgr(35, 61, 5))  # the mouse moving with no button down: not the wheel, whatever the older form made of it
+    send(s, sgr(35, 62, 5))
     assert s.scroll == 6 and s.select is None
 
 

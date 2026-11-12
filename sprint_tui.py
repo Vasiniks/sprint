@@ -628,6 +628,7 @@ class Screen:
         self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
         self.plan_h, self.plan_edge, self.rows = None, None, 0  # rows you gave the plan; its top edge; the screen's
         self.act = 8  # the row of the right-hand panel that "Activity" stands on
+        self.shift = {"left": 0, "side": 0}  # how far each side panel's list is scrolled back from its newest entry
         self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
@@ -1225,7 +1226,7 @@ class Screen:
                 self.interrupt()
             elif line and not (opts and self.buf.endswith(" ")):
                 self.past.append(line)
-                self.buf, self.cur, self.at, self.scroll = "", 0, len(self.past), 0
+                self.buf, self.cur, self.at, self.scroll, self.shift = "", 0, len(self.past), 0, {"left": 0, "side": 0}
                 if (self.busy() or self.queue) and not line.startswith("/"):  # the agent is working: it waits its turn
                     self.queue.append(line)
                 else:
@@ -1436,9 +1437,13 @@ class Screen:
         if state & curses.BUTTON1_PRESSED:
             self.drag = None  # a press starts afresh: a release that never came must not leave a divider stuck to the mouse
         turn = wheel(state, VT and not exact and not (self.drag or self.select or self.hover))
-        if turn:  # the wheel always scrolls, and lets go of a drag whose release never came
+        if turn:  # the wheel always scrolls what it is over, and lets go of a drag whose release never came
             self.drag = self.select = None
-            self.scroll = max(0, self.scroll + 3 * turn)
+            where = self.panel_at(x)
+            if where == "main":
+                self.scroll = max(0, self.scroll + 3 * turn)
+            else:  # a side panel's list: three rows of what the agent did, or one of your messages (the draw keeps it in range)
+                self.shift[where] = max(0, self.shift[where] + (3 if where == "side" else 1) * turn)
         elif self.drag:
             if self.drag == "right":
                 self.side_w = max(20, min(w - lw - ROOM, w - 1 - x))
@@ -1464,12 +1469,25 @@ class Screen:
             else:
                 self.select = {"a": (y, x), "b": (y, x), "area": self.area_at(x, y)}
 
-    def click(self, x, y):
+    def panel_at(self, x):
+        """which column of the screen this is in: the message list ("left"), the right-hand panel ("side"), or between them"""
         w, lw, side = self.geo
+        return "left" if lw and x < lw else "side" if side and x > w - side - 1 else "main"
+
+    def window_of(self, where, entries, room):
+        """the part of a side panel's list that is on show: room entries, ending shift back from the newest (the shift
+        is kept in range here) -> (those entries, what to say of them beside the heading: "4-12 of 31", or nothing
+        when they all fit)"""
+        self.shift[where] = max(0, min(self.shift[where], len(entries) - room))
+        end = len(entries) - self.shift[where]
+        first = max(0, end - room)
+        return entries[first:end], f"{first + 1}-{end} of {len(entries)}" if len(entries) > room else ""
+
+    def click(self, x, y):
         if self.jump_to and y == self.jump_to[0] and self.jump_to[1] <= x < self.jump_to[2]:
             self.scroll = 0  # the button that takes you back to the newest message
             return
-        where = "left" if lw and x < lw else "side" if side and x > w - side - 1 else "main"
+        where = self.panel_at(x)
         item = self.hits.get((where, y))
         if item and where == "main" and item["t"] == "tool":
             item["open"] = not item["open"]
@@ -2462,7 +2480,6 @@ class Screen:
         for i, spans in enumerate(top_rows):
             self.put(scr, 1 + i, x, spans, width=inner)
         act = self.act = len(top_rows) + 2  # the row "Activity" stands on: under the head, wherever that ends
-        self.put(scr, act, x, [("Activity", "dim")], width=inner)
         plan = self.plan_now() if self.plan else None  # /plan off puts the plan away too
         half = max(act + 3, min(h - 4, h - self.plan_h if self.plan_h else max(h // 2, act + 6)))  # the bottom half, unless you dragged its edge
         self.plan_edge = half - 1 if plan else None
@@ -2473,7 +2490,8 @@ class Screen:
             self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
             for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 3 - half))):
                 self.put(scr, half + 1 + i, x, spans, width=inner)
-        log = self.activity()[-max(1, (half - 1 if plan else h - 3) - (act + 1)):]
+        log, which = self.window_of("side", self.activity(), max(1, (half - 1 if plan else h - 3) - (act + 1)))
+        self.put(scr, act, x, [("Activity", "dim"), (which.rjust(inner - 8), "dim")], width=inner)  # and which of it, once it scrolls
         for i, (item, spans) in enumerate(log):
             self.put(scr, act + 1 + i, x, spans, width=inner)
             self.hits[("side", act + 1 + i)] = item
@@ -2486,10 +2504,11 @@ class Screen:
         """the left-hand panel: your messages, newest at the bottom, and under them the version"""
         lw, rows = self.geo[1], self.outline()
         self.areas["left"] = (1, lw - 1, 0, h - 1)
-        self.put(scr, 1, 1, [("Messages", "dim")], width=lw - 3)
+        shown, which = self.window_of("left", rows, max(1, (h - 7) // 2))  # the list stops a line short of the version
+        self.put(scr, 1, 1, [("Messages", "dim"), (which.rjust(lw - 11), "dim")], width=lw - 3)
         self.put(scr, h - 1, 1, self.version_text(), width=lw - 2)  # bottom left, always: the version,
         self.put(scr, h - 2, 1, self.update_text(lw - 3))           # and over it a newer one when there is one
-        for i, (item, title, meta) in enumerate(rows[-max(1, (h - 7) // 2):]):  # the list stops a line short of them
+        for i, (item, title, meta) in enumerate(shown):
             latest = item is rows[-1][0]
             self.put(scr, 3 + i * 2, 1, [(t, "bold" if latest and not r else r) for t, r in title], width=lw - 3)
             self.put(scr, 4 + i * 2, 1, meta, width=lw - 3)
