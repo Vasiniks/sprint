@@ -154,18 +154,22 @@ def from_args(name, a, end, start):
 
 def choice_lines(given):
     """the choices of a native ask call, however the model sent them (a list, a JSON list typed out, or text split
-    by lines, bars or commas) -> a line each, to go under the question"""
+    by lines, bars or commas) -> a line each, to go under the question. Nothing when it is no list of choices: small
+    models fill the field with a remark ("None, just a simple question"), and one choice is no choice"""
     if isinstance(given, str) and given.strip().startswith("["):
         try:
             given = json.loads(given)
         except ValueError:
             pass
-    if isinstance(given, str):
-        given = re.split(r"\n|\|", given) if re.search(r"\n|\|", given) else given.split(",")
+    if isinstance(given, str) and re.search(r"\n|\|", given):
+        given = re.split(r"\n|\|", given)
+    elif isinstance(given, str):  # commas part choices only when every piece is short: a sentence has commas too
+        given = given.split(",") if all(len(piece.split()) <= 3 for piece in given.split(",")) else []
     if not isinstance(given, (list, tuple)):
         return ""
     bare = [(OPTION.match(str(x)) or [0, str(x)])[1].strip() for x in given]  # (without a bullet of its own)
-    return "".join(f"\n- {x}" for x in bare if x)
+    bare = [x for x in bare if x]
+    return "".join(f"\n- {x}" for x in bare) if len(bare) > 1 else ""
 
 
 def question_parts(body):
@@ -1926,7 +1930,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.13"  # the same as in pyproject.toml
+VERSION = "0.4.14"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),

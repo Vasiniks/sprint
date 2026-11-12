@@ -58,8 +58,19 @@ def test_a_native_call_gives_the_question_and_its_choices_however_they_are_sent(
     assert sprint.question_parts(call(question="Which?", options="red | blue").body) == ("Which?", ["red", "blue"])
     assert sprint.question_parts(call(question="Which?", options='["red", "blue"]').body) == ("Which?", ["red", "blue"])
     assert sprint.question_parts(call(question="Which?", options="red\nblue").body) == ("Which?", ["red", "blue"])
+    assert sprint.question_parts(call(question="Which?", options="red, blue, dark green").body) == ("Which?", ["red", "blue", "dark green"])
     assert sprint.question_parts(call(question="Go on?").body) == ("Go on?", [])
     assert sprint.from_args("ask_user", {"text": "Go on?"}, 0, 0).body == "Go on?"
+
+
+def test_what_a_model_puts_where_the_choices_go_is_dropped_when_it_is_no_list_of_choices():
+    call = lambda **args: sprint.from_args("ask", args, 0, 0)
+    # a 2B model sent exactly this with "Which color do you like best?", and it came up as two choices
+    assert call(question="Which?", options="None, just a simple question").body == "Which?"
+    assert call(question="Which?", options="none").body == "Which?"  # one choice is no choice
+    assert call(question="Which?", options=["only this"]).body == "Which?"
+    assert call(question="Which?", options={"a": 1}).body == "Which?"
+    assert call(question="Which?", options="Use the old parser, which is slower but safe").body == "Which?"  # a sentence, not a list
 
 
 def test_the_model_is_offered_the_tool_both_ways():
