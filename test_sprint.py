@@ -662,7 +662,7 @@ def test_ollama_backend_offers_tools_turns_thinking_off_and_reports_calls(monkey
     ]))
     a = Agent(model="tiny", url="http://localhost:11434", out=io.StringIO())
     chunks = list(a.chat([{"role": "user", "content": "hi"}]))
-    assert [t["function"]["name"] for t in sent["body"]["tools"]] == ["shell", "read", "write", "edit", "fetch"]
+    assert [t["function"]["name"] for t in sent["body"]["tools"]] == ["shell", "read", "write", "edit", "fetch", "ask"]
     assert sent["body"]["think"] is False
     assert {"call": fn} in chunks
 
