@@ -1858,10 +1858,7 @@ def fetch_update(home=None):
         ok, out = done.returncode == 0, (done.stdout or "") + (done.stderr or "")
     except (OSError, subprocess.SubprocessError) as e:
         ok, out = False, str(e)
-    try:
-        update_file().unlink()  # look again for what is newest next time
-    except OSError:
-        pass
+    look_again()
     if not ok:
         return False, "the update did not go through: " + (out.strip().splitlines() or ["no reason given"])[-1][:200]
     try:
@@ -1883,15 +1880,20 @@ def update(home=None):
     except OSError:
         ok = False
     print("  done: start sprint again" if ok else "  the update did not go through; the command above is what was tried")
-    try:
-        update_file().unlink()  # look again for what is newest next time
-    except OSError:
-        pass
+    look_again()
     return 0 if ok else 1
 
 
 def update_file():
     return CONFIG.with_name("update.json")  # the newest version seen, and when sprint last looked
+
+
+def look_again():
+    """forget which version was last seen to be the newest, so that the next check asks afresh"""
+    try:
+        update_file().unlink()
+    except OSError:
+        pass
 
 
 def newer(a, b):
