@@ -73,6 +73,8 @@ section > h2 + p { margin-top: 14px; }
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; }
 .grid i { aspect-ratio: 1.6; background: #242424; }
 .grid i.sys { background: #fff; } .grid i.used { background: var(--c); }
+.sess { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 1.2em; margin: 0; }
+.sess dd { margin: 0; color: #e6e6e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .acts li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .acts li b { font-weight: 400; color: var(--y); } .acts li em { font-style: normal; color: var(--c); }
 .mid { display: flex; flex-direction: column; min-width: 0; height: calc(33.7em + 52px); padding: 16px clamp(12px, 2vw, 22px) 14px; }
@@ -148,6 +150,20 @@ section > h2 + p { margin-top: 14px; }
 .askline span { color: var(--y); } .askline b { font-weight: 400; color: #fff; }
 .askline b:first-of-type { padding: 0 6px; margin: 0 -6px; }
 
+/* what each mode runs: a row to a kind of action, a column to a mode */
+.rules { margin-top: 32px; max-width: 880px; border-top: 4px solid var(--ink); }
+.rr { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 5.2em); align-items: center; gap: 0 clamp(6px, 1.4vw, 16px); padding: 9px 0; border-bottom: 1px solid var(--faint); }
+.rr.head { padding: 8px 0; border-bottom-color: var(--ink); }
+.rr b, .rr i, .rr u { text-align: center; font-style: normal; text-decoration: none; }
+.rr i { color: var(--dim); }
+.rr u { background: var(--y); font-weight: 700; }
+
+/* commands: a name, and what it is for */
+.cmds { margin: 36px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px clamp(24px, 3vw, 48px); }
+.cmds dt { font-weight: 700; border-top: 1px solid var(--ink); padding-top: 10px; }
+.cmds dd { margin: 4px 0 0; color: var(--grey); }
+.cmds dd code { color: var(--ink); }
+
 /* start: four steps across */
 .steps { list-style: none; counter-reset: n; margin: 36px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 32px clamp(24px, 3vw, 48px); }
 .steps li { counter-increment: n; border-top: 4px solid var(--ink); padding-top: 12px; }
@@ -164,6 +180,7 @@ footer span { color: var(--grey); margin-left: auto; }
   .tui { grid-template-columns: minmax(0, 1fr) minmax(190px, 240px); }
   .tui .hist { display: none; }
   .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cmds { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .tui { grid-template-columns: minmax(0, 1fr); font-size: 12.5px; }
@@ -172,7 +189,8 @@ footer span { color: var(--grey); margin-left: auto; }
   .lap { --cells: 10; }
   .points { grid-template-columns: minmax(0, 1fr); }
   .fig { min-height: 0; }
-  .steps { grid-template-columns: minmax(0, 1fr); }
+  .steps, .cmds { grid-template-columns: minmax(0, 1fr); }
+  .rr { grid-template-columns: minmax(0, 1fr) repeat(3, 3.6em); font-size: 13.5px; }
   footer span { margin-left: 0; width: 100%; }
 }
 
@@ -268,7 +286,13 @@ hello world</div></div>
     <aside class="side">
       <h4>Context <span id="pct">9%</span></h4>
       <div class="grid" id="grid"></div>
-      <h4>Speed <span id="spd">122 tok/s</span></h4>
+      <h4>Session</h4>
+      <dl class="sess">
+        <dt>model</dt><dd>Qwen3.5-0.8B</dd>
+        <dt>thinking</dt><dd>off</dd>
+        <dt>plan</dt><dd>off</dd>
+        <dt>speed</dt><dd id="spd">122 tok/s</dd>
+      </dl>
       <h4>Activity</h4>
       <ul class="acts" id="acts">
         <li><b>write</b> hello.py <em>done</em></li>
@@ -326,9 +350,36 @@ hello world</div></div>
         <div class="askline"><span>rm -rf build?</span><b>y once</b><b>a always</b><b>n no</b></div>
       </div>
       <h3>They garble commands</h3>
-      <p>Every tool call is checked, and a reply cut off halfway is never run. You approve each command and edit, or allow the ones you trust for good. Esc stops a turn at once.</p>
+      <p>Every tool call is checked, and a reply cut off halfway is never run. You approve each command and edit, or allow the ones you trust for good. Esc stops a turn at once, and nothing can keep you from quitting.</p>
     </div>
   </div>
+</section>
+
+<section id="asks">
+  <h2>What runs without asking</h2>
+  <p>Three modes; Tab switches between them, and the one you leave in is the one you come back to. Some things are put to you in every mode.</p>
+  <div class="rules" role="table" aria-label="What each mode runs without asking">
+    <div class="rr head" role="row"><span role="columnheader"></span><b role="columnheader">ask</b><b role="columnheader">edits</b><b role="columnheader">auto</b></div>
+    <div class="rr" role="row"><span role="rowheader">Read a file</span><i role="cell">runs</i><i role="cell">runs</i><i role="cell">runs</i></div>
+    <div class="rr" role="row"><span role="rowheader">Write or edit a file in this folder</span><u role="cell">asks</u><i role="cell">runs</i><i role="cell">runs</i></div>
+    <div class="rr" role="row"><span role="rowheader">Write or edit a file outside it</span><u role="cell">asks</u><u role="cell">asks</u><i role="cell">runs</i></div>
+    <div class="rr" role="row"><span role="rowheader">Run a command, fetch a page</span><u role="cell">asks</u><u role="cell">asks</u><i role="cell">runs</i></div>
+    <div class="rr" role="row"><span role="rowheader">Delete this folder, or anything outside it</span><u role="cell">asks</u><u role="cell">asks</u><u role="cell">asks</u></div>
+    <div class="rr" role="row"><span role="rowheader">Change sprint's own settings</span><u role="cell">asks</u><u role="cell">asks</u><u role="cell">asks</u></div>
+  </div>
+  <p class="note">A question you leave for 20 seconds is set aside, not run. The model carries on with the rest, and the call waits for you under <code>/permissions</code>.</p>
+</section>
+
+<section id="commands">
+  <h2>Commands worth knowing</h2>
+  <dl class="cmds">
+    <div><dt>/model</dt><dd>Switch between the models you have, or pull another by name.</dd></div>
+    <div><dt>/think</dt><dd>Let the model reason first. You watch the reasoning as it is written; <code>/showthink</code> shows it in full.</dd></div>
+    <div><dt>/plan</dt><dd>Split a message into steps and do them one at a time. The steps tick off in the side panel.</dd></div>
+    <div><dt>/usage</dt><dd>Tokens, time and tool calls: this session, the last two weeks as a chart, and every model you have used.</dd></div>
+    <div><dt>/theme</dt><dd>Thirteen themes. Each one colours the whole window, edges included.</dd></div>
+    <div><dt>/update</dt><dd>Get the newest sprint without leaving it.</dd></div>
+  </dl>
 </section>
 
 <section id="start">
@@ -339,7 +390,7 @@ hello world</div></div>
     <li>Run <code>sprint</code> in a project folder. The first time, it offers to pull Qwen 3.5 0.8B, a 737 MB download.</li>
     <li>Type a request and press Enter. Tab switches between asking first, accepting edits, and running everything.</li>
   </ol>
-  <p>Works on macOS. Linux and Windows are written and tested in CI but not yet tried by hand. The <a href="https://github.com/Vasiniks/sprint#readme">README</a> has every command and setting.</p>
+  <p>Works on macOS and Windows. Linux is tested in CI but not yet tried by hand. The <a href="https://github.com/Vasiniks/sprint#readme">README</a> has every command and setting.</p>
 </section>
 </main>
 
@@ -434,7 +485,7 @@ hello world</div></div>
   async function play() {
     const id = ++run;
     talk.innerHTML = hist.innerHTML = acts.innerHTML = typed.textContent = '';
-    $('spd').textContent = ''; fill(5); busy(false); term.classList.remove('asking');
+    $('spd').textContent = 'no reply yet'; fill(5); busy(false); term.classList.remove('asking');
     try {
       await wait(500, id);
       let took = await send('write hello.py that prints hello world, then run it', id);
@@ -452,7 +503,7 @@ hello world</div></div>
 
   const once = ['models', 'points'];
   if (still || !('IntersectionObserver' in window)) { once.forEach(id => $(id).classList.add('go')); return; }
-  talk.innerHTML = hist.innerHTML = acts.innerHTML = ''; $('spd').textContent = ''; fill(5);
+  talk.innerHTML = hist.innerHTML = acts.innerHTML = ''; $('spd').textContent = 'no reply yet'; fill(5);
   const seen = new IntersectionObserver(entries => {
     for (const e of entries) if (e.isIntersecting) {
       seen.unobserve(e.target);
