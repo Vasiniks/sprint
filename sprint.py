@@ -187,9 +187,9 @@ def timed_line(secs):
     """a line typed at the terminal -> the line, or None when none came within secs seconds (0: wait for ever)"""
     if secs and WINDOWS:  # a console cannot be waited on: watch for the first key, then take the line however long it takes
         import msvcrt
-        end = time.time() + secs
+        end = time.monotonic() + secs
         while not msvcrt.kbhit():
-            if time.time() >= end:
+            if time.monotonic() >= end:
                 return None
             time.sleep(0.05)
     elif secs:

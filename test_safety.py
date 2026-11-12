@@ -231,8 +231,8 @@ def waiting(call, **kw):
 def test_a_question_left_alone_gives_up_after_the_wait_and_says_where_it_went():
     s = waiting(rm())
     s.agent.ask_timeout = 0.3
-    began = time.time()
-    assert s.ask(rm()) == "later" and 0.25 <= time.time() - began < 2
+    began = time.monotonic()
+    assert s.ask(rm()) == "later" and 0.25 <= time.monotonic() - began < 2
     assert s.pending is None and "set aside" in s.note_text() and "/permissions" in s.note_text()
     s.show_result("set aside: this needs the user's say-so and they have not answered.")
     assert s.items[-1]["state"] == "parked"
@@ -268,7 +268,7 @@ def test_with_the_wait_switched_off_a_question_waits_for_ever(monkeypatch):
 
 def test_a_deletion_can_be_allowed_once_or_refused_but_never_for_ever():
     s = waiting(rm())
-    s.pending, s.choice, s.deadline = rm(), 0, time.time() + 14.4
+    s.pending, s.choice, s.deadline = rm(), 0, time.monotonic() + 14.4
     question, keys = s.input_rows(100)[0][1:3]
     assert "always" not in flat(keys) and "once" in flat(keys) and "no" in flat(keys)
     assert "delete" in flat(question)  # and it says why it is asking
