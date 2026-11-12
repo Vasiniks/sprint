@@ -63,6 +63,16 @@ def test_a_reply_gone_quiet_after_it_began_is_the_model_preparing_its_next_step(
     assert s.verb() == "thinking"
 
 
+def test_a_slow_model_is_given_longer_before_its_silence_means_anything():
+    s = screen()
+    s.agent.heard = time.time() - 1.5
+    assert s.quiet()  # no speed known yet, or a quick model: a second and a half of nothing is a call being written
+    s.agent.rate = 2.0  # two tokens a second: half a second between them is its ordinary pace
+    assert not s.quiet()
+    s.agent.heard = time.time() - 3
+    assert s.quiet()
+
+
 def test_before_anything_has_arrived_and_between_replies_nothing_is_called_quiet():
     s = screen()
     assert s.agent.heard is None and not s.quiet() and s.verb() == "working"

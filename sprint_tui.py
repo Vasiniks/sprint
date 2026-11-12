@@ -2133,9 +2133,10 @@ class Screen:
     def quiet(self):
         """has the reply now arriving gone quiet? Once a model has begun, it only stops sending to write a tool call:
         the server holds a call back until it is whole, a long file and all, and until now the screen just sat there
-        after the last of the reasoning as if nothing were happening"""
-        heard = self.agent.heard
-        return bool(heard and time.time() - heard > QUIET)
+        after the last of the reasoning as if nothing were happening. A slow model is given longer: five tokens' worth
+        of its last reply's pace"""
+        heard, rate = self.agent.heard, self.agent.rate
+        return bool(heard and time.time() - heard > max(QUIET, 5 / rate if rate else 0))
 
     def status_row(self):
         """the line above the bar while a turn runs: the sprint, a verb with a glint crossing it, then (how long |
