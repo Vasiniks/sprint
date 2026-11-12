@@ -359,6 +359,9 @@ ATTACHED = re.compile(r"(?P<path>(?<!\S)@\S+|\[[A-Za-z]+ #\d+[^\]\n]*\])")  # in
 SGR_MOUSE, SGR_PART = re.compile(r"\[<(\d+);(\d+);(\d+)([Mm])"), re.compile(r"\[<[\d;]*")
 FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
+ENTER = ("\n", "\r", curses.KEY_ENTER)  # Enter, in each of the ways it arrives
+BACKSPACE = (curses.KEY_BACKSPACE, "\x7f", "\b")
+CHIP_END = re.compile(r"\[(?:(?:Image|PDF|File) #\d+|Pasted #\d+ [^\]]+)\]$")  # a chip just before the cursor: backspace takes it whole
 ROLE["chosen"] = (0, curses.A_REVERSE | curses.A_BOLD)  # the highlighted answer to an approval
 for _hue in HUES:  # each of the three colours also in bold and in dim, for the working animation's head and tail
     ROLE[_hue + ".bold"], ROLE[_hue + ".dim"] = (ROLE[_hue][0], curses.A_BOLD), (ROLE[_hue][0], curses.A_DIM)
@@ -1020,41 +1023,12 @@ class Screen:
         if self.leave and k != "\x03":  # any other key takes back the offer to quit, and the note that made it
             self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
         if self.pending:  # only the approval keys count while a call waits
-            can = [text[0] for text in self.choices()]
-            if self.deadline:
-                self.deadline = time.time() + self.agent.ask_timeout  # you are there: the wait starts again
-            if k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):  # move the highlighted choice
-                self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % len(can)
-                return
-            k = can[min(self.choice, len(can) - 1)] if k in ("\n", "\r", curses.KEY_ENTER) else k  # enter takes the highlighted one
-            if isinstance(k, str) and k.lower() in can and k.lower() in "ya":
-                self.answer = "always" if k in ("a", "A") else True
-                self.gate.set()
-            elif k in ("n", "N", "\x1b", "\x03"):
-                self.halt() if k in ("\x1b", "\x03") else (setattr(self, "answer", False), self.gate.set())
-            return
+            return self.answer_key(k)
         if self.popup:
             return self.popup_key(k)
-        opts, n = self.options(), len(self.buf)
-        if k in ("\n", "\r", curses.KEY_ENTER) and self.buf[:self.cur].endswith("\\"):  # a backslash, then Enter:
-            self.buf = self.buf[:self.cur - 1] + "\n" + self.buf[self.cur:]              # a new line instead of a send
-        elif k == "\n" and self.nl:  # ctrl+j, now that Enter arrives as "\r"
-            self.newline()
-        elif k in ("\n", "\r", curses.KEY_ENTER) and self.buf.strip() and self.live and shift_held():
-            self.newline()  # shift+enter in a terminal that sends it as a plain Enter
-        elif k in ("\n", "\r", curses.KEY_ENTER):
-            if opts:
-                self.complete(opts)
-            line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
-            if not line and self.queue and self.busy():  # nothing typed, messages waiting: stop, so they start now
-                self.interrupt()
-            elif line and not (opts and self.buf.endswith(" ")):
-                self.past.append(line)
-                self.buf, self.cur, self.at, self.scroll = "", 0, len(self.past), 0
-                if (self.busy() or self.queue) and not line.startswith("/"):  # the agent is working: it waits its turn
-                    self.queue.append(line)
-                else:
-                    self.submit(line)
+        opts = self.options()
+        if k in ENTER:
+            self.enter_key(k, opts)
         elif k == "\t":
             self.complete(opts) if opts else self.agent.cycle()
         elif k == curses.KEY_BTAB:
@@ -1067,27 +1041,8 @@ class Screen:
                 self.at = max(0, min(len(self.past), self.at + step))
                 self.buf = self.past[self.at] if self.at < len(self.past) else ""
                 self.cur = len(self.buf)
-        elif k in (curses.KEY_BACKSPACE, "\x7f", "\b") and re.search(r"\[(?:(?:Image|PDF|File) #\d+|Pasted #\d+ [^\]]+)\]$", self.buf[:self.cur]):
-            chip = re.search(r"\[(?:(?:Image|PDF|File) #\d+|Pasted #\d+ [^\]]+)\]$", self.buf[:self.cur])
-            self.buf, self.cur = self.buf[:chip.start()] + self.buf[self.cur:], chip.start()
-        elif k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
-            if self.cur:
-                self.buf, self.cur = self.buf[:self.cur - 1] + self.buf[self.cur:], self.cur - 1
-        elif k == curses.KEY_DC:
-            self.buf = self.buf[:self.cur] + self.buf[self.cur + 1:]
-        elif k in (curses.KEY_LEFT, curses.KEY_RIGHT):
-            self.cur = max(0, min(n, self.cur + (1 if k == curses.KEY_RIGHT else -1)))
-        elif k in (curses.KEY_HOME, "\x01"):  # to the start of this line, and the end of it
-            self.cur = self.buf.rfind("\n", 0, self.cur) + 1
         elif k == curses.KEY_END and not self.buf and self.scroll:
             self.scroll = 0  # nothing typed: End is the end of the conversation
-        elif k in (curses.KEY_END, "\x05"):
-            self.cur = self.buf.find("\n", self.cur) % (n + 1)  # no line break ahead: -1 becomes the very end
-        elif k == "\x15":  # ctrl+u
-            self.buf, self.cur = "", 0
-        elif k == "\x17":  # ctrl+w
-            cut = self.buf[:self.cur].rstrip().rfind(" ") + 1
-            self.buf, self.cur = self.buf[:cut] + self.buf[self.cur:], cut
         elif k == "\x0f":  # ctrl+o
             self.toggle_all()
         elif k == "\x0c":  # ctrl+l
@@ -1102,19 +1057,88 @@ class Screen:
             self.mouse()
         elif k == "\x1b":
             self.halt() if self.busy() or self.queue else None
-        elif k == "\x03":  # ctrl+c: clear the line, else stop the turn, else leave once it is pressed again
-            if self.buf:
-                self.buf, self.cur = "", 0
-            elif self.queue or (self.busy() and self.halted is not self.worker):
-                self.halted = self.worker  # told once. A turn that will not stop must never be what keeps you in
-                self.halt()
-            elif time.time() < self.leave:
-                self.quit = True
-            else:
-                self.leave = time.time() + 2
-                self.toast = ("press ctrl+c again to quit", self.leave)
+        elif k == "\x03":
+            self.ctrl_c()
         elif k == "\x04" and not self.buf:
             self.quit = True
+        else:
+            self.line_key(k)
+
+    def answer_key(self, k):
+        """a key while a call waits for your say-so: move the highlighted answer, take it, or give one by its letter"""
+        can = [text[0] for text in self.choices()]
+        if self.deadline:
+            self.deadline = time.time() + self.agent.ask_timeout  # you are there: the wait starts again
+        if k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):  # move the highlighted choice
+            self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % len(can)
+            return
+        k = can[min(self.choice, len(can) - 1)] if k in ENTER else k  # enter takes the highlighted one
+        if isinstance(k, str) and k.lower() in can and k.lower() in "ya":
+            self.answer = "always" if k in ("a", "A") else True
+            self.gate.set()
+        elif k in ("\x1b", "\x03"):  # no, and the turn stops with it
+            self.halt()
+        elif k in ("n", "N"):
+            self.answer = False
+            self.gate.set()
+
+    def enter_key(self, k, opts):
+        """Enter: a new line where that is what it means, else the completion on offer is taken and the line is sent"""
+        if self.buf[:self.cur].endswith("\\"):  # a backslash, then Enter: a new line instead of a send
+            self.buf = self.buf[:self.cur - 1] + "\n" + self.buf[self.cur:]
+        elif k == "\n" and self.nl:  # ctrl+j, now that Enter arrives as "\r"
+            self.newline()
+        elif self.buf.strip() and self.live and shift_held():
+            self.newline()  # shift+enter in a terminal that sends it as a plain Enter
+        else:
+            if opts:
+                self.complete(opts)
+            line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
+            if not line and self.queue and self.busy():  # nothing typed, messages waiting: stop, so they start now
+                self.interrupt()
+            elif line and not (opts and self.buf.endswith(" ")):
+                self.past.append(line)
+                self.buf, self.cur, self.at, self.scroll = "", 0, len(self.past), 0
+                if (self.busy() or self.queue) and not line.startswith("/"):  # the agent is working: it waits its turn
+                    self.queue.append(line)
+                else:
+                    self.submit(line)
+
+    def ctrl_c(self):
+        """ctrl+c: clear the line, else stop the turn, else leave once it is pressed again"""
+        if self.buf:
+            self.buf, self.cur = "", 0
+        elif self.queue or (self.busy() and self.halted is not self.worker):
+            self.halted = self.worker  # told once. A turn that will not stop must never be what keeps you in
+            self.halt()
+        elif time.time() < self.leave:
+            self.quit = True
+        else:
+            self.leave = time.time() + 2
+            self.toast = ("press ctrl+c again to quit", self.leave)
+
+    def line_key(self, k):
+        """the keys that change what is typed in the bar, or move the cursor through it"""
+        n = len(self.buf)
+        if k in BACKSPACE:
+            chip = CHIP_END.search(self.buf[:self.cur])
+            if chip:  # a chip goes all at once
+                self.buf, self.cur = self.buf[:chip.start()] + self.buf[self.cur:], chip.start()
+            elif self.cur:
+                self.buf, self.cur = self.buf[:self.cur - 1] + self.buf[self.cur:], self.cur - 1
+        elif k == curses.KEY_DC:
+            self.buf = self.buf[:self.cur] + self.buf[self.cur + 1:]
+        elif k in (curses.KEY_LEFT, curses.KEY_RIGHT):
+            self.cur = max(0, min(n, self.cur + (1 if k == curses.KEY_RIGHT else -1)))
+        elif k in (curses.KEY_HOME, "\x01"):  # to the start of this line, and the end of it
+            self.cur = self.buf.rfind("\n", 0, self.cur) + 1
+        elif k in (curses.KEY_END, "\x05"):
+            self.cur = self.buf.find("\n", self.cur) % (n + 1)  # no line break ahead: -1 becomes the very end
+        elif k == "\x15":  # ctrl+u
+            self.buf, self.cur = "", 0
+        elif k == "\x17":  # ctrl+w
+            cut = self.buf[:self.cur].rstrip().rfind(" ") + 1
+            self.buf, self.cur = self.buf[:cut] + self.buf[self.cur:], cut
         elif isinstance(k, str) and k.isprintable():
             self.buf, self.cur, self.pick = self.buf[:self.cur] + k + self.buf[self.cur:], self.cur + 1, 0
 
@@ -1527,12 +1551,12 @@ class Screen:
             self.popup_to((p["sel"] + (1 if k == curses.KEY_DOWN else -1)) % len(can))
         elif k in (curses.KEY_PPAGE, curses.KEY_NPAGE) and can:
             self.popup_to(p["sel"] + (8 if k == curses.KEY_NPAGE else -8))
-        elif k in ("\n", "\r", curses.KEY_ENTER):
+        elif k in ENTER:
             if can and p["pick"]:
                 p["pick"](can[p["sel"]]["v"])
             elif f and f.get("submit") and f["text"].strip():
                 f["submit"](f["text"].strip())
-        elif f and k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+        elif f and k in BACKSPACE:
             f["text"], p["sel"] = f["text"][:-1], 0
         elif f and k == "\x15":
             f["text"] = ""
@@ -1549,10 +1573,10 @@ class Screen:
             e["save"]("\n".join(lines))
         elif k == "\x12":
             e["lines"], e["row"], e["col"] = e["default"].split("\n"), 0, 0
-        elif k in ("\n", "\r", curses.KEY_ENTER):
+        elif k in ENTER:
             lines[r:r + 1] = [lines[r][:c], lines[r][c:]]
             e["row"], e["col"] = r + 1, 0
-        elif k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+        elif k in BACKSPACE:
             if c:
                 lines[r], e["col"] = lines[r][:c - 1] + lines[r][c:], c - 1
             elif r:
