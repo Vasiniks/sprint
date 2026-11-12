@@ -668,7 +668,7 @@ class Screen:
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
         self.flash = (None, 0.0)  # the item last jumped to and when, so it can light up and fade
         self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
-        self.ask_hits = {}  # the rows of the bar that are choices of the model's question -> which choice
+        self.ask_hits, self.ask_lit = {}, []  # the bar's rows that are choices of the model's question -> which; the highlighted ones
         self.began, self.got, self.down = 0.0, 0, False  # this turn: when it started, characters of reply, is one arriving?
         self.queue, self.leave = [], 0.0  # messages sent while the agent worked; until when a second ctrl+c quits
         self.halted = None  # the turn ctrl+c has already told to stop: pressed again while it still runs, it is about leaving
@@ -2208,7 +2208,7 @@ class Screen:
         q = None if c else self.asking  # the model's question: the bar is its, and what is typed is text whatever it starts with
         shell = self.buf.startswith("!") and not c and not q
         tone, line_role = ("shell", "shell") if shell else (a.mode, a.mode if q else "frame")  # a question's rules stand out
-        self.ask_hits = {}
+        self.ask_hits, self.ask_lit = {}, []
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
         foot = [("─" * bw, line_role)]
@@ -2251,7 +2251,8 @@ class Screen:
         marked and in full, and last the row an answer of your own is written on -> (the rows between the bar's two
         rules, the typed lines on show). It leaves the conversation its room whatever the screen: the choices scroll
         with the highlight, and a question too long is cut here and stands whole in the conversation instead (window).
-        Which choice each row belongs to is left in self.ask_hits, for a click"""
+        Which choice each row belongs to is left in self.ask_hits, for a click, and the highlighted rows in
+        self.ask_lit, for the band they are drawn on"""
         opts, mode = q["options"], self.agent.mode
         n = len(opts)
         at = min(q.get("at", 0), n)
@@ -2271,10 +2272,12 @@ class Screen:
         for i in range(first, first + show):
             for k, r in enumerate(whole if i == at else [[(trim(opts[i], max(8, bw - pad)), "")]]):
                 self.ask_hits[1 + len(rows)] = i
+                self.ask_lit += [1 + len(rows)] * (i == at)
                 rows.append((lead(i) if k == 0 else [(" " * len(flat(lead(i))), "")]) + r)
         self.caret = (1 + len(rows) + line, pad + col)
         for k, r in enumerate(mine):
             self.ask_hits[1 + len(rows)] = n
+            self.ask_lit += [1 + len(rows)] * bool(at == n and n and not self.buf)  # (what you write there is plain text)
             rows.append((lead(n) if k == 0 else [(" " * pad, "")]) + r)
         return rows, typed
 
@@ -2500,6 +2503,8 @@ class Screen:
             self.put(scr, top + i, bx, r, width=bw)
         for i, which in self.ask_hits.items():  # the rows of the model's question: which choice a click there takes
             self.hits[("ask", top + i)] = which
+        for i in self.ask_lit:  # and the highlighted one stands on a band, as wide as the bar
+            self.mark(scr, top + i, bx, bw, curses.A_REVERSE)
         self.areas["prompt"] = (bx + 2, bx + bw - 1, top + 1, top + len(rows) - 2)  # what you typed, without the mark and the rules
         return top, bx, bw, len(rows)
 

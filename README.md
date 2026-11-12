@@ -129,7 +129,7 @@ When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One o
 
 The model has a sixth tool, `ask`: a question for you, when only you can answer it, with choices if it has some to offer. It is never a thing to approve, whatever the mode.
 
-- The question takes the prompt bar's place until you answer: what it asks, its choices as a numbered list with the first one highlighted, and a last row for an answer of your own.
+- The question takes the prompt bar's place until you answer: what it asks, its choices as a numbered list, and a last row for an answer of your own. The current choice is marked and stands on a highlighted band; it starts on the first.
 
   ```
   ? Which colour should the button be?

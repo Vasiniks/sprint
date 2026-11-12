@@ -383,6 +383,64 @@ def test_the_choices_are_numbered_under_the_question_with_the_highlighted_one_ma
     t.join(2)
 
 
+def lit(s, h=30, w=110):
+    """draw, and say which rows of the question carry a band of reverse video -> (the screen, those rows' text)"""
+    scr = Scr(h, w)
+    s.draw(scr)
+    top = next(y for y in range(h) if scr.text(y).strip(" │").startswith("? "))  # the question's first row, in the bar
+    return scr, [scr.text(y).strip(" │") for y, x, n, attr in scr.marks if attr & curses.A_REVERSE and y > top]
+
+
+def test_the_highlighted_choice_stands_on_a_band_across_the_bar():
+    s = screen()
+    s.items.append({"t": "user", "text": "style the button"})
+    s.sidebar = s.history = False
+    t, got = put(s, CHOICE)
+    scr, rows = lit(s)
+    assert rows == [tui.MARK + " 1. red"]
+    y, x, n, attr = next(m for m in scr.marks if m[3] & curses.A_REVERSE and "1. red" in scr.text(m[0]))
+    assert x == scr.text(y).index(tui.MARK) and n == len(scr.text(scr.find("───")).strip())  # as wide as the bar
+    s.key(curses.KEY_DOWN)
+    assert lit(s)[1] == [tui.MARK + " 2. blue"]  # it moves with the highlight
+    s.interrupt()
+    t.join(2)
+
+
+def test_a_highlighted_choice_of_several_rows_is_banded_on_all_of_them():
+    long = "Create a new module for the helpers and move every shared function into it, and the tests with them"
+    s = screen()
+    s.items.append({"t": "user", "text": "tidy up"})
+    t, got = put(s, f"```ask\nWhere should the helpers go?\n- utils.py\n- {long}\n```")
+    s.key(curses.KEY_DOWN)
+    rows = lit(s)[1]
+    assert len(rows) >= 2 and " ".join(rows) == tui.MARK + " 2. " + long
+    s.interrupt()
+    t.join(2)
+
+
+def test_the_row_for_your_own_answer_is_banded_until_you_write_on_it():
+    s = screen()
+    s.items.append({"t": "user", "text": "style the button"})
+    t, got = put(s, CHOICE)
+    s.key(curses.KEY_UP)
+    assert lit(s)[1] == [tui.MARK + " 4. Something else…"]
+    typed(s, "teal")
+    assert lit(s)[1] == []  # what you type is plain text, with the cursor in it
+    s.key(curses.KEY_UP)
+    assert lit(s)[1] == [tui.MARK + " 3. green"]
+    s.interrupt()
+    t.join(2)
+
+
+def test_a_question_with_no_choices_has_nothing_to_band():
+    s = screen()
+    s.items.append({"t": "user", "text": "style the button"})
+    t, got = put(s)
+    assert lit(s)[1] == []
+    s.interrupt()
+    t.join(2)
+
+
 def test_the_cursor_is_hidden_while_a_choice_is_highlighted(monkeypatch):
     shown = []
     monkeypatch.setattr(tui.curses, "curs_set", shown.append)
