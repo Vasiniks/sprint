@@ -99,7 +99,7 @@ def test_deleting_what_is_inside_the_folder_is_an_ordinary_command(proj, cmd):
                                  "rm -rf /", "rmdir .", "rm -rf build . ", "rm -rf .* *", "rm -rf ${PWD}"])
 def test_deleting_the_folder_sprint_works_in_is_told_apart(proj, cmd):
     assert sprint.deletion(cmd) == "own"
-    assert sprint.deletion(f"rm -rf {proj}") == "own" and sprint.deletion(f"rm -rf {proj.parent}") == "own"  # it, or what holds it
+    assert sprint.deletion(f"rm -rf {proj.as_posix()}") == "own" and sprint.deletion(f"rm -rf {proj.parent.as_posix()}") == "own"  # it, or what holds it
 
 
 @pytest.mark.parametrize("cmd", ["rm ../gone.txt", "rm -rf ../other", "rm /etc/hosts", "rm ~/notes.txt", "rm -rf $HOME/x", "rm -rf /tmp/zzz-not-here",
@@ -113,6 +113,14 @@ def test_deleting_anything_outside_the_folder_is_told_apart(proj, cmd):
                                  "rm 'unfinished"])
 def test_a_deletion_that_cannot_be_read_is_treated_as_one_to_ask_about(proj, cmd):
     assert sprint.deletion(cmd) == "unknown"
+
+
+def test_on_windows_a_path_written_the_windows_way_is_never_taken_for_one_inside_the_folder(proj, monkeypatch):
+    """a backslash is an escape to the reader of commands, so C:\\Users\\me\\proj came out as a harmless-looking name"""
+    monkeypatch.setattr(sprint, "WINDOWS", True)
+    for cmd in ("rm -rf C:\\Users\\me\\proj", "rm -rf ..\\other", "Remove-Item -Recurse C:\\Users\\me", "rm -rf .\\build"):
+        assert sprint.deletion(cmd) == "unknown", cmd
+    assert sprint.deletion("rm -rf build") == "" and sprint.deletion("rm -rf .") == "own"  # the plain forms read as anywhere
 
 
 def test_a_command_that_deletes_nothing_is_no_deletion(proj):
@@ -179,6 +187,7 @@ def test_an_unanswered_question_sets_the_call_aside_and_the_model_is_told_to_car
     a = asking("later")
     said = a.do(rm())
     assert said.startswith("set aside") and "carry on" in said.lower() and (proj.parent / "gone.txt").exists()
+    assert "not run" in said.lower() and "do not say it was done" in said.lower()  # a small model once reported it as executed
     assert [c.body for c in a.parked] == ["rm ../gone.txt"]
     a.do(rm())
     assert len(a.parked) == 1  # the same call waits once, however often it is tried
@@ -308,3 +317,105 @@ def test_changing_the_mode_is_remembered_and_starting_in_one_is_not(tmp_path):
     assert sprint.load_config()["mode"] == "edits"
     sprint.command(a, "/permissions auto")
     assert sprint.load_config()["mode"] == "auto"
+
+
+# ---------- sprint's own files: a model may read them, never change them without your yes ----------
+# (a model in auto mode once rewrote the settings file: it could as well have put itself on the allow list)
+
+def own(name="config"):
+    return {"config": sprint.CONFIG, "prompt": sprint.prompt_file(), "usage": sprint.usage_file()}[name]
+
+
+@pytest.mark.parametrize("which", ["config", "prompt", "usage"])
+def test_writing_or_editing_one_of_sprints_own_files_always_asks(proj, which):
+    target = own(which)
+    target.write_text('{"mode": "ask"}')
+    a = asking(False)
+    for call in (sprint.Call("write", str(target), '{"mode": "auto", "allow": ["shell *"]}', 0, 0),
+                 sprint.Call("edit", str(target), "<<<<<<< SEARCH\nask\n=======\nauto\n>>>>>>> REPLACE", 0, 0)):
+        assert sprint.guarded(call) == "settings"
+        assert a.do(call).startswith("denied")
+    assert len(a.asked) == 2 and target.read_text() == '{"mode": "ask"}'
+
+
+def test_always_is_never_remembered_for_them_and_no_allow_rule_frees_one(proj, monkeypatch):
+    saved = []
+    monkeypatch.setattr(sprint, "save_config", lambda **kw: saved.append(kw))
+    a = asking("always")
+    a.allow = ["write *", "edit *"]
+    a.do(sprint.Call("write", str(sprint.CONFIG), "{}", 0, 0))
+    assert len(a.asked) == 1 and a.allow == ["write *", "edit *"] and saved == []
+
+
+def test_reading_them_is_as_free_as_reading_anything(proj):
+    sprint.CONFIG.write_text('{"mode": "ask"}')
+    a = asking(False)
+    assert "ask" in a.do(sprint.Call("read", str(sprint.CONFIG), "", 0, 0)) and a.asked == []
+    assert sprint.guarded(sprint.Call("shell", "", f"cat {sprint.CONFIG.as_posix()}", 0, 0)) == ""
+
+
+@pytest.mark.parametrize("cmd", ["echo '{}' > {P}", "sed -i '' s/ask/auto/ {P}", "cp /tmp/x {P}", "mv {P} /tmp/y", "python3 -c \"open('{P}','w').write('{}')\"",
+                                 "sprint config", "tee {P} < /dev/null", "cat {P} | sed s/a/b/ > {P}"])
+def test_a_command_that_could_change_them_always_asks_too(proj, cmd):
+    cmd = cmd.replace("{P}", sprint.CONFIG.as_posix())
+    assert sprint.guarded(sprint.Call("shell", "", cmd, 0, 0)) == "settings", cmd
+
+
+def test_ordinary_files_are_not_mistaken_for_them(proj):
+    for call in (sprint.Call("write", "config.json", "{}", 0, 0), sprint.Call("write", "notes.txt", "x", 0, 0),
+                 sprint.Call("shell", "", "echo hi > out.txt", 0, 0), sprint.Call("shell", "", "cat config.json", 0, 0)):
+        assert sprint.guarded(call) == "", call
+
+
+def test_the_question_says_it_is_sprints_own_settings():
+    call = sprint.Call("write", str(sprint.CONFIG), "{}", 0, 0)
+    s = waiting(call)
+    s.pending, s.choice = call, 0
+    question, keys = s.input_rows(110)[0][1:3]
+    assert "sprint's own settings" in flat(question) and "always" not in flat(keys)
+
+
+# ---------- writing outside the folder: asked about, unless you are in auto ----------
+
+def beside(proj, name="out.txt"):
+    return str(proj.parent / name)
+
+
+def test_in_edits_mode_a_write_inside_the_folder_is_free_and_one_outside_it_asks(proj):
+    a = asking(False, mode="edits")
+    assert a.do(sprint.Call("write", "new.txt", "x", 0, 0)).startswith("wrote") and a.asked == []
+    assert a.do(sprint.Call("write", "sub/deep.txt", "x", 0, 0)).startswith("wrote") and a.asked == []
+    assert a.do(sprint.Call("write", beside(proj), "x", 0, 0)).startswith("denied") and len(a.asked) == 1
+    assert a.do(sprint.Call("write", "../out.txt", "x", 0, 0)).startswith("denied") and len(a.asked) == 2
+    assert a.do(sprint.Call("write", "~/sprint-never-written.txt", "x", 0, 0)).startswith("denied") and len(a.asked) == 3
+    assert not (proj.parent / "out.txt").exists()
+
+
+def test_an_edit_outside_the_folder_asks_in_edits_mode_too(proj):
+    (proj.parent / "gone.txt").write_text("old\n")
+    a = asking(False, mode="edits")
+    assert a.do(sprint.Call("edit", beside(proj, "gone.txt"), "old\n=======\nnew", 0, 0)).startswith("denied")
+    assert len(a.asked) == 1 and (proj.parent / "gone.txt").read_text() == "old\n"
+
+
+def test_in_auto_mode_a_write_outside_the_folder_goes_without_a_question(proj):
+    a = asking(False)
+    assert a.do(sprint.Call("write", beside(proj), "x", 0, 0)).startswith("wrote") and a.asked == []
+
+
+def test_such_a_write_is_an_ordinary_question_always_can_be_remembered(proj, monkeypatch):
+    monkeypatch.setattr(sprint, "save_config", lambda **kw: None)
+    a = asking("always", mode="edits")
+    a.do(sprint.Call("write", beside(proj), "x", 0, 0))
+    a.do(sprint.Call("write", beside(proj), "y", 0, 0))
+    assert len(a.asked) == 1 and (proj.parent / "out.txt").read_text() == "y\n"
+
+
+def test_the_question_says_the_file_is_outside_the_folder(proj):
+    call = sprint.Call("write", beside(proj), "x", 0, 0)
+    s = waiting(call, mode="edits")
+    s.pending, s.choice = call, 0
+    question, keys = s.input_rows(110)[0][1:3]
+    assert "outside this folder" in flat(question) and "always" in flat(keys)
+    s.pending = sprint.Call("write", "new.txt", "x", 0, 0)
+    assert "outside" not in flat(s.input_rows(110)[0][1])

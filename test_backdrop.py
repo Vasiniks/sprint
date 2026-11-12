@@ -73,7 +73,7 @@ def test_with_fewer_than_256_colours_the_screen_stays_the_terminals_and_so_does_
 def apple(live, monkeypatch):
     calls = []
     monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
-    monkeypatch.setattr(tui.os, "ttyname", lambda fd: "/dev/ttys042")
+    monkeypatch.setattr(tui.os, "ttyname", lambda fd: "/dev/ttys042", raising=False)  # (Windows has no such call to stand in for)
     monkeypatch.setattr(tui, "apple_window", lambda tty, rgb: calls.append((tty, rgb)) or (65535, 65535, 65535))
     return calls
 

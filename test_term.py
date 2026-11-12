@@ -77,3 +77,19 @@ def test_the_swap_lasts_only_while_curses_starts_so_commands_still_see_the_real_
     tui.run(Agent(chat=lambda m: iter(()), out=io.StringIO()))
     assert seen["starting"] == "xterm-256color" and seen["terminfo"] is None
     assert tui.os.environ["TERM"] == "xterm-ghostty" and tui.os.environ["TERMINFO"] == "/its/own"
+
+
+# ---------- the cells of the animation and the mode icons, where the font has no slanted ones ----------
+
+def test_ghostty_and_cmux_get_the_square_cells_their_own_font_has(monkeypatch):
+    """their built-in font (JetBrains Mono) lacks the slanted cells: borrowed from another font they came out wider than
+    a cell and ran into each other along the animation's track"""
+    monkeypatch.setattr(tui, "VT", True)
+    assert tui.cell_glyphs({"TERM": "xterm-256color", "TERM_PROGRAM": "Apple_Terminal"}) == "▰▱"
+    assert tui.cell_glyphs({"TERM": "xterm-ghostty"}) == "■□"
+    assert tui.cell_glyphs({"TERM": "xterm-256color", "TERM_PROGRAM": "ghostty"}) == "■□"
+    assert tui.cell_glyphs({"TERM": "xterm-256color", "CMUX_WORKSPACE_ID": "1"}) == "■□"  # cmux, whatever it calls the terminal
+    assert tui.cell_glyphs({"TERM": "xterm-256color", "GHOSTTY_RESOURCES_DIR": "/x"}) == "■□"
+    monkeypatch.setattr(tui, "VT", False)
+    assert tui.cell_glyphs({"TERM": "xterm-256color"}) == "■□"  # Windows, as before
+    assert tui.MODE_ICON["edits"] == tui.CELLS[0] * 2 + tui.CELLS[1]

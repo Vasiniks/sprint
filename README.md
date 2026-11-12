@@ -4,6 +4,17 @@ A terminal coding agent for small local models. Two Python files, no dependencie
 
 <p align="center"><img src="assets/logo.svg" alt="sprint: the opening screen, with the logo above the prompt" width="760"></p>
 
+<p align="center">
+  <a href="https://sprintai.pages.dev"><img src="https://img.shields.io/badge/website-sprintai.pages.dev-ffe100?labelColor=0b0c0e&style=flat-square" alt="website"></a>
+  <a href="https://github.com/Vasiniks/sprint/releases/latest"><img src="https://img.shields.io/github/v/release/Vasiniks/sprint?color=19c2ff&labelColor=0b0c0e&style=flat-square" alt="latest release"></a>
+  <a href="https://github.com/Vasiniks/sprint/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Vasiniks/sprint/ci.yml?branch=main&label=tests&labelColor=0b0c0e&style=flat-square" alt="tests"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-ff3d9a?labelColor=0b0c0e&style=flat-square" alt="python 3.9 or newer"></a>
+  <a href="#start"><img src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-5b9dff?labelColor=0b0c0e&style=flat-square" alt="runs on macOS, Linux and Windows"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Vasiniks/sprint?color=f2f2f2&labelColor=0b0c0e&style=flat-square" alt="MIT licence"></a>
+</p>
+
+<p align="center"><a href="https://sprintai.pages.dev"><b>sprintai.pages.dev</b></a>: the website, with a tour of what it looks like</p>
+
 Small models are fast and private, but they lose track of long conversations, garble tool calls and go in circles. sprint is built around those failings: it keeps the context small, checks every tool call, stops loops, and shows you each action before it runs.
 
 ## Start
@@ -101,7 +112,7 @@ Drag over text to copy it: in the conversation, in the prompt, or in either side
 | mode | runs without asking |
 |---|---|
 | `ask` (default) | reading files |
-| `edits` | reading, writing and editing files |
+| `edits` | reading files anywhere; writing and editing files in the folder sprint is working in (one outside it is asked about) |
 | `auto` | everything, except deleting the working folder or anything outside it |
 
 The mode you leave in is the mode you come back to (starting with `-y` or `--mode` is for that run only).
@@ -109,6 +120,8 @@ The mode you leave in is the mode you come back to (starting with `-y` or `--mod
 When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One of the three is highlighted; left and right move it and Enter takes it. "Always" allows just that command or file from then on (a fetch allows the whole site). `/permissions` lists those rules, removes them, and adds patterns such as `shell git status*`.
 
 **Deleting beyond the folder's contents always asks.** Files and folders inside the folder sprint is working in are the model's to tidy, under the mode's ordinary rules. But a command that would delete that folder itself (or everything in it, or a folder that holds it), or anything outside it, is put to you in every mode, `auto` included, and so is a deletion sprint cannot read (a `cd` first, a variable, `find -delete`, `git clean`, a one-line script). Such a call can be allowed once but never for ever; no allow rule covers it. If a command does remove the working folder, sprint steps up to the nearest folder that still exists and tells the model.
+
+**sprint's own files always ask.** A model may read sprint's settings, your system prompt, the usage tallies and the log, but writing, editing or running a command that could change one of them (or `sprint config`) is put to you in every mode and can never be allowed for ever. A model that can rewrite the settings could put itself on the allow list.
 
 **A question nobody answers does not stall the work.** After 20 seconds (`/config ask_timeout N`; `0` waits for ever; any key starts the wait again) the call is set aside, not run: the model is told to carry on without it, and the prompt shows that something is waiting. `/permissions` lists what was set aside; Enter on one allows it once, and it runs the next time the model asks for it. (Plain mode, `--plain`, waits as long as it takes.)
 

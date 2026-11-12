@@ -359,6 +359,9 @@ ATTACHED = re.compile(r"(?P<path>(?<!\S)@\S+|\[[A-Za-z]+ #\d+[^\]\n]*\])")  # in
 SGR_MOUSE, SGR_PART = re.compile(r"\[<(\d+);(\d+);(\d+)([Mm])"), re.compile(r"\[<[\d;]*")
 FLASH = (0.5, 1.2)  # seconds: what you jump to stays in reverse video until the first, then on the shaded band until the second
 PASTE_KEYS = 4  # this many keys arriving at once were pasted, not typed
+ENTER = ("\n", "\r", curses.KEY_ENTER)  # Enter, in each of the ways it arrives
+BACKSPACE = (curses.KEY_BACKSPACE, "\x7f", "\b")
+CHIP_END = re.compile(r"\[(?:(?:Image|PDF|File) #\d+|Pasted #\d+ [^\]]+)\]$")  # a chip just before the cursor: backspace takes it whole
 ROLE["chosen"] = (0, curses.A_REVERSE | curses.A_BOLD)  # the highlighted answer to an approval
 for _hue in HUES:  # each of the three colours also in bold and in dim, for the working animation's head and tail
     ROLE[_hue + ".bold"], ROLE[_hue + ".dim"] = (ROLE[_hue][0], curses.A_BOLD), (ROLE[_hue][0], curses.A_DIM)
@@ -371,7 +374,17 @@ DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "edi
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
-CELLS = "▰▱" if VT else "■□"  # a filled and an empty cell: the working animation and the mode icons (Windows fonts lack the slanted ones)
+
+
+def cell_glyphs(env):
+    """a filled and an empty cell, for the working animation and the mode icons: slanted where the font has them.
+    Windows console fonts do not; nor does the font Ghostty and cmux come with, and there the ones borrowed from
+    another font are wider than a cell and run into each other"""
+    ghostty = "ghostty" in env.get("TERM", "") or env.get("TERM_PROGRAM") == "ghostty" or any(k.startswith(("CMUX_", "GHOSTTY_")) for k in env)
+    return "▰▱" if VT and not ghostty else "■□"
+
+
+CELLS = cell_glyphs(os.environ)
 MODE_ICON = {"ask": CELLS[0] + CELLS[1] * 2, "edits": CELLS[0] * 2 + CELLS[1], "auto": CELLS[0] * 3}  # fuller, the more runs unasked
 
 CODE = re.compile(
@@ -489,13 +502,45 @@ def short(model):
     return re.sub(r"^hf\.co/[^/]+/|-GGUF", "", model)
 
 
+def trim(text, w):
+    """text in at most w columns: the end of a longer one gives way to an ellipsis"""
+    return text if len(text) <= w else text[:w - 1] + "…"
+
+
+def tilde(path):
+    """a path as you would write it: your home folder as ~"""
+    return path.replace(str(Path.home()), "~", 1)
+
+
 def size(n):
     return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
+
+
+def next_number(labels, kind):
+    """the number for a new chip of this kind: one past the highest in use, so it can never be mistaken for one that
+    is still waiting in a queued message"""
+    return 1 + max((int(m.group(1)) for m in (re.match(r"\[" + kind + r" #(\d+)", label) for label in labels) if m), default=0)
 
 
 def row(spans, value=None, keep=False):
     """one line of a popup. value None: only shown, cannot be chosen. keep: stays when the list is filtered"""
     return {"s": spans if isinstance(spans, list) else [(spans, "")], "v": value, "keep": keep}
+
+
+def edit_size(body):
+    """what an edit changes, as it is said beside one: +lines put in, -lines taken out"""
+    old, new = split_edit(body) or ("", body)
+    return f"+{len(new.splitlines())} -{len(old.splitlines())}"
+
+
+def boxed(spans, w):
+    """a line inside a box w wide: the spans, cut or padded to fit between its two sides"""
+    return [("│ ", "frame")] + clip(spans, w - 4) + [(" │", "frame")]
+
+
+def box_foot(hint, w):
+    """the bottom edge of a box w wide, with a hint set into it"""
+    return [("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]
 
 
 def took(it):
@@ -664,7 +709,7 @@ class Screen:
         colours the screen stays the terminal's own"""
         self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
         shown = None  # the background the terminal itself should take: the theme's, once it is known the screen shows it
-        self.stale = True  # what is on the screen is in the old colours: the next frame sends every cell again (see draw)
+        self.stale = True  # what is on the screen is in the old colours: the next frame sends every cell again (see wipe)
         try:
             if not curses.has_colors():
                 return
@@ -744,8 +789,8 @@ class Screen:
 
     def choices(self):
         """what the question can be answered with, its key first. A deletion can be allowed once, never for ever"""
-        c = self.pending
-        return ("y once", "n no") if c.tool == "shell" and sprint.deletion(c.body) else ("y once", "a always this", "n no")
+        c = self.pending  # (read once: the wait for an answer ends on the agent's thread, and may end right now)
+        return ("y once", "n no") if c and sprint.guarded(c) else ("y once", "a always this", "n no")
 
     def ask(self, call):
         """put a call to you. A question nobody answers must not hold the work up: after the wait (20 seconds unless
@@ -768,9 +813,9 @@ class Screen:
         return self.answer
 
     def show_plan(self, steps, at):
-        last = next((i for i in reversed(self.items) if i["t"] in ("plan", "user")), None)
-        if last and last["t"] == "plan":
-            last["at"] = at
+        plan = self.plan_now()
+        if plan:
+            plan["at"] = at
         else:
             self.items.append({"t": "plan", "steps": list(steps), "at": at})
 
@@ -863,6 +908,12 @@ class Screen:
     # --- input
 
     def submit(self, line):
+        """a line you sent: a command is done there and then; anything else starts a turn, unless one is still running"""
+        if not self.run_command(line) and not self.busy():
+            self.send(line)
+
+    def run_command(self, line):
+        """do what the line asks, if it is a command -> was it one? (One that sprint does not know brings up the help)"""
         cmd, _, arg = line.partition(" ")
         a, arg = self.agent, arg.strip()
         if cmd in ("/exit", "/quit", "/bye"):
@@ -873,16 +924,7 @@ class Screen:
                 a.reset()
                 self.items, self.cache, self.scroll = [], {}, 0
         elif cmd in ("/sidebar", "/history"):
-            right = cmd == "/sidebar"
-            if arg.isdigit():  # a width: show the panel at that size
-                size = max(20 if right else 16, min(80, int(arg)))
-                self.sidebar, self.side_w, self.history, self.left_w = (True, size, self.history, self.left_w) if right else \
-                    (self.sidebar, self.side_w, True, size)
-            elif right:
-                self.sidebar = not self.sidebar
-            else:
-                self.history = not self.history
-            sprint.save_config(sidebar=self.sidebar, sidebar_w=self.side_w, history=self.history, history_w=self.left_w)
+            self.set_panel(cmd == "/sidebar", arg)
         elif cmd == "/tools":
             self.toggle_all()
         elif cmd in ("/directory", "/dir", "/cd") and self.busy():
@@ -900,14 +942,7 @@ class Screen:
         elif cmd == "/paste":
             self.paste_image()
         elif cmd == "/update":
-            self.tell("updating sprint…")
-
-            def work():  # off the screen's back: it asks the network
-                ok, said = sprint.fetch_update()
-                self.newer = "" if ok else self.newer
-                self.tell(said) if ok else self.say(said, "err")
-
-            self.background(work)
+            self.fetch_update()
         elif cmd == "/showthink":
             self.showthink = not self.showthink
             sprint.save_config(showthink=self.showthink)
@@ -920,18 +955,53 @@ class Screen:
             self.tell(flat(rows[0]) if rows else "")
         elif cmd.startswith("/"):
             self.help_popup()
-        elif not self.busy():
-            mine = line[1:].strip() if line.startswith("!") else ""  # !command: run it yourself, no model involved
-            if mine or not line.startswith("!"):
-                line = full = line if mine else self.chipify(line)
-                chips, self.chips = {label: path for label, path in self.chips.items() if label in line}, {}
-                for label, text in self.pastes.items():  # the screen keeps the chip; the model gets what was pasted
-                    full = full.replace(label, sprint.clip(text, self.agent.cap * 2))
-                self.pastes = {}
-                self.items.append({"t": "user", "text": line})
-                self.began, self.got, self.down = time.time(), 0, False
-                self.worker = threading.Thread(target=self.bang if mine else self.work, args=(mine,) if mine else (full, chips), daemon=True)
-                self.worker.start()
+        else:
+            return False
+        return True
+
+    def set_panel(self, right, arg):
+        """/sidebar and /history: show or hide that panel, or with a number show it that wide; kept for next time"""
+        if arg.isdigit():  # a width: show the panel at that size
+            wide = max(20 if right else 16, min(80, int(arg)))
+            if right:
+                self.sidebar, self.side_w = True, wide
+            else:
+                self.history, self.left_w = True, wide
+        elif right:
+            self.sidebar = not self.sidebar
+        else:
+            self.history = not self.history
+        sprint.save_config(sidebar=self.sidebar, sidebar_w=self.side_w, history=self.history, history_w=self.left_w)
+
+    def fetch_update(self):
+        """/update: get the newest sprint and say how that went"""
+        self.tell("updating sprint…")
+
+        def work():  # off the screen's back: it asks the network
+            ok, said = sprint.fetch_update()
+            self.newer = "" if ok else self.newer
+            self.tell(said) if ok else self.say(said, "err")
+
+        self.background(work)
+
+    def send(self, line):
+        """start a turn: the message goes to the model, or after a ! is a command you run yourself, no model involved"""
+        mine = line[1:].strip() if line.startswith("!") else ""
+        if line.startswith("!") and not mine:
+            return  # a ! with nothing after it
+        line = full = line if mine else self.chipify(line)
+        chips = {label: path for label, path in self.chips.items() if label in line}
+        for label in [label for label in self.pastes if label in line]:  # the screen keeps the chip; the model gets what was pasted
+            full = full.replace(label, sprint.clip(self.pastes[label], self.agent.cap * 2))
+        mine = full[1:].strip() if mine else ""  # (a command of your own is run with what was pasted into it, too)
+        # what was attached to a message still typed or still queued stays for it; the rest has gone out, or was deleted
+        waiting = lambda label: label in self.buf or any(label in queued for queued in self.queue)
+        self.chips = {label: path for label, path in self.chips.items() if waiting(label)}
+        self.pastes = {label: text for label, text in self.pastes.items() if waiting(label)}
+        self.items.append({"t": "user", "text": line})
+        self.began, self.got, self.down = time.time(), 0, False
+        self.worker = threading.Thread(target=self.bang if mine else self.work, args=(mine,) if mine else (full, chips), daemon=True)
+        self.worker.start()
 
     def bang(self, cmd):
         try:
@@ -1015,41 +1085,12 @@ class Screen:
         if self.leave and k != "\x03":  # any other key takes back the offer to quit, and the note that made it
             self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
         if self.pending:  # only the approval keys count while a call waits
-            can = [text[0] for text in self.choices()]
-            if self.deadline:
-                self.deadline = time.time() + self.agent.ask_timeout  # you are there: the wait starts again
-            if k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):  # move the highlighted choice
-                self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % len(can)
-                return
-            k = can[min(self.choice, len(can) - 1)] if k in ("\n", "\r", curses.KEY_ENTER) else k  # enter takes the highlighted one
-            if isinstance(k, str) and k.lower() in can and k.lower() in "ya":
-                self.answer = "always" if k in ("a", "A") else True
-                self.gate.set()
-            elif k in ("n", "N", "\x1b", "\x03"):
-                self.halt() if k in ("\x1b", "\x03") else (setattr(self, "answer", False), self.gate.set())
-            return
+            return self.answer_key(k)
         if self.popup:
             return self.popup_key(k)
-        opts, n = self.options(), len(self.buf)
-        if k in ("\n", "\r", curses.KEY_ENTER) and self.buf[:self.cur].endswith("\\"):  # a backslash, then Enter:
-            self.buf = self.buf[:self.cur - 1] + "\n" + self.buf[self.cur:]              # a new line instead of a send
-        elif k == "\n" and self.nl:  # ctrl+j, now that Enter arrives as "\r"
-            self.newline()
-        elif k in ("\n", "\r", curses.KEY_ENTER) and self.buf.strip() and self.live and shift_held():
-            self.newline()  # shift+enter in a terminal that sends it as a plain Enter
-        elif k in ("\n", "\r", curses.KEY_ENTER):
-            if opts:
-                self.complete(opts)
-            line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
-            if not line and self.queue and self.busy():  # nothing typed, messages waiting: stop, so they start now
-                self.interrupt()
-            elif line and not (opts and self.buf.endswith(" ")):
-                self.past.append(line)
-                self.buf, self.cur, self.at, self.scroll = "", 0, len(self.past), 0
-                if (self.busy() or self.queue) and not line.startswith("/"):  # the agent is working: it waits its turn
-                    self.queue.append(line)
-                else:
-                    self.submit(line)
+        opts = self.options()
+        if k in ENTER:
+            self.enter_key(k, opts)
         elif k == "\t":
             self.complete(opts) if opts else self.agent.cycle()
         elif k == curses.KEY_BTAB:
@@ -1062,27 +1103,8 @@ class Screen:
                 self.at = max(0, min(len(self.past), self.at + step))
                 self.buf = self.past[self.at] if self.at < len(self.past) else ""
                 self.cur = len(self.buf)
-        elif k in (curses.KEY_BACKSPACE, "\x7f", "\b") and re.search(r"\[(?:(?:Image|PDF|File) #\d+|Pasted #\d+ [^\]]+)\]$", self.buf[:self.cur]):
-            chip = re.search(r"\[(?:(?:Image|PDF|File) #\d+|Pasted #\d+ [^\]]+)\]$", self.buf[:self.cur])
-            self.buf, self.cur = self.buf[:chip.start()] + self.buf[self.cur:], chip.start()
-        elif k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
-            if self.cur:
-                self.buf, self.cur = self.buf[:self.cur - 1] + self.buf[self.cur:], self.cur - 1
-        elif k == curses.KEY_DC:
-            self.buf = self.buf[:self.cur] + self.buf[self.cur + 1:]
-        elif k in (curses.KEY_LEFT, curses.KEY_RIGHT):
-            self.cur = max(0, min(n, self.cur + (1 if k == curses.KEY_RIGHT else -1)))
-        elif k in (curses.KEY_HOME, "\x01"):  # to the start of this line, and the end of it
-            self.cur = self.buf.rfind("\n", 0, self.cur) + 1
         elif k == curses.KEY_END and not self.buf and self.scroll:
             self.scroll = 0  # nothing typed: End is the end of the conversation
-        elif k in (curses.KEY_END, "\x05"):
-            self.cur = self.buf.find("\n", self.cur) % (n + 1)  # no line break ahead: -1 becomes the very end
-        elif k == "\x15":  # ctrl+u
-            self.buf, self.cur = "", 0
-        elif k == "\x17":  # ctrl+w
-            cut = self.buf[:self.cur].rstrip().rfind(" ") + 1
-            self.buf, self.cur = self.buf[:cut] + self.buf[self.cur:], cut
         elif k == "\x0f":  # ctrl+o
             self.toggle_all()
         elif k == "\x0c":  # ctrl+l
@@ -1097,19 +1119,88 @@ class Screen:
             self.mouse()
         elif k == "\x1b":
             self.halt() if self.busy() or self.queue else None
-        elif k == "\x03":  # ctrl+c: clear the line, else stop the turn, else leave once it is pressed again
-            if self.buf:
-                self.buf, self.cur = "", 0
-            elif self.queue or (self.busy() and self.halted is not self.worker):
-                self.halted = self.worker  # told once. A turn that will not stop must never be what keeps you in
-                self.halt()
-            elif time.time() < self.leave:
-                self.quit = True
-            else:
-                self.leave = time.time() + 2
-                self.toast = ("press ctrl+c again to quit", self.leave)
+        elif k == "\x03":
+            self.ctrl_c()
         elif k == "\x04" and not self.buf:
             self.quit = True
+        else:
+            self.line_key(k)
+
+    def answer_key(self, k):
+        """a key while a call waits for your say-so: move the highlighted answer, take it, or give one by its letter"""
+        can = [text[0] for text in self.choices()]
+        if self.deadline:
+            self.deadline = time.time() + self.agent.ask_timeout  # you are there: the wait starts again
+        if k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):  # move the highlighted choice
+            self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % len(can)
+            return
+        k = can[min(self.choice, len(can) - 1)] if k in ENTER else k  # enter takes the highlighted one
+        if isinstance(k, str) and k.lower() in can and k.lower() in "ya":
+            self.answer = "always" if k in ("a", "A") else True
+            self.gate.set()
+        elif k in ("\x1b", "\x03"):  # no, and the turn stops with it
+            self.halt()
+        elif k in ("n", "N"):
+            self.answer = False
+            self.gate.set()
+
+    def enter_key(self, k, opts):
+        """Enter: a new line where that is what it means, else the completion on offer is taken and the line is sent"""
+        if self.buf[:self.cur].endswith("\\"):  # a backslash, then Enter: a new line instead of a send
+            self.buf = self.buf[:self.cur - 1] + "\n" + self.buf[self.cur:]
+        elif k == "\n" and self.nl:  # ctrl+j, now that Enter arrives as "\r"
+            self.newline()
+        elif self.buf.strip() and self.live and shift_held():
+            self.newline()  # shift+enter in a terminal that sends it as a plain Enter
+        else:
+            if opts:
+                self.complete(opts)
+            line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
+            if not line and self.queue and self.busy():  # nothing typed, messages waiting: stop, so they start now
+                self.interrupt()
+            elif line and not (opts and self.buf.endswith(" ")):
+                self.past.append(line)
+                self.buf, self.cur, self.at, self.scroll = "", 0, len(self.past), 0
+                if (self.busy() or self.queue) and not line.startswith("/"):  # the agent is working: it waits its turn
+                    self.queue.append(line)
+                else:
+                    self.submit(line)
+
+    def ctrl_c(self):
+        """ctrl+c: clear the line, else stop the turn, else leave once it is pressed again"""
+        if self.buf:
+            self.buf, self.cur = "", 0
+        elif self.queue or (self.busy() and self.halted is not self.worker):
+            self.halted = self.worker  # told once. A turn that will not stop must never be what keeps you in
+            self.halt()
+        elif time.time() < self.leave:
+            self.quit = True
+        else:
+            self.leave = time.time() + 2
+            self.toast = ("press ctrl+c again to quit", self.leave)
+
+    def line_key(self, k):
+        """the keys that change what is typed in the bar, or move the cursor through it"""
+        n = len(self.buf)
+        if k in BACKSPACE:
+            chip = CHIP_END.search(self.buf[:self.cur])
+            if chip:  # a chip goes all at once
+                self.buf, self.cur = self.buf[:chip.start()] + self.buf[self.cur:], chip.start()
+            elif self.cur:
+                self.buf, self.cur = self.buf[:self.cur - 1] + self.buf[self.cur:], self.cur - 1
+        elif k == curses.KEY_DC:
+            self.buf = self.buf[:self.cur] + self.buf[self.cur + 1:]
+        elif k in (curses.KEY_LEFT, curses.KEY_RIGHT):
+            self.cur = max(0, min(n, self.cur + (1 if k == curses.KEY_RIGHT else -1)))
+        elif k in (curses.KEY_HOME, "\x01"):  # to the start of this line, and the end of it
+            self.cur = self.buf.rfind("\n", 0, self.cur) + 1
+        elif k in (curses.KEY_END, "\x05"):
+            self.cur = self.buf.find("\n", self.cur) % (n + 1)  # no line break ahead: -1 becomes the very end
+        elif k == "\x15":  # ctrl+u
+            self.buf, self.cur = "", 0
+        elif k == "\x17":  # ctrl+w
+            cut = self.buf[:self.cur].rstrip().rfind(" ") + 1
+            self.buf, self.cur = self.buf[:cut] + self.buf[self.cur:], cut
         elif isinstance(k, str) and k.isprintable():
             self.buf, self.cur, self.pick = self.buf[:self.cur] + k + self.buf[self.cur:], self.cur + 1, 0
 
@@ -1127,7 +1218,7 @@ class Screen:
 
     def chip(self, path):
         kind = sprint.kind_of(path)
-        label = f"[{kind} #{1 + sum(1 for known in self.chips if known.startswith('[' + kind + ' #'))}]"
+        label = f"[{kind} #{next_number(self.chips, kind)}]"
         self.chips[label] = path
         return label
 
@@ -1151,7 +1242,7 @@ class Screen:
         if files:
             self.insert("".join(self.chip(p) + " " for p in files))
         elif text.count("\n") >= 3 or len(text) > 600:  # too much to show on the prompt line
-            lines, n = text.count("\n") + 1, len(self.pastes) + 1
+            lines, n = text.count("\n") + 1, next_number(self.pastes, "Pasted")
             label = f"[Pasted #{n} +{lines} lines]" if lines > 1 else f"[Pasted #{n} {len(text):,} chars]"
             self.pastes[label] = text
             self.insert(label + " ")
@@ -1392,8 +1483,7 @@ class Screen:
             mark = {"done": ("✓", "green"), "failed": ("✗", "red"), "denied": ("✗", "red"),
                     "waiting": ("?", self.agent.mode), "parked": ("‖", "warn")}.get(it["state"], ("…", "warn"))
             if c.tool == "edit":
-                old, new = split_edit(c.body) or ("", c.body)
-                extra = f" +{len(new.splitlines())} -{len(old.splitlines())}"
+                extra = " " + edit_size(c.body)
             elif c.tool == "write":
                 extra = f" +{len(c.body.splitlines())}"
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
@@ -1441,10 +1531,10 @@ class Screen:
             shift = max(0, e["col"] - (w - 6))
             shown = e["lines"][e["top"]:e["top"] + room]
             for i, text in enumerate(shown + [""] * (room - len(shown)), e["top"]):  # a full window, however short the text
-                lines.append([("│ ", "frame")] + clip([(text[shift:] if i == e["row"] else text, "")], w - 4) + [(" │", "frame")])
+                lines.append(boxed([(text[shift:] if i == e["row"] else text, "")], w))
             p["cursor"] = (1 + e["row"] - e["top"], e["col"] - shift)
             hint = " ctrl+s save · ctrl+r default · esc cancel "
-            return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], None, None
+            return lines + [box_foot(hint, w)], None, None
         if p.get("tabs"):  # a strip of pages under the title, the one on show marked
             strip, p["tabs_at"] = [("│ ", "frame")], []
             for n, (name, _) in enumerate(p["tabs"]):
@@ -1454,7 +1544,7 @@ class Screen:
             lines.append(clip(strip, w - 2) + [(" " * max(0, w - 2 - len(flat(strip))) + " │", "frame")])
         if p["field"]:
             field_at = len(lines)
-            lines.append([("│ ", "frame")] + clip([(p["field"]["label"] + " ", "dim"), (p["field"]["text"], "")], w - 4) + [(" │", "frame")])
+            lines.append(boxed([(p["field"]["label"] + " ", "dim"), (p["field"]["text"], "")], w))
         room, at = max(1, tall - len(lines) - 1), rows.index(chosen) if chosen else 0
         # a long list starts around the chosen row, then scrolls only as far as that row needs: it holds still under the mouse
         start = max(at - room + 1, min(p.get("top", at - room // 2), at if p["sel"] else 0))
@@ -1464,12 +1554,12 @@ class Screen:
             sel_at = len(lines) if r is chosen else sel_at
             if id(r) in nth:
                 p["at"][len(lines)] = nth[id(r)]
-            lines.append([("│ ", "frame")] + clip(r["s"], w - 4) + [(" │", "frame")])
+            lines.append(boxed(r["s"], w))
         field = p["field"] or {}
         hint = " " + " · ".join(x for x in ("←→ pages" if p.get("tabs") else "", "↑↓ move" if len(can) > 1 else "", "type to filter" if field.get("filter") else "",
                                            "enter choose" if can and p["pick"] else "enter confirm" if field.get("submit") else "",
                                            "esc back" if p["back"] else "esc close") if x) + " "
-        return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], sel_at, field_at
+        return lines + [box_foot(hint, w)], sel_at, field_at
 
     def popup_to(self, n):
         """move the choice to the nth row that can be chosen, kept in range, and tell the popup (a theme previews itself)"""
@@ -1522,12 +1612,12 @@ class Screen:
             self.popup_to((p["sel"] + (1 if k == curses.KEY_DOWN else -1)) % len(can))
         elif k in (curses.KEY_PPAGE, curses.KEY_NPAGE) and can:
             self.popup_to(p["sel"] + (8 if k == curses.KEY_NPAGE else -8))
-        elif k in ("\n", "\r", curses.KEY_ENTER):
+        elif k in ENTER:
             if can and p["pick"]:
                 p["pick"](can[p["sel"]]["v"])
             elif f and f.get("submit") and f["text"].strip():
                 f["submit"](f["text"].strip())
-        elif f and k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+        elif f and k in BACKSPACE:
             f["text"], p["sel"] = f["text"][:-1], 0
         elif f and k == "\x15":
             f["text"] = ""
@@ -1544,10 +1634,10 @@ class Screen:
             e["save"]("\n".join(lines))
         elif k == "\x12":
             e["lines"], e["row"], e["col"] = e["default"].split("\n"), 0, 0
-        elif k in ("\n", "\r", curses.KEY_ENTER):
+        elif k in ENTER:
             lines[r:r + 1] = [lines[r][:c], lines[r][c:]]
             e["row"], e["col"] = r + 1, 0
-        elif k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+        elif k in BACKSPACE:
             if c:
                 lines[r], e["col"] = lines[r][:c - 1] + lines[r][c:], c - 1
             elif r:
@@ -1638,7 +1728,7 @@ class Screen:
         rows = []
         for n in names:
             params, quant, weight = self.details.get(n, ("", "", 0))
-            name, quant = short(n) if len(short(n)) <= 34 else short(n)[:33] + "…", "" if quant == "unknown" else quant
+            name, quant = trim(short(n), 34), "" if quant == "unknown" else quant
             rows.append(row([("● " if n == a.model else "  ", a.mode), (f"{name:<34}", "bold" if n == a.model else ""),
                              (f"{params:>8}  {quant:<8} {size(weight) if weight else '':>8}", "dim")], ("use", n)))
         rows += [] if names else [row([("no models installed yet", "dim")])]
@@ -1772,7 +1862,6 @@ class Screen:
     def dir_popup(self, at=None):
         """a small folder browser: enter goes into a folder; nothing changes until you choose to work there"""
         at = os.path.abspath(at or sprint.folder())
-        tilde = lambda p: p.replace(str(Path.home()), "~", 1)
         try:
             subs = sorted(d.name for d in os.scandir(at) if d.is_dir() and not d.name.startswith("."))
         except OSError:
@@ -1806,7 +1895,7 @@ class Screen:
 
     def race_popup(self):
         rivals = [n for n in self.installed() if n != self.agent.model]
-        rows = [row([(f"{short(n) if len(short(n)) <= 40 else short(n)[:39] + '…':<41}", ""), (self.details.get(n, ("",))[0], "dim")], n)
+        rows = [row([(f"{trim(short(n), 40):<41}", ""), (self.details.get(n, ("",))[0], "dim")], n)
                 for n in rivals] or [row([("there is no second model installed: add one with /model", "dim")])]
         self.pop("Race against", rows, pick=self.race_ask, field={"label": "›", "text": "", "filter": True})
 
@@ -1955,8 +2044,8 @@ class Screen:
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
         foot = [("─" * bw, line_role)]
-        if self.pending:
-            c = self.pending
+        c = self.pending  # read once, for the same reason as in choices
+        if c:
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
             keys = [("  ", "")]
             for n, text in enumerate(self.choices()):  # the highlighted one is what enter takes
@@ -1965,8 +2054,11 @@ class Screen:
             if self.deadline:  # how long the question still waits before the call is set aside
                 keys += [(f"waits {max(0, round(self.deadline - time.time()))}s   ", "dim")]
             keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
-            kind = sprint.deletion(c.body) if c.tool == "shell" else ""  # why this one is asked whatever the mode
-            why = [("  " + {"own": "deletes this very folder", "outside": "deletes outside this folder"}.get(kind, "deletes: cannot tell what"), "err")] * bool(kind)
+            kind = sprint.guarded(c)  # why this one is asked whatever the mode
+            why = [("  " + {"own": "deletes this very folder", "outside": "deletes outside this folder",
+                            "settings": "changes sprint's own settings"}.get(kind, "deletes: cannot tell what"), "err")] * bool(kind)
+            if not kind and c.tool in ("write", "edit") and not sprint.inside(c.arg):
+                why = [("  outside this folder", "warn")]  # why edits mode asks about this one
             return [rule, clip([(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], max(8, bw - len(flat(why)))) + why,
                     keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
@@ -2029,8 +2121,7 @@ class Screen:
         room = w - len(flat(head)) - len(flat(tail)) - 3
         flag = ""
         if c.tool == "edit":
-            old, new = split_edit(c.body) or ("", c.body)
-            flag = f"  +{len(new.splitlines())} -{len(old.splitlines())}"
+            flag = "  " + edit_size(c.body)
         elif c.tool == "write":
             flag = "  replaces file" if it["old"] else "  new file"
         flag = flag if room > 24 else ""
@@ -2040,14 +2131,16 @@ class Screen:
         gap = w - len(flat(head + mid + tail))
         top = head + mid + [(" " + "─" * (gap - 1), "frame")] + tail
         hint = f" … +{hidden} lines · ctrl+o " if hidden else " ctrl+o to collapse " if full and len(body) > self.peek else ""
-        foot = [("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]
-        return [("", top, it)] + [("", [("│ ", "frame")] + clip(r, inner) + [(" │", "frame")], it) for r in rows] + \
-               [("", foot, it)]
+        return [("", top, it)] + [("", boxed(r, w), it) for r in rows] + [("", box_foot(hint, w), it)]
 
     def plan_now(self):
         """the checklist of the message in hand, if plan mode made one for it"""
         last = next((i for i in reversed(self.items) if i["t"] in ("plan", "user")), None)
         return last if last and last["t"] == "plan" else None
+
+    def step_mark(self, n, at):
+        """how step n of a plan is marked when step at is the one in hand: done, doing now, still to do"""
+        return ("✓ ", "green") if n < at else ("▸ ", self.agent.mode) if n == at else ("· ", "dim")
 
     def plan_rows(self, plan, w, room):
         """the plan for the right-hand panel: every step wrapped to its width, done / in hand / still to do, and as many
@@ -2055,7 +2148,7 @@ class Screen:
         at, rows, first = plan["at"], [], 0
         for n, step in enumerate(plan["steps"]):
             first = len(rows) if n == at else first
-            mark, role = ("✓ ", "green") if n < at else ("▸ ", self.agent.mode) if n == at else ("· ", "dim")
+            mark, role = self.step_mark(n, at)
             for k, r in enumerate(wrap([(step, "bold" if n == at else "dim")], max(8, w - 2))):
                 rows.append([(mark if k == 0 else "  ", role)] + r)
         start = max(0, min(first - 1, len(rows) - room))
@@ -2078,9 +2171,9 @@ class Screen:
                     rows = [("user", [("▌", tone), (" ", "")] + ([("!" if mine else MARK, tone), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
                 elif it["t"] == "plan":  # plan mode's checklist: done, doing now, still to do
-                    at, me = it["at"], self.agent.mode
-                    rows = [("", [("  ", ""), ("✓ " if n < at else "▸ " if n == at else "· ", "green" if n < at else me if n == at else "dim"),
-                                  (step[:max(8, w - 6)], "bold" if n == at else "dim")], None) for n, step in enumerate(it["steps"])]
+                    at = it["at"]
+                    rows = [("", [("  ", ""), self.step_mark(n, at), (step[:max(8, w - 6)], "bold" if n == at else "dim")], None)
+                            for n, step in enumerate(it["steps"])]
                 elif it["t"] == "note":
                     rows = [("", [("  ", "")] + r, None) for line in it["text"].split("\n")
                             for r in wrap([(line, it["role"])], w - 2)]
@@ -2131,7 +2224,41 @@ class Screen:
             x += len(text)
 
     def draw(self, scr):
+        """one frame, drawn back to front: the bar, then the opening screen or the conversation and its panels, then
+        whatever lies over them (the text being dragged over, the completions, a popup), and the cursor last"""
         h, w = scr.getmaxyx()
+        self.wipe(scr, h, w)
+        if h < 12 or w < 50:
+            self.put(scr, 0, 0, "sprint needs at least 50×12")
+            return scr.refresh()
+        home = not self.items
+        side = self.side_w if not home and self.sidebar and w - self.side_w >= ROOM else 0
+        lw = self.left_w if not home and self.history and w - side - self.left_w >= ROOM else 0
+        self.geo = (w, lw, side)
+        art = self.wordmark(h, w) if home else []
+        top, bx, bw, tall = self.draw_bar(scr, h, home, art)
+        if home:
+            self.draw_home(scr, h, art, top, bx, bw, tall)
+        else:  # the conversation is as wide as the bar and starts at the same column
+            waiting = self.queue_rows()
+            self.draw_conversation(scr, bx, bw, top - 2 - len(waiting))  # a blank row above and below the conversation
+            self.draw_footer(scr, h, bx, bw, top, waiting)
+            if side:
+                self.draw_side(scr, h)
+            if lw:
+                self.draw_left(scr, h)
+        if self.select and not self.popup:
+            self.draw_selection(scr)
+        self.draw_options(scr, top, bx, bw)
+        self.track_hover()
+        if self.popup:
+            self.draw_popup(scr, h, w)
+        else:
+            self.place_cursor(scr, top, bx)
+        scr.refresh()
+
+    def wipe(self, scr, h, w):
+        """start a frame: the whole screen in the theme's background, and nothing known yet of what is drawn where"""
         if self.stale:  # the pairs were just given new colours. The curses macOS ships then sends the first thing drawn
             self.stale = False  # in the pair it used last with no colour at all (a previewed theme kept the terminal's
             scr.clearok(True)  # own background up top); clearing first puts it back in step, and every cell is resent
@@ -2140,151 +2267,168 @@ class Screen:
             self.put(scr, y, 0, " " * w)  # ships loses the colour of cells cleared to a window background (bkgdset)
         self.hits, self.screen, self.jump_to = {}, {}, None
         self.grid, self.areas, self.rows, self.plan_edge = [[" "] * w for _ in range(h)], {}, h, None
-        if h < 12 or w < 50:
-            self.put(scr, 0, 0, "sprint needs at least 50×12")
-            return scr.refresh()
-        a, home = self.agent, not self.items
-        side = self.side_w if not home and self.sidebar and w - self.side_w >= ROOM else 0
-        lw = self.left_w if not home and self.history and w - side - self.left_w >= ROOM else 0
-        x0, self.geo = lw + 2, (w, lw, side)
-        used = min(100, a.used() * 100 // a.ctx)
 
-        # input panel (or the approval prompt in its place)
+    def wordmark(self, h, w):
+        """the wordmark for the opening screen, with its wave unless motion is off; one line of it where there is no room"""
+        if w >= LOGO_W + 6 and h >= 20:
+            return logo_rows(time.time() if self.motion else None)
+        return [[("░", "dim"), ("▒▓", ""), ("█", "bold"), (" sprint", "bold")]]
+
+    def draw_bar(self, scr, h, home, art):
+        """the input panel (or the approval prompt in its place): in the middle of the opening screen, under the
+        wordmark, else along the bottom -> (its top row, its first column, its width, how many rows it takes)"""
+        (w, lw, side), a = self.geo, self.agent
+        used = min(100, a.used() * 100 // a.ctx)
         bw = min(w - 8, 76) if home else w - side - lw - 4
-        bx = (w - bw) // 2 if home else x0
-        rows, typed = self.input_rows(bw, used, side)
-        art = []
-        if home:  # the wordmark, with its wave unless motion is off or there is no room for it
-            art = logo_rows(time.time() if self.motion else None) if w >= LOGO_W + 6 and h >= 20 else \
-                [[("░", "dim"), ("▒▓", ""), ("█", "bold"), (" sprint", "bold")]]
+        bx = (w - bw) // 2 if home else lw + 2
+        rows, _ = self.input_rows(bw, used, side)
         logo_h = len(art) + 2 if home else 0
         top = max(1, (h - logo_h - len(rows) - 3) // 2) + logo_h if home else h - 1 - len(rows)
         for i, r in enumerate(rows):
             self.put(scr, top + i, bx, r, width=bw)
         self.areas["prompt"] = (bx + 2, bx + bw - 1, top + 1, top + len(rows) - 2)  # what you typed, without the mark and the rules
+        return top, bx, bw, len(rows)
 
-        if home:
-            for i, row in enumerate(art):
-                self.put(scr, top - logo_h + i, (w - len(flat(art[0]))) // 2, row)
-            tips = [("/", "bold"), (" commands   ", "dim"), ("ctrl+c", "bold"), (" quit", "dim")]
-            self.put(scr, top + len(rows), bx, self.mode_row(), width=bw - len(flat(tips)) - 2)
-            self.put(scr, top + len(rows), bx + bw - len(flat(tips)), tips)
-            where = sprint.folder().replace(str(Path.home()), "~", 1)
-            # bottom left: the version, and a newer one when there is one; a passing note takes its place while it lasts
-            version = clip([(self.note_text(), "warn")], max(20, w // 2)) if self.note_text() else self.version_text()
-            self.put(scr, h - 1, 2, version, width=w - 4)
-            self.put(scr, h - 2, 2, self.update_text(w - 4))  # a newer one: on the line above, in its own colour
-            room = w - 8 - len(flat(version))
-            if room >= 12:
-                where = where if len(where) <= room else "…" + where[-(room - 1):]  # the end of a long path says more
-                self.put(scr, h - 1, w - 2 - len(where), [(where, "dim")])
-        else:
-            # conversation
-            waiting = self.queue_rows()
-            mw, vh = w - side - lw - 4, top - 2 - len(waiting)  # a blank row above and below the conversation
-            self.page = max(1, vh - 2)
-            self.aside = bool(side)
-            lines = self.lines(mw)
-            if self.jump is not None:  # a click in a side panel: bring that item to the top
-                at = next((i for i, row in enumerate(lines) if row[2] is self.jump), None)
-                self.scroll = self.scroll if at is None else len(lines) - vh - max(0, at - 1)
-                self.jump = None
-            self.scroll = max(0, min(self.scroll, len(lines) - vh))
-            first = max(0, len(lines) - vh - self.scroll)
-            for i, (kind, spans, item) in enumerate(lines[first:first + vh]):
-                self.screen[1 + i] = (x0, flat(spans))
-                glow = self.glow(item)  # what you just jumped to flashes in reverse video, then fades through the band
-                if kind == "user" or glow:  # your own messages stand out: a shaded band, or reverse video without 256 colours
-                    self.put(scr, 1 + i, x0, spans, panel=2 if kind == "user" else True, width=mw)
-                    if glow > 1 or not self.rich:
-                        self.mark(scr, 1 + i, x0, mw, curses.A_REVERSE)
-                else:
-                    self.put(scr, 1 + i, x0, spans)
-                if item:
-                    self.hits[("main", 1 + i)] = item
-            self.areas["main"] = (x0, x0 + mw - 1, 1, max(1, vh))
-            self.jump_to = None
-            if self.scroll:  # scrolled up: a button over the last row of the conversation takes you back down
-                button = " ↓ jump to bottom "
-                at = x0 + mw - len(button) - 1
-                self.put(scr, vh, at, [(button, "chosen")])
-                self.jump_to = (vh, at, at + len(button))
-            # the status line, on the blank row above the bar; what is queued, between the two; and the footer
-            keys = [("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
-            for i, r in enumerate(waiting):
-                self.put(scr, top - len(waiting) + i, x0, r, width=mw)
-            if self.busy():
-                self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
-                keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys
-                keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + keys
-            under = self.mode_row()
-            if self.note_text():
-                keys = [(self.note_text(), "warn")]
-            elif self.scroll:
-                keys = [("end", "bold"), (" or click ↓ for the newest", "dim")]
-            keys = keys if len(flat(keys)) < mw - len(flat(under)) - 2 else keys[:2] if len(keys) > 2 else clip(keys, max(4, mw - len(flat(under)) - 2))
-            if not lw:  # no message list to stand under: the version follows the mode, a newer one after it, where there is room
-                extra = [("  ", "")] + self.version_text()
-                room = mw - len(flat(under)) - len(flat(keys)) - 4 - len(flat(extra))
-                if room >= 0:
-                    newer = [(" · ", "dim")] + self.update_text(room - 3) if self.newer and room - 3 >= len(self.newer) + 2 else []
-                    under = under + extra + newer
-            self.put(scr, h - 1, x0, under, width=mw)
-            self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)
-            if side:  # right panel: the context window in small, then what the agent has done
-                x, inner = w - side + 1, side - 3
-                self.areas["side"] = (x, w - 2, 0, h - 1)
-                top_rows = self.side_head(inner, h)
-                for i, spans in enumerate(top_rows):
-                    self.put(scr, 1 + i, x, spans, width=inner)
-                act = self.act = len(top_rows) + 2  # the row "Activity" stands on: under the head, wherever that ends
-                self.put(scr, act, x, [("Activity", "dim")], width=inner)
-                plan = self.plan_now() if self.plan else None  # /plan off puts the plan away too
-                half = max(act + 3, min(h - 4, h - self.plan_h if self.plan_h else max(h // 2, act + 6)))  # the bottom half, unless you dragged its edge
-                self.plan_edge = half - 1 if plan else None
-                if plan:  # a line to drag, how far along, then the steps
-                    held = self.drag == "plan"
-                    self.put(scr, half - 1, x, [(("━" if held else "─") * inner, a.mode if held else "frame")])
-                    done = f"{min(plan['at'], len(plan['steps']))}/{len(plan['steps'])}"
-                    self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
-                    for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 3 - half))):
-                        self.put(scr, half + 1 + i, x, spans, width=inner)
-                log = self.activity()[-max(1, (half - 1 if plan else h - 3) - (act + 1)):]
-                for i, (item, spans) in enumerate(log):
-                    self.put(scr, act + 1 + i, x, spans, width=inner)
-                    self.hits[("side", act + 1 + i)] = item
-                if not log:
-                    self.put(scr, act + 1, x, [("nothing yet", "dim")])
-                self.put(scr, h - 1, x, [(sprint.folder().replace(str(Path.home()), "~", 1), "dim")], width=inner)
-                for y in range(h):
-                    self.put(scr, y, w - side - 1, [("┃" if self.drag == "right" else "│", a.mode if self.drag == "right" else "frame")])
-            if lw:  # left panel: your messages, newest at the bottom
-                rows = self.outline()
-                self.areas["left"] = (1, lw - 1, 0, h - 1)
-                self.put(scr, 1, 1, [("Messages", "dim")], width=lw - 3)
-                self.put(scr, h - 1, 1, self.version_text(), width=lw - 2)  # bottom left, always: the version,
-                self.put(scr, h - 2, 1, self.update_text(lw - 3))           # and over it a newer one when there is one
-                for i, (item, title, meta) in enumerate(rows[-max(1, (h - 7) // 2):]):  # the list stops a line short of them
-                    latest = item is rows[-1][0]
-                    self.put(scr, 3 + i * 2, 1, [(t, "bold" if latest and not r else r) for t, r in title], width=lw - 3)
-                    self.put(scr, 4 + i * 2, 1, meta, width=lw - 3)
-                    self.hits[("left", 3 + i * 2)] = self.hits[("left", 4 + i * 2)] = item
-                for y in range(h):
-                    self.put(scr, y, lw, [("┃" if self.drag == "left" else "│", a.mode if self.drag == "left" else "frame")])
+    def draw_home(self, scr, h, art, top, bx, bw, tall):
+        """the opening screen, around the bar: the wordmark over it, the mode and two keys under it, and on the bottom
+        row the version at the left and the working folder at the right"""
+        w = self.geo[0]
+        for i, spans in enumerate(art):
+            self.put(scr, top - len(art) - 2 + i, (w - len(flat(art[0]))) // 2, spans)
+        tips = [("/", "bold"), (" commands   ", "dim"), ("ctrl+c", "bold"), (" quit", "dim")]
+        self.put(scr, top + tall, bx, self.mode_row(), width=bw - len(flat(tips)) - 2)
+        self.put(scr, top + tall, bx + bw - len(flat(tips)), tips)
+        where = tilde(sprint.folder())
+        # bottom left: the version, and a newer one when there is one; a passing note takes its place while it lasts
+        version = clip([(self.note_text(), "warn")], max(20, w // 2)) if self.note_text() else self.version_text()
+        self.put(scr, h - 1, 2, version, width=w - 4)
+        self.put(scr, h - 2, 2, self.update_text(w - 4))  # a newer one: on the line above, in its own colour
+        room = w - 8 - len(flat(version))
+        if room >= 12:
+            where = where if len(where) <= room else "…" + where[-(room - 1):]  # the end of a long path says more
+            self.put(scr, h - 1, w - 2 - len(where), [(where, "dim")])
 
+    def draw_conversation(self, scr, x0, mw, vh):
+        """the conversation, mw columns from x0 and vh rows from the second down: its newest lines, unless you scrolled
+        up or clicked on something in a side panel"""
+        self.page = max(1, vh - 2)
+        self.aside = bool(self.geo[2])
+        lines = self.lines(mw)
+        if self.jump is not None:  # a click in a side panel: bring that item to the top
+            at = next((i for i, line in enumerate(lines) if line[2] is self.jump), None)
+            self.scroll = self.scroll if at is None else len(lines) - vh - max(0, at - 1)
+            self.jump = None
+        self.scroll = max(0, min(self.scroll, len(lines) - vh))
+        first = max(0, len(lines) - vh - self.scroll)
+        for i, (kind, spans, item) in enumerate(lines[first:first + vh]):
+            self.screen[1 + i] = (x0, flat(spans))
+            glow = self.glow(item)  # what you just jumped to flashes in reverse video, then fades through the band
+            if kind == "user" or glow:  # your own messages stand out: a shaded band, or reverse video without 256 colours
+                self.put(scr, 1 + i, x0, spans, panel=2 if kind == "user" else True, width=mw)
+                if glow > 1 or not self.rich:
+                    self.mark(scr, 1 + i, x0, mw, curses.A_REVERSE)
+            else:
+                self.put(scr, 1 + i, x0, spans)
+            if item:
+                self.hits[("main", 1 + i)] = item
+        self.areas["main"] = (x0, x0 + mw - 1, 1, max(1, vh))
+        self.jump_to = None
+        if self.scroll:  # scrolled up: a button over the last row of the conversation takes you back down
+            button = " ↓ jump to bottom "
+            at = x0 + mw - len(button) - 1
+            self.put(scr, vh, at, [(button, "chosen")])
+            self.jump_to = (vh, at, at + len(button))
 
-        if self.select and not self.popup:  # the text being dragged over, in whichever part of the screen the drag began
-            (ya, xa), (yb, xb), area = self.span(self.select)
-            left, right = self.areas.get(area, (0, w - 1, 0, 0))[:2]
-            for y in range(ya, yb + 1):
-                first, last = xa if y == ya else left, min(w - 1, xb if y == yb else right)
-                if last >= first:
-                    self.mark(scr, y, first, last - first + 1, curses.A_REVERSE)
+    def draw_footer(self, scr, h, x0, mw, top, waiting):
+        """between the conversation and the bar: the status line while a turn runs, on the blank row there, and under
+        it what is queued. Then the bottom row: the mode (and the version) at the left, the keys that count now at the right"""
+        w, lw, side = self.geo
+        keys = [("ctrl+o", "bold"), (" tools  ", "dim"), ("/help", "bold")]
+        for i, r in enumerate(waiting):
+            self.put(scr, top - len(waiting) + i, x0, r, width=mw)
+        if self.busy():
+            self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
+            keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys
+            keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + keys
+        under = self.mode_row()
+        if self.note_text():
+            keys = [(self.note_text(), "warn")]
+        elif self.scroll:
+            keys = [("end", "bold"), (" or click ↓ for the newest", "dim")]
+        keys = keys if len(flat(keys)) < mw - len(flat(under)) - 2 else keys[:2] if len(keys) > 2 else clip(keys, max(4, mw - len(flat(under)) - 2))
+        if not lw:  # no message list to stand under: the version follows the mode, a newer one after it, where there is room
+            extra = [("  ", "")] + self.version_text()
+            room = mw - len(flat(under)) - len(flat(keys)) - 4 - len(flat(extra))
+            if room >= 0:
+                newer = [(" · ", "dim")] + self.update_text(room - 3) if self.newer and room - 3 >= len(self.newer) + 2 else []
+                under = under + extra + newer
+        self.put(scr, h - 1, x0, under, width=mw)
+        self.put(scr, h - 1, max(x0 + len(flat(under)) + 2, w - side - 2 - len(flat(keys))), keys)
 
-        # completion popup, drawn over whatever is above the input
+    def draw_side(self, scr, h):
+        """the right-hand panel: the context window in small, then what the agent has done, the plan under that when
+        there is one, and the working folder on the bottom row"""
+        (w, _, side), a = self.geo, self.agent
+        x, inner = w - side + 1, side - 3
+        self.areas["side"] = (x, w - 2, 0, h - 1)
+        top_rows = self.side_head(inner, h)
+        for i, spans in enumerate(top_rows):
+            self.put(scr, 1 + i, x, spans, width=inner)
+        act = self.act = len(top_rows) + 2  # the row "Activity" stands on: under the head, wherever that ends
+        self.put(scr, act, x, [("Activity", "dim")], width=inner)
+        plan = self.plan_now() if self.plan else None  # /plan off puts the plan away too
+        half = max(act + 3, min(h - 4, h - self.plan_h if self.plan_h else max(h // 2, act + 6)))  # the bottom half, unless you dragged its edge
+        self.plan_edge = half - 1 if plan else None
+        if plan:  # a line to drag, how far along, then the steps
+            held = self.drag == "plan"
+            self.put(scr, half - 1, x, [(("━" if held else "─") * inner, a.mode if held else "frame")])
+            done = f"{min(plan['at'], len(plan['steps']))}/{len(plan['steps'])}"
+            self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
+            for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 3 - half))):
+                self.put(scr, half + 1 + i, x, spans, width=inner)
+        log = self.activity()[-max(1, (half - 1 if plan else h - 3) - (act + 1)):]
+        for i, (item, spans) in enumerate(log):
+            self.put(scr, act + 1 + i, x, spans, width=inner)
+            self.hits[("side", act + 1 + i)] = item
+        if not log:
+            self.put(scr, act + 1, x, [("nothing yet", "dim")])
+        self.put(scr, h - 1, x, [(tilde(sprint.folder()), "dim")], width=inner)
+        self.draw_edge(scr, h, w - side - 1, "right")
+
+    def draw_left(self, scr, h):
+        """the left-hand panel: your messages, newest at the bottom, and under them the version"""
+        lw, rows = self.geo[1], self.outline()
+        self.areas["left"] = (1, lw - 1, 0, h - 1)
+        self.put(scr, 1, 1, [("Messages", "dim")], width=lw - 3)
+        self.put(scr, h - 1, 1, self.version_text(), width=lw - 2)  # bottom left, always: the version,
+        self.put(scr, h - 2, 1, self.update_text(lw - 3))           # and over it a newer one when there is one
+        for i, (item, title, meta) in enumerate(rows[-max(1, (h - 7) // 2):]):  # the list stops a line short of them
+            latest = item is rows[-1][0]
+            self.put(scr, 3 + i * 2, 1, [(t, "bold" if latest and not r else r) for t, r in title], width=lw - 3)
+            self.put(scr, 4 + i * 2, 1, meta, width=lw - 3)
+            self.hits[("left", 3 + i * 2)] = self.hits[("left", 4 + i * 2)] = item
+        self.draw_edge(scr, h, lw, "left")
+
+    def draw_edge(self, scr, h, x, name):
+        """a side panel's edge, from top to bottom: heavier, and in the mode's colour, while you drag it"""
+        for y in range(h):
+            self.put(scr, y, x, [("┃" if self.drag == name else "│", self.agent.mode if self.drag == name else "frame")])
+
+    def draw_selection(self, scr):
+        """the text being dragged over, in reverse video, in whichever part of the screen the drag began"""
+        w = self.geo[0]
+        (ya, xa), (yb, xb), area = self.span(self.select)
+        left, right = self.areas.get(area, (0, w - 1, 0, 0))[:2]
+        for y in range(ya, yb + 1):
+            first, last = xa if y == ya else left, min(w - 1, xb if y == yb else right)
+            if last >= first:
+                self.mark(scr, y, first, last - first + 1, curses.A_REVERSE)
+
+    def draw_options(self, scr, top, bx, bw):
+        """the completions for what is typed, over whatever is above the bar: eight at a time, kept around the chosen one"""
         every = [] if self.pending or self.popup else self.options()
         chosen = min(self.pick, len(every) - 1)
-        start = max(0, min(chosen - 3, len(every) - 8))  # eight at a time, kept around the chosen one
+        start = max(0, min(chosen - 3, len(every) - 8))
         opts = every[start:start + 8]
         asked = self.buf.partition(" ")[0] if " " in self.buf else None  # the command whose choices these are, if they are
         for i, (name, about) in enumerate(opts):
@@ -2297,40 +2441,46 @@ class Screen:
             if on:
                 self.mark(scr, top - len(opts) + i, bx + 3, bw - 3, curses.A_REVERSE)
 
+    def track_hover(self):
+        """only under a popup does the terminal report every move of the mouse, so that the popup's rows can light up"""
         hover = bool(self.popup and self.mouse_on and not self.popup["edit"])
-        if VT and hover != self.hover:  # only under a popup does the terminal report every move, so its rows can light up
+        if VT and hover != self.hover:
             self.hover = hover
             sys.stdout.write("\033[?1003h" if hover else "\033[?1003l" + "\033[?1002h" * self.mouse_on)  # one mode at a time
             sys.stdout.flush()
-        if self.popup:  # the standard popup: a raised box on the panel shade, centred over a greyed-out screen
-            for y in range(h):
-                self.mark(scr, y, 0, w, self.attr("ghost"))
-            pw, tall = self.popup_size(h, w)
-            plines, sel_at, field_at = self.popup_lines(pw, tall=tall)
-            py, px = max(1, (h - len(plines)) // 2), (w - pw) // 2
-            self.popup["box"] = (py, px, pw, len(plines))  # where it is, for the mouse
-            for i, spans in enumerate(plines):
-                self.put(scr, py + i, px, spans, panel=True)
-                if i == sel_at:
-                    self.mark(scr, py + i, px + 2, min(pw - 4, self.popup["lit"] or pw), curses.A_REVERSE)
-            curses.curs_set(1 if field_at or self.popup["edit"] else 0)
-            try:
-                if self.popup["edit"]:
-                    scr.move(py + self.popup["cursor"][0], min(px + pw - 3, px + 2 + self.popup["cursor"][1]))
-                elif field_at:
-                    f = self.popup["field"]
-                    scr.move(py + field_at, min(px + pw - 3, px + 3 + len(f["label"]) + len(f["text"])))
-            except curses.error:
-                pass
-        elif self.pending:
-            curses.curs_set(0)
-        else:
-            curses.curs_set(1)
-            try:
-                scr.move(top + self.caret[0], bx + self.caret[1])
-            except curses.error:
-                pass
-        scr.refresh()
+
+    def draw_popup(self, scr, h, w):
+        """the standard popup: a raised box on the panel shade, centred over a greyed-out screen; the cursor goes to
+        its typing line or into its editor, if it has one"""
+        for y in range(h):
+            self.mark(scr, y, 0, w, self.attr("ghost"))
+        pw, tall = self.popup_size(h, w)
+        plines, sel_at, field_at = self.popup_lines(pw, tall=tall)
+        py, px = max(1, (h - len(plines)) // 2), (w - pw) // 2
+        self.popup["box"] = (py, px, pw, len(plines))  # where it is, for the mouse
+        for i, spans in enumerate(plines):
+            self.put(scr, py + i, px, spans, panel=True)
+            if i == sel_at:
+                self.mark(scr, py + i, px + 2, min(pw - 4, self.popup["lit"] or pw), curses.A_REVERSE)
+        curses.curs_set(1 if field_at or self.popup["edit"] else 0)
+        try:
+            if self.popup["edit"]:
+                scr.move(py + self.popup["cursor"][0], min(px + pw - 3, px + 2 + self.popup["cursor"][1]))
+            elif field_at:
+                f = self.popup["field"]
+                scr.move(py + field_at, min(px + pw - 3, px + 3 + len(f["label"]) + len(f["text"])))
+        except curses.error:
+            pass
+
+    def place_cursor(self, scr, top, bx):
+        """the cursor, where you are typing in the bar; hidden while a call waits for your answer"""
+        if self.pending:
+            return curses.curs_set(0)
+        curses.curs_set(1)
+        try:
+            scr.move(top + self.caret[0], bx + self.caret[1])
+        except curses.error:
+            pass
 
     def free_ctrl_j(self):
         """make Enter arrive as "\r", which leaves ctrl+j ("\n") free to mean a new line. Not on Windows, where this
