@@ -612,6 +612,7 @@ class Screen:
         self.scroll, self.page, self.hits = 0, 10, {}
         self.pending, self.answer, self.gate = None, None, threading.Event()  # a tool call waiting for approval
         self.deadline = None  # when the question stops waiting for you and the call is set aside
+        self.asking, self.draft = None, None  # a question of the model's that waits for your answer; what you were typing when it came
         self.worker, self.models, self.quit, self.colors = None, None, False, False
         self.mouse_on, self.drag, self.jump, self.geo = True, None, None, (0, 0, 0)  # geo: screen, list and sidebar widths
         self.popup, self.job, self.toast, self.details = None, None, ("", 0.0), {}  # open popup, its background work, brief note
@@ -636,7 +637,7 @@ class Screen:
         self.queue, self.leave = [], 0.0  # messages sent while the agent worked; until when a second ctrl+c quits
         self.halted = None  # the turn ctrl+c has already told to stop: pressed again while it still runs, it is about leaving
         self.load_ui()
-        agent.emit, agent.status, agent.ask = self.emit, self.status, self.ask
+        agent.emit, agent.status, agent.ask, agent.question = self.emit, self.status, self.ask, self.question
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
         agent.show_plan, agent.show_thinking = self.show_plan, self.show_thinking
 
@@ -782,6 +783,10 @@ class Screen:
 
     def show_result(self, r):
         it = self.items[-1]
+        if it["call"].tool == "ask":  # answered, nobody there, or left to the model; the wait for you is no time of the tool's
+            it["result"], it["state"] = r, ("done" if r.startswith(sprint.ANSWERED) else "unanswered" if r.startswith("no answer")
+                                            else "skipped" if r.startswith("The user leaves") else "failed")
+            return it.pop("began", None)
         bad = r.startswith("error") or re.search(r"\[(exit -?\d+|timed out[^\]]*)\]$", r)
         it["result"], it["state"] = r, "denied" if r.startswith("denied") else "parked" if r.startswith("set aside") else "failed" if bad else "done"
         if "began" in it:
@@ -811,6 +816,50 @@ class Screen:
             return "later"
         self.items[-1]["state"], self.items[-1]["began"] = "running", time.time()  # the wait for you is not the call's time
         return self.answer
+
+    def question(self, text, options=()):
+        """the model asks you something: the prompt bar is the answer's until you send one -> what you said, "" when
+        you left it to the model, None when nobody answered. It waits a minute unless that was changed (any key
+        starts the wait again), and then the model goes on by itself"""
+        it = self.items[-1]
+        it["state"] = "asking"
+        it.pop("began", None)
+        self.gate.clear()
+        q = self.asking = {"q": text, "options": list(options)}
+        limit = self.agent.question_timeout
+        self.deadline = time.time() + limit if limit else None
+        while not self.gate.wait(0.05):
+            if self.deadline and time.time() >= self.deadline:
+                break
+        answered, self.deadline = self.gate.is_set(), None
+        if self.asking is q:
+            self.asking = None
+        return self.answer if answered else None
+
+    def asked(self):
+        """the model's question, while one waits for you. The first time it is seen here the bar is given over to its
+        answer, and what you were typing is put by; once it is over that comes back. (This runs on the screen's own
+        thread. The question arrives and runs out on the agent's, which must not reach into a line being typed)"""
+        q = self.asking
+        if q and self.draft is None:
+            self.draft, self.buf, self.cur, self.pick = (self.buf, self.cur), "", 0, 0
+        elif not q and self.draft is not None:
+            (was, cur), self.draft, self.pick = self.draft, None, 0
+            if was:  # (an answer half typed when the wait ran out stays in the bar, unless there is a draft to give back)
+                self.buf, self.cur = was, cur
+        return q
+
+    def reply_to(self, q, text):
+        """hand the model your answer to its question ("": it is left to the model), and take the bar back"""
+        for label, pasted in self.pastes.items():  # an answer goes as text: what was pasted in full, a dropped file as its path
+            text = text.replace(label, sprint.clip(pasted, self.agent.cap))
+        for label, path in self.chips.items():
+            text = text.replace(label, path)
+        self.buf, self.cur, self.answer = "", 0, text
+        if self.asking is q:
+            self.asking = None
+        self.gate.set()
+        self.asked()
 
     def show_plan(self, steps, at):
         plan = self.plan_now()
@@ -879,7 +928,7 @@ class Screen:
     def active(self):
         """is anything on the screen changing by itself? When nothing is, the loop sleeps instead of redrawing."""
         wave = not self.items and self.motion
-        return bool(self.busy() or self.pending or self.drag or self.select or self.note_text() or wave or self.queue or self.repaint
+        return bool(self.busy() or self.pending or self.asking or self.drag or self.select or self.note_text() or wave or self.queue or self.repaint
                     or (self.job and self.job.is_alive()) or self.esc is not None or self.pasting is not None
                     or self.glow(self.flash[0]))
 
@@ -890,6 +939,9 @@ class Screen:
         self.agent.stop()
         if self.pending:
             self.answer = False
+            self.gate.set()
+        if self.asking:  # a question waiting for you goes with the turn
+            self.answer, self.asking = None, None
             self.gate.set()
 
     def halt(self):
@@ -902,6 +954,7 @@ class Screen:
 
     def advance(self):
         """start the next queued message once nothing is running"""
+        self.asked()
         if self.queue and not self.busy() and not self.pending:
             self.submit(self.queue.pop(0))
 
@@ -1041,7 +1094,10 @@ class Screen:
         return self.models
 
     def options(self):
-        """completions for what is typed: commands after "/", then their arguments"""
+        """completions for what is typed: commands after "/", then their arguments. While the model's question waits,
+        the choices it gave instead, until you start an answer of your own"""
+        if self.asking:
+            return [] if self.buf else [(o, "") for o in self.asking["options"]]
         if self.mention() is not None:
             return [("@" + p, "") for p in self.files(self.mention())]
         cmd, space, arg = self.buf.partition(" ")
@@ -1084,10 +1140,15 @@ class Screen:
     def key(self, k):
         if self.leave and k != "\x03":  # any other key takes back the offer to quit, and the note that made it
             self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
+        q = self.asked()
+        if q and self.deadline:
+            self.deadline = time.time() + self.agent.question_timeout  # you are there: the wait starts again
         if self.pending:  # only the approval keys count while a call waits
             return self.answer_key(k)
         if self.popup:
             return self.popup_key(k)
+        if q and k == "\x1b":  # the model's question: escape leaves it to the model (ctrl+c stops the turn)
+            return self.reply_to(q, "")
         opts = self.options()
         if k in ENTER:
             self.enter_key(k, opts)
@@ -1153,6 +1214,10 @@ class Screen:
         elif self.buf.strip() and self.live and shift_held():
             self.newline()  # shift+enter in a terminal that sends it as a plain Enter
         else:
+            q = self.asked()
+            if q:  # the model's question: what you typed is the answer, else the choice that is highlighted
+                text = self.buf.strip() or (opts[min(self.pick, len(opts) - 1)][0] if opts else "")
+                return self.reply_to(q, text) if text else None
             if opts:
                 self.complete(opts)
             line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
@@ -1251,7 +1316,7 @@ class Screen:
 
     def paste_image(self):
         """attach the picture on the clipboard as a chip; terminals paste text only, so this asks the system"""
-        if self.pending or self.popup:
+        if self.pending or self.popup or self.asking:
             return
         path = sprint.clipboard_image()
         if path:
@@ -1481,13 +1546,14 @@ class Screen:
                 continue
             c, extra = it["call"], ""
             mark = {"done": ("✓", "green"), "failed": ("✗", "red"), "denied": ("✗", "red"),
-                    "waiting": ("?", self.agent.mode), "parked": ("‖", "warn")}.get(it["state"], ("…", "warn"))
+                    "waiting": ("?", self.agent.mode), "parked": ("‖", "warn"), "asking": ("?", self.agent.mode),
+                    "unanswered": ("‖", "warn"), "skipped": ("–", "dim")}.get(it["state"], ("…", "warn"))
             if c.tool == "edit":
                 extra = " " + edit_size(c.body)
             elif c.tool == "write":
                 extra = f" +{len(c.body.splitlines())}"
-            what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
-            out.append((it, [(mark[0] + " ", mark[1]), (c.tool + " ", "bold"), (what, "" if c.tool == "shell" else "path"), (extra, "dim")]))
+            what = c.body.split("\n")[0] if c.tool in ("shell", "ask") else c.arg
+            out.append((it, [(mark[0] + " ", mark[1]), (c.tool + " ", "bold"), (what, "" if c.tool in ("shell", "ask") else "path"), (extra, "dim")]))
         return out
 
     # --- popups: one window for everything a command brings up
@@ -1966,8 +2032,9 @@ class Screen:
         a = self.agent
         now = {"model": a.model, "url": a.url, "ctx": a.ctx, "steps": a.steps, "mode": a.mode, "think": a.think, "effort": a.effort,
                "sidebar": self.sidebar, "sidebar_w": self.side_w, "history": self.history, "history_w": self.left_w, "motion": self.motion,
-               "theme": self.theme, "peek": self.peek, "timeout": a.timeout, "ask_timeout": a.ask_timeout, "plan": self.plan}
-        rows = [row([(f"{k:<11}", "dim"), ("on" if v is True else "off" if v is False else str(v), "")], k) for k, v in now.items()]
+               "theme": self.theme, "peek": self.peek, "timeout": a.timeout, "ask_timeout": a.ask_timeout, "questions": a.questions,
+               "question_timeout": a.question_timeout, "plan": self.plan}
+        rows = [row([(f"{k:<17}", "dim"), ("on" if v is True else "off" if v is False else str(v), "")], k) for k, v in now.items()]
         self.pop("Settings", rows, pick=lambda k: self.config_pick(k, now[k], list(now).index(k)), sel=sel)
 
     def config_pick(self, key, value, at):
@@ -1991,9 +2058,12 @@ class Screen:
 
     def mode_row(self):
         """what sits under the bar: the mode's icon and name, and how to change it; or that this line is a command"""
+        mode, held = self.agent.mode, len(self.agent.parked)
+        if self.asking:  # the model's question: whose turn it is, and how long it still waits before the model goes on
+            left = [(f"  waits {max(0, round(self.deadline - time.time()))}s", "dim")] if self.deadline else []
+            return [("?", mode), (" asking you", mode)] + left
         if self.buf.startswith("!") and not self.pending:
             return [("!", "shell"), (" shell", "shell"), (" (runs it yourself, no model)", "dim")]
-        mode, held = self.agent.mode, len(self.agent.parked)
         return [(MODE_ICON[mode], mode), (" ", ""), (mode, mode), (" (tab to cycle)", "dim")] + \
             [(f"  {held} waiting for you: /permissions", "warn")] * bool(held)
 
@@ -2012,6 +2082,8 @@ class Screen:
         last = self.items[-1] if self.items else None
         if self.pending:
             return "waiting for you"
+        if self.asking:
+            return "waiting for your answer"
         if last and last["t"] == "tool" and last["state"] == "running" and last["call"].tool in DOING:
             return DOING[last["call"].tool]
         if self.note and self.note != "thinking":
@@ -2039,7 +2111,8 @@ class Screen:
         -> (rows, the typed lines on show). Where the cursor belongs is left in self.caret.
         A line that starts with ! is shell mode: the mark becomes !, and the rules take the shell colour"""
         a, tw = self.agent, bw - 2
-        shell = self.buf.startswith("!") and not self.pending
+        asking = bool(self.asking)  # the model's question: the bar takes its answer, which is text whatever it starts with
+        shell = self.buf.startswith("!") and not self.pending and not asking
         tone, line_role = ("shell", "shell") if shell else (a.mode, "frame")
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
@@ -2070,12 +2143,12 @@ class Screen:
             start += len(line) + 1
         first = min(at, max(0, len(typed) - 6))  # six lines at most: the last ones, or from the cursor's line down
         typed, self.caret = typed[first:first + 6], (1 + at - first, 2 + col)
-        empty = "a command to run yourself" if shell else "Ask anything…  / for commands  ! for shell"
+        empty = "a command to run yourself" if shell else "Your answer…" if asking else "Ask anything…  / for commands  ! for shell"
         body = [[(t, "")] if shell else marks(t, ATTACHED) for t in typed] if text else [[(empty, "ghost")]]
-        cmd = re.match(r"/\S+", text) if first == 0 and not shell else None
+        cmd = re.match(r"/\S+", text) if first == 0 and not shell and not asking else None
         if cmd and cmd.group() in dict(COMMANDS) and typed[0].startswith(cmd.group()):  # a command, once it is one: it lights up
             body[0] = [(cmd.group(), "kw")] + marks(typed[0][cmd.end():], ATTACHED)
-        lead = [("!" if shell else MARK, tone), (" ", "")]
+        lead = [("!" if shell else "?" if asking else MARK, tone), (" ", "")]
         state = self.state_of(cmd.group()) if cmd and cmd.group() in dict(COMMANDS) else None
         gap = bw - 2 - len(flat(body[0])) - len(state[0]) if state else 0
         if gap >= 2:  # a command typed in full: what it stands at now, at the far right, so you know what enter changes
@@ -2100,22 +2173,31 @@ class Screen:
             return [("", top + [("┄" * (w - len(flat(top)) - 1) + "┐", "frame")], it)] + \
                    [("", [("┆ ", "frame")] + clip(r, inner) + [(" ┆", "frame")], it) for r in rows] + \
                    [("", [("└" + "┄" * (w - 2) + "┘", "frame")], it)]
-        body = []
-        if c.tool == "shell":
+        body, asks = [], c.tool == "ask"
+        if asks:  # a question is shown whole, always: what was asked, the choices, and then what you said
+            full, (text, options) = True, sprint.question_parts(c.body)
+            body = [[(x, "bold")] for x in text.splitlines()] + [[(f"{n}. ", "dim"), (o, "")] for n, o in enumerate(options, 1)]
+            said = (it["result"] or "")[len(sprint.ANSWERED):].splitlines() if it["state"] == "done" else []
+            body += [[("→ " if n == 0 else "  ", "ok"), (x, "")] for n, x in enumerate(said)]
+            note = {"unanswered": "nobody answered: the model decides", "skipped": "left to the model"}.get(it["state"])
+            body += [[(note, "dim")]] * bool(note) + [[(it["result"], "err")]] * (it["state"] == "failed")
+        elif c.tool == "shell":
             body = [[("$ " if i == 0 else "  ", "dim"), (x, "bold")] for i, x in enumerate(c.body.splitlines())]
         elif c.tool == "edit":
             old, new = split_edit(c.body) or ("", c.body)
             body = [[("- " + x, "del")] for x in old.splitlines()] + [[("+ " + x, "add")] for x in new.splitlines()]
         elif c.tool == "write":
             body = [[("+ " + x, "add")] for x in c.body.splitlines()]
-        if it["result"] is not None:
+        if it["result"] is not None and not asks:
             role = "err" if it["state"] in ("failed", "denied") else "" if c.tool in ("shell", "read", "fetch") else "dim"
             body += [[(x.replace("\t", "    "), role)] for x in it["result"].splitlines()]
         hidden = 0 if full else max(0, len(body) - self.peek)
         rows = [r for b in body for r in wrap(b, inner)] if full else body[:self.peek]
 
-        state = {"waiting": "allow?", "running": "running"}.get(it["state"], it["state"])
-        srole = {"done": "ok", "failed": "err", "denied": "err", "waiting": self.agent.mode}.get(it["state"], "warn")
+        state = {"waiting": "allow?", "running": "running", "asking": "your answer?"}.get(it["state"], it["state"])
+        state = "answered" if asks and it["state"] == "done" else state
+        srole = {"done": "ok", "failed": "err", "denied": "err", "waiting": self.agent.mode, "asking": self.agent.mode,
+                 "skipped": "dim"}.get(it["state"], "warn")
         head = [("╭─ " + ("▾ " if full else "▸ "), "frame"), (c.tool, "bold")]
         tail = [(f" {state} ", srole)] + ([(took(it) + " ", "dim")] if took(it) else []) + [("─╮", "frame")]
         room = w - len(flat(head)) - len(flat(tail)) - 3
@@ -2125,12 +2207,12 @@ class Screen:
         elif c.tool == "write":
             flag = "  replaces file" if it["old"] else "  new file"
         flag = flag if room > 24 else ""
-        target = (c.body.split("\n")[0] if c.tool == "shell" else c.arg)[:max(0, room - len(flag))]
-        mid = [("  " + target, "url" if c.tool == "fetch" else "" if c.tool == "shell" else "path"),
+        target = ("" if asks else c.body.split("\n")[0] if c.tool == "shell" else c.arg)[:max(0, room - len(flag))]
+        mid = [("  " + target if target else "", "url" if c.tool == "fetch" else "" if c.tool == "shell" else "path"),
                (flag, "warn" if it["old"] else "dim")]
         gap = w - len(flat(head + mid + tail))
         top = head + mid + [(" " + "─" * (gap - 1), "frame")] + tail
-        hint = f" … +{hidden} lines · ctrl+o " if hidden else " ctrl+o to collapse " if full and len(body) > self.peek else ""
+        hint = f" … +{hidden} lines · ctrl+o " if hidden else " ctrl+o to collapse " if full and len(body) > self.peek and not asks else ""
         return [("", top, it)] + [("", boxed(r, w), it) for r in rows] + [("", box_foot(hint, w), it)]
 
     def plan_now(self):
@@ -2227,6 +2309,7 @@ class Screen:
         """one frame, drawn back to front: the bar, then the opening screen or the conversation and its panels, then
         whatever lies over them (the text being dragged over, the completions, a popup), and the cursor last"""
         h, w = scr.getmaxyx()
+        self.asked()
         self.wipe(scr, h, w)
         if h < 12 or w < 50:
             self.put(scr, 0, 0, "sprint needs at least 50×12")
@@ -2350,6 +2433,10 @@ class Screen:
             self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
             keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys
             keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + keys
+        q = self.asking
+        if q:  # the model's question: the keys that answer it
+            keys = [("esc", "bold"), (" the model decides  ", "dim"), ("enter", "bold"), (" answer", "dim")] + \
+                   [("  ↑↓", "bold"), (" choose", "dim")] * bool(q["options"] and not self.buf)
         under = self.mode_row()
         if self.note_text():
             keys = [(self.note_text(), "warn")]
