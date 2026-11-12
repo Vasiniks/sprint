@@ -53,8 +53,9 @@ HELP = [("In a message", [("@path", "attach that file; tab completes the name"),
                   ("ctrl+y", "copy the last answer"),
                   ("ctrl+l", "clear the conversation"),
                   ("ctrl+c twice", "quit")]),
-        ("When the model asks you", [("type, then enter", "your answer; it waits a minute, then the model decides"),
-                                     ("up  down, then enter", "take one of the choices it gave"),
+        ("When the model asks you", [("up  down, then enter", "take one of its choices; so does the choice's number, or a click"),
+                                     ("type, then enter", "an answer of your own; it waits a minute, then the model decides"),
+                                     ("tab", "put the highlighted choice on your own row, to change it"),
                                      ("esc", "leave it to the model")]),
         ("Mouse", [("wheel", "scroll what it is over: the conversation, or a side panel's list"),
                    ("drag over text", "copy it"),
@@ -553,6 +554,19 @@ def edit_size(body):
     return f"+{len(new.splitlines())} -{len(old.splitlines())}"
 
 
+def typed_lines(text, cur, tw, most):
+    """what is typed, as screen lines tw wide, and of those the `most` that hold the cursor: the last ones, or from
+    its line down -> (the lines, which of them the cursor is on, its column, how many lines above are left out)"""
+    typed, at, col, start = [], 0, 0, 0
+    for line in text.split("\n"):
+        if start <= cur <= start + len(line):
+            at, col = len(typed) + (cur - start) // tw, (cur - start) % tw
+        typed += [line[i:i + tw] for i in range(0, len(line) + 1, tw)]
+        start += len(line) + 1
+    first = min(at, max(0, len(typed) - most))
+    return typed[first:first + most], at - first, col, first
+
+
 def boxed(spans, w):
     """a line inside a box w wide: the spans, cut or padded to fit between its two sides"""
     return [("│ ", "frame")] + clip(spans, w - 4) + [(" │", "frame")]
@@ -654,6 +668,7 @@ class Screen:
         self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
         self.flash = (None, 0.0)  # the item last jumped to and when, so it can light up and fade
         self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
+        self.ask_hits = {}  # the rows of the bar that are choices of the model's question -> which choice
         self.began, self.got, self.down = 0.0, 0, False  # this turn: when it started, characters of reply, is one arriving?
         self.queue, self.leave = [], 0.0  # messages sent while the agent worked; until when a second ctrl+c quits
         self.halted = None  # the turn ctrl+c has already told to stop: pressed again while it still runs, it is about leaving
@@ -839,14 +854,16 @@ class Screen:
         return self.answer
 
     def question(self, text, options=()):
-        """the model asks you something: the prompt bar is the answer's until you send one -> what you said, "" when
-        you left it to the model, None when nobody answered. It waits a minute unless that was changed (any key
+        """the model asks you something: the bar is its question's until you answer (see ask_rows) -> what you said, ""
+        when you left it to the model, None when nobody answered. It waits a minute unless that was changed (any key
         starts the wait again), and then the model goes on by itself"""
         it = self.items[-1]
         it["state"] = "asking"
         it.pop("began", None)
         self.gate.clear()
-        q = self.asking = {"q": text, "options": list(options)}
+        # at: the highlighted row, a choice or (one past the last of them) the row for an answer of your own;
+        # seen: what was written on that row when the screen last looked; cut: is it too long to stand whole in the bar?
+        q = self.asking = {"q": text, "options": list(options), "at": 0, "seen": "", "cut": False}
         limit = self.agent.question_timeout
         self.deadline = time.time() + limit if limit else None
         while not self.gate.wait(0.05):
@@ -868,6 +885,8 @@ class Screen:
             (was, cur), self.draft, self.pick = self.draft, None, 0
             if was:  # (an answer half typed when the wait ran out stays in the bar, unless there is a draft to give back)
                 self.buf, self.cur = was, cur
+        if q and self.buf != q.get("seen", ""):  # typed, pasted, cleared: the highlight goes to the row it is written on
+            q["at"], q["seen"] = len(q["options"]), self.buf
         return q
 
     def reply_to(self, q, text):
@@ -1115,10 +1134,10 @@ class Screen:
         return self.models
 
     def options(self):
-        """completions for what is typed: commands after "/", then their arguments. While the model's question waits,
-        the choices it gave instead, until you start an answer of your own"""
+        """completions for what is typed: commands after "/", then their arguments. None while the model's question
+        waits: what is typed then is an answer, and the question has its own list of choices"""
         if self.asking:
-            return [] if self.buf else [(o, "") for o in self.asking["options"]]
+            return []
         if self.mention() is not None:
             return [("@" + p, "") for p in self.files(self.mention())]
         cmd, space, arg = self.buf.partition(" ")
@@ -1168,8 +1187,8 @@ class Screen:
             return self.answer_key(k)
         if self.popup:
             return self.popup_key(k)
-        if q and k == "\x1b":  # the model's question: escape leaves it to the model (ctrl+c stops the turn)
-            return self.reply_to(q, "")
+        if q and self.question_key(k, q):
+            return
         opts = self.options()
         if k in ENTER:
             self.enter_key(k, opts)
@@ -1208,6 +1227,28 @@ class Screen:
         else:
             self.line_key(k)
 
+    def question_key(self, k, q):
+        """a key while the model's question waits -> was it one of the question's own? Up and down move through the
+        choices and on to the row for an answer of your own; enter takes the highlighted choice, and so does its
+        number; tab puts it on your row, to change; escape leaves it all to the model (ctrl+c stops the turn).
+        Every other key is typing, as it is in the bar"""
+        n, at = len(q["options"]), q.get("at", 0)
+        if k == "\x1b":
+            self.reply_to(q, "")
+        elif k in (curses.KEY_UP, curses.KEY_DOWN) and n:
+            q["at"] = (at + (1 if k == curses.KEY_DOWN else -1)) % (n + 1)
+        elif k in ("\t", curses.KEY_BTAB):
+            if at < n:
+                self.buf, q["at"] = q["options"][at], n
+                self.cur = len(self.buf)
+        elif at < n and k in ENTER:
+            self.reply_to(q, q["options"][at])
+        elif at < n and k in tuple("123456789"[:n + 1]):  # (on your own row a number is only text)
+            self.reply_to(q, q["options"][int(k) - 1]) if int(k) <= n else q.update(at=n)
+        else:
+            return False
+        return True
+
     def answer_key(self, k):
         """a key while a call waits for your say-so: move the highlighted answer, take it, or give one by its letter"""
         can = [text[0] for text in self.choices()]
@@ -1236,9 +1277,8 @@ class Screen:
             self.newline()  # shift+enter in a terminal that sends it as a plain Enter
         else:
             q = self.asked()
-            if q:  # the model's question: what you typed is the answer, else the choice that is highlighted
-                text = self.buf.strip() or (opts[min(self.pick, len(opts) - 1)][0] if opts else "")
-                return self.reply_to(q, text) if text else None
+            if q:  # the model's question, on the row for your own answer: what is written there (a choice went in question_key)
+                return self.reply_to(q, self.buf.strip()) if self.buf.strip() else None
             if opts:
                 self.complete(opts)
             line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
@@ -1320,6 +1360,7 @@ class Screen:
     def paste(self, text):
         """pasted text: files become chips like [Image #1]; anything else goes in as typed, on one line"""
         text = text.replace("\r\n", "\n").replace("\r", "\n")  # terminals send a paste's line breaks as returns
+        self.asked()  # (a question that has just arrived takes the bar first: the paste is its answer, not the draft put by)
         if self.popup:
             for ch in text.replace("\n", " "):
                 self.popup_key(ch)
@@ -1507,6 +1548,9 @@ class Screen:
         if self.jump_to and y == self.jump_to[0] and self.jump_to[1] <= x < self.jump_to[2]:
             self.scroll = 0  # the button that takes you back to the newest message
             return
+        q, row = self.asking, self.hits.get(("ask", y))
+        if q and row is not None and self.area_at(x, y) == "prompt":  # a row of the model's question: a choice is taken,
+            return self.reply_to(q, q["options"][row]) if row < len(q["options"]) else q.update(at=row)  # your own row gone to
         where = self.panel_at(x)
         item = self.hits.get((where, y))
         if item and where == "main" and item["t"] == "tool":
@@ -2160,13 +2204,17 @@ class Screen:
         -> (rows, the typed lines on show). Where the cursor belongs is left in self.caret.
         A line that starts with ! is shell mode: the mark becomes !, and the rules take the shell colour"""
         a, tw = self.agent, bw - 2
-        asking = bool(self.asking)  # the model's question: the bar takes its answer, which is text whatever it starts with
-        shell = self.buf.startswith("!") and not self.pending and not asking
-        tone, line_role = ("shell", "shell") if shell else (a.mode, "frame")
+        c = self.pending  # read once, for the same reason as in choices
+        q = None if c else self.asking  # the model's question: the bar is its, and what is typed is text whatever it starts with
+        shell = self.buf.startswith("!") and not c and not q
+        tone, line_role = ("shell", "shell") if shell else (a.mode, a.mode if q else "frame")  # a question's rules stand out
+        self.ask_hits = {}
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
         foot = [("─" * bw, line_role)]
-        c = self.pending  # read once, for the same reason as in choices
+        if q:
+            rows, typed = self.ask_rows(q, bw)
+            return [rule] + rows + [foot], typed
         if c:
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
             keys = [("  ", "")]
@@ -2184,25 +2232,51 @@ class Screen:
             return [rule, clip([(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], max(8, bw - len(flat(why)))) + why,
                     keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
-        typed, at, col, start = [], 0, 0, 0  # every screen line of the text; the one the cursor is on, and where
-        for line in text.split("\n"):
-            if start <= cur <= start + len(line):
-                at, col = len(typed) + (cur - start) // tw, (cur - start) % tw
-            typed += [line[i:i + tw] for i in range(0, len(line) + 1, tw)]
-            start += len(line) + 1
-        first = min(at, max(0, len(typed) - 6))  # six lines at most: the last ones, or from the cursor's line down
-        typed, self.caret = typed[first:first + 6], (1 + at - first, 2 + col)
-        empty = "a command to run yourself" if shell else "Your answer…" if asking else "Ask anything…  / for commands  ! for shell"
+        typed, at, col, first = typed_lines(text, cur, tw, 6)
+        self.caret = (1 + at, 2 + col)
+        empty = "a command to run yourself" if shell else "Ask anything…  / for commands  ! for shell"
         body = [[(t, "")] if shell else marks(t, ATTACHED) for t in typed] if text else [[(empty, "ghost")]]
-        cmd = re.match(r"/\S+", text) if first == 0 and not shell and not asking else None
+        cmd = re.match(r"/\S+", text) if first == 0 and not shell else None
         if cmd and cmd.group() in dict(COMMANDS) and typed[0].startswith(cmd.group()):  # a command, once it is one: it lights up
             body[0] = [(cmd.group(), "kw")] + marks(typed[0][cmd.end():], ATTACHED)
-        lead = [("!" if shell else "?" if asking else MARK, tone), (" ", "")]
+        lead = [("!" if shell else MARK, tone), (" ", "")]
         state = self.state_of(cmd.group()) if cmd and cmd.group() in dict(COMMANDS) else None
         gap = bw - 2 - len(flat(body[0])) - len(state[0]) if state else 0
         if gap >= 2:  # a command typed in full: what it stands at now, at the far right, so you know what enter changes
             body[0] = body[0] + [(" " * gap, ""), state]
         return [rule] + [(lead if n == 0 else [("  ", "")]) + r for n, r in enumerate(body)] + [foot], typed
+
+    def ask_rows(self, q, bw):
+        """the model's question, in the bar's place: what it asks, then its choices, numbered, the highlighted one
+        marked and in full, and last the row an answer of your own is written on -> (the rows between the bar's two
+        rules, the typed lines on show). It leaves the conversation its room whatever the screen: the choices scroll
+        with the highlight, and a question too long is cut here and stands whole in the conversation instead (window).
+        Which choice each row belongs to is left in self.ask_hits, for a click"""
+        opts, mode = q["options"], self.agent.mode
+        n = len(opts)
+        at = min(q.get("at", 0), n)
+        lead = lambda i: [((MARK if i == at else " ") + " ", mode)] + [(f"{i + 1}. ", mode if i == at else "dim")] * bool(n)
+        pad = len(flat(lead(n)))
+        typed, line, col, _ = typed_lines(self.buf, self.cur, max(8, bw - pad), 3)
+        mine = [marks(t, ATTACHED) for t in typed] if self.buf else [[("Something else…" if n else "Your answer…", "ghost")]]
+        asks = [r for x in q["q"].splitlines() for r in wrap([(x, "bold")], max(8, bw - 2))] or [[]]
+        room = max(5, (self.rows or 40) - 7) - len(mine) - 1  # rows for the question and its choices (a blank one parts them)
+        keep = max(1, min(len(asks), room - min(n, 4)))  # the choices are sure of four rows, or of as many as there are
+        q["cut"] = keep < len(asks)
+        asks = asks[:keep - 1] + [asks[keep - 1] + [(" …", "dim")] * q["cut"]]
+        rows = [[("?" if i == 0 else " ", mode), (" ", "")] + r for i, r in enumerate(asks)] + [[]]
+        whole = wrap([(opts[at], "bold")], max(8, bw - pad))[:4] if at < n else []  # the highlighted choice is never cut short
+        show = max(1, min(n, room - keep - max(0, len(whole) - 1))) if n else 0
+        first = max(0, min(min(at, n - 1) - show // 2, n - show))
+        for i in range(first, first + show):
+            for k, r in enumerate(whole if i == at else [[(trim(opts[i], max(8, bw - pad)), "")]]):
+                self.ask_hits[1 + len(rows)] = i
+                rows.append((lead(i) if k == 0 else [(" " * len(flat(lead(i))), "")]) + r)
+        self.caret = (1 + len(rows) + line, pad + col)
+        for k, r in enumerate(mine):
+            self.ask_hits[1 + len(rows)] = n
+            rows.append((lead(n) if k == 0 else [(" " * pad, "")]) + r)
+        return rows, typed
 
     # --- conversation -> lines of (kind, spans, item)
 
@@ -2224,9 +2298,11 @@ class Screen:
                    [("", [("┆ ", "frame")] + clip(r, inner) + [(" ┆", "frame")], it) for r in rows] + \
                    [("", [("└" + "┄" * (w - 2) + "┘", "frame")], it)]
         body, asks = [], c.tool == "ask"
-        if asks:  # a question is shown whole, always: what was asked, the choices, and then what you said
-            full, (text, options) = True, sprint.question_parts(c.body)
-            body = [[(x, "bold")] for x in text.splitlines()] + [[(f"{n}. ", "dim"), (o, "")] for n, o in enumerate(options, 1)]
+        if asks:  # a question is shown whole, always: what was asked, and then what you said
+            if it["state"] in ("running", "asking") and not (self.asking or {}).get("cut"):
+                return []  # still waiting for you: it stands in the bar, choices and all, and once is enough
+            full, text = True, sprint.question_parts(c.body)[0]
+            body = [[(x, "bold")] for x in text.splitlines()]
             said = (it["result"] or "")[len(sprint.ANSWERED):].splitlines() if it["state"] == "done" else []
             body += [[("→ " if n == 0 else "  ", "ok"), (x, "")] for n, x in enumerate(said)]
             note = {"unanswered": "nobody answered: the model decides", "skipped": "left to the model"}.get(it["state"])
@@ -2293,7 +2369,8 @@ class Screen:
                 continue  # it is on show in the right-hand panel instead
             key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
                    self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""),  # a thought grows,
-                   it.get("state") == "running" and self.quiet())  # and is over once the model has gone quiet to write its call
+                   it.get("state") == "running" and self.quiet(),  # and is over once the model has gone quiet to write its call
+                   bool((self.asking or {}).get("cut")))  # a question too long for the bar stands here as well
             if self.cache.get(id(it), (None,))[0] != key:
                 if it["t"] == "tool":
                     rows = self.window(it, w)
@@ -2316,7 +2393,8 @@ class Screen:
                 if it.get("cost"):
                     rows = rows + [("", [("  ", ""), (it["cost"], "ghost")], None)]
                 self.cache[id(it)] = (key, rows)
-            out += self.cache[id(it)][1] + [("", [], None)]
+            rows = self.cache[id(it)][1]
+            out += rows + [("", [], None)] * bool(rows)  # (a question still in the bar has no rows here, and no gap either)
         return out
 
     # --- drawing
@@ -2420,6 +2498,8 @@ class Screen:
         top = max(1, (h - logo_h - len(rows) - 3) // 2) + logo_h if home else h - 1 - len(rows)
         for i, r in enumerate(rows):
             self.put(scr, top + i, bx, r, width=bw)
+        for i, which in self.ask_hits.items():  # the rows of the model's question: which choice a click there takes
+            self.hits[("ask", top + i)] = which
         self.areas["prompt"] = (bx + 2, bx + bw - 1, top + 1, top + len(rows) - 2)  # what you typed, without the mark and the rules
         return top, bx, bw, len(rows)
 
@@ -2484,11 +2564,14 @@ class Screen:
             self.put(scr, top - len(waiting) - 1, x0, self.status_row(), width=mw)
             keys = [("esc", "bold"), (" interrupt  ", "dim")] + keys
             keys = [("enter", "bold"), (" run queued now  ", "dim")] * bool(waiting) + keys
-        q = self.asking
-        if q:  # the model's question: the keys that answer it
-            keys = [("esc", "bold"), (" the model decides  ", "dim"), ("enter", "bold"), (" answer", "dim")] + \
-                   [("  ↑↓", "bold"), (" choose", "dim")] * bool(q["options"] and not self.buf)
-        under = self.mode_row()
+        q, under = self.asking, self.mode_row()
+        if q:  # the model's question: the keys that answer it, as many of them as there is room for
+            n = len(q["options"])
+            keys = [[("esc", "bold"), (" the model decides", "dim")],
+                    [("  enter", "bold"), (" select" if q.get("at", 0) < n else " answer", "dim")],
+                    [("  ↑↓", "bold"), (" or ", "dim"), (f"1-{n}", "bold"), (" choose", "dim")] * bool(n)]
+            fits = [sum(keys[:k], []) for k in (3, 2, 1)] + [[("esc", "bold"), (" skip", "dim")]]
+            keys = next((ks for ks in fits if len(flat(ks)) < mw - len(flat(under)) - 2), fits[-1])
         if self.note_text():
             keys = [(self.note_text(), "warn")]
         elif self.scroll:
@@ -2612,8 +2695,10 @@ class Screen:
             pass
 
     def place_cursor(self, scr, top, bx):
-        """the cursor, where you are typing in the bar; hidden while a call waits for your answer"""
-        if self.pending:
+        """the cursor, where you are typing in the bar; hidden while a call waits for your say-so, and while one of
+        the choices of the model's question is highlighted (nothing is being typed then)"""
+        q = self.asking
+        if self.pending or (q and q.get("at", 0) < len(q["options"])):
             return curses.curs_set(0)
         curses.curs_set(1)
         try:

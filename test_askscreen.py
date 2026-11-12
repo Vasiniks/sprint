@@ -87,30 +87,116 @@ def test_enter_with_nothing_typed_and_no_choices_sends_nothing():
     t.join(2)
 
 
-def test_the_choices_are_on_offer_and_enter_takes_the_highlighted_one():
+def test_the_first_choice_is_highlighted_and_enter_takes_the_highlighted_one():
     s = screen()
     t, got = put(s, CHOICE)
-    assert [name for name, _ in s.options()] == ["red", "blue", "green"]
-    s.key(curses.KEY_DOWN)
-    s.key(curses.KEY_DOWN)
-    s.key(curses.KEY_DOWN)
-    s.key(curses.KEY_DOWN)  # round to the top, and one down
+    assert s.asking["at"] == 0 and s.options() == []  # the choices are the question's own list, not completions
+    for _ in range(5):  # red, blue, green, then the row for your own answer: round to the top, and one down
+        s.key(curses.KEY_DOWN)
+    assert s.asking["at"] == 1
     s.key("\r")
     t.join(2)
     assert got == ["blue"]
 
 
-def test_your_own_words_beat_the_choices_and_tab_puts_one_in_the_bar_to_change():
+def test_up_from_the_top_goes_round_to_the_row_for_your_own_answer():
+    s = screen()
+    t, got = put(s, CHOICE)
+    s.key(curses.KEY_UP)
+    assert s.asking["at"] == 3
+    s.key("\r")  # nothing written there: enter sends nothing
+    time.sleep(0.1)
+    assert got == [] and s.asking
+    s.key(curses.KEY_UP)
+    s.key("\r")
+    t.join(2)
+    assert got == ["green"]
+
+
+def test_a_choices_number_takes_it_at_once():
+    s = screen()
+    t, got = put(s, CHOICE)
+    s.key("3")
+    t.join(2)
+    assert got == ["green"] and s.buf == ""
+
+
+def test_the_number_after_the_last_choice_goes_to_the_row_for_your_own_answer():
+    s = screen()
+    t, got = put(s, CHOICE)
+    s.key("4")
+    assert s.asking["at"] == 3 and s.buf == "" and got == []
+    typed(s, "2 shades of teal")  # a number is only text there
+    s.key("\r")
+    t.join(2)
+    assert got == ["2 shades of teal"]
+
+
+def test_a_number_that_is_no_choice_begins_an_answer_of_your_own():
+    s = screen()
+    t, got = put(s, CHOICE)
+    typed(s, "7 of them")
+    assert s.buf == "7 of them" and got == []
+    s.key("\r")
+    t.join(2)
+    assert got == ["7 of them"]
+
+
+def test_with_no_choices_numbers_are_only_text():
+    s = screen()
+    t, got = put(s)
+    typed(s, "12")
+    s.key("\r")
+    t.join(2)
+    assert got == ["12"]
+
+
+def test_typing_goes_to_the_row_for_your_own_answer_and_up_goes_back_to_the_choices():
+    s = screen()
+    t, got = put(s, CHOICE)
+    typed(s, "teal")
+    s.asked()
+    assert s.asking["at"] == 3 and s.buf == "teal"
+    s.key(curses.KEY_UP)
+    assert s.asking["at"] == 2 and s.buf == "teal"  # what you wrote stays on its row
+    s.key("\r")
+    t.join(2)
+    assert got == ["green"]  # the highlighted row is the answer
+
+
+def test_what_is_pasted_is_an_answer_of_your_own():
+    s = screen()
+    t, got = put(s, CHOICE)
+    s.paste("a soft teal")
+    s.key("\r")
+    t.join(2)
+    assert got == ["a soft teal"]
+
+
+def test_your_own_words_beat_the_choices_and_tab_puts_one_on_your_row_to_change():
     s = screen()
     t, got = put(s, CHOICE)
     s.key(curses.KEY_DOWN)
     s.key("\t")
     assert s.buf.strip() == "blue" and s.agent.mode == "auto"  # (tab did not change the mode)
     typed(s, "ish")
-    assert s.options() == []  # typing your own: the list steps aside
     s.key("\r")
     t.join(2)
-    assert got == ["blue ish"] or got == ["blueish"]
+    assert got == ["blueish"]
+
+
+def test_a_click_on_a_choice_takes_it_and_one_on_your_own_row_goes_there():
+    s = screen()
+    s.items.append({"t": "user", "text": "style the button"})
+    t, got = put(s, CHOICE)
+    scr = Scr(30, 110)
+    s.draw(scr)
+    x = scr.text(scr.find("2. blue")).index("blue")
+    s.click(x, scr.find("Something else"))
+    assert s.asking["at"] == 3 and got == []
+    s.click(x, scr.find("2. blue"))
+    t.join(2)
+    assert got == ["blue"]
 
 
 def test_escape_leaves_it_to_the_model_without_stopping_the_turn():
@@ -259,53 +345,154 @@ def test_a_message_sent_while_it_works_still_queues_once_the_question_is_over():
 
 # ---------- how it looks ----------
 
-def test_the_bar_says_it_is_an_answer_it_wants_and_how_long_it_waits():
+def panel(s, bw=80):
+    """the bar while a question waits, as text: its rows between the two rules"""
+    rows, _ = s.input_rows(bw)
+    assert set(flat(rows[0])[:20]) == {"─"} and set(flat(rows[-1])) == {"─"}
+    return [flat(r).rstrip() for r in rows[1:-1]]
+
+
+def test_the_question_takes_the_bars_place_with_a_row_for_your_answer_under_it():
     s = screen()
     s.items.append({"t": "user", "text": "style the button"})
     t, got = put(s)
-    rows, _ = s.input_rows(80)
-    assert "answer" in flat(rows[1]).lower()  # the placeholder
+    assert panel(s) == ["? Which colour should the button be?", "", tui.MARK + " Your answer…"]
+    assert s.caret == (3, 2)  # the cursor: on the answer's row, after the mark
     text = "\n".join(drawn(s))
     assert "waits 60s" in text or "waits 59s" in text
     assert "esc" in text and "model decides" in text
     typed(s, "teal")
-    rows, _ = s.input_rows(80)
-    assert "teal" in flat(rows[1])
+    assert panel(s)[-1] == tui.MARK + " teal" and s.caret == (3, 6)
     s.interrupt()
     t.join(2)
 
 
-def test_the_question_stands_in_the_conversation_in_full_with_its_choices():
+def test_the_choices_are_numbered_under_the_question_with_the_highlighted_one_marked():
+    s = screen()
+    t, got = put(s, CHOICE)
+    m = tui.MARK
+    assert panel(s) == ["? Which colour?", "", m + " 1. red", "  2. blue", "  3. green", "  4. Something else…"]
+    s.key(curses.KEY_DOWN)
+    assert panel(s)[2:] == ["  1. red", m + " 2. blue", "  3. green", "  4. Something else…"]
+    rows, _ = s.input_rows(80)
+    assert ("blue", "bold") in rows[4] and ("red", "") in rows[3]  # the highlighted one stands out
+    typed(s, "teal")
+    assert panel(s)[2:] == ["  1. red", "  2. blue", "  3. green", m + " 4. teal"]
+    assert s.caret == (6, 9)  # after "❯ 4. teal"
+    s.interrupt()
+    t.join(2)
+
+
+def test_the_cursor_is_hidden_while_a_choice_is_highlighted(monkeypatch):
+    shown = []
+    monkeypatch.setattr(tui.curses, "curs_set", shown.append)
     s = screen()
     s.items.append({"t": "user", "text": "style the button"})
-    s.peek = 1
+    t, got = put(s, CHOICE)
+    s.draw(Scr(30, 110))
+    assert shown[-1] == 0
+    s.key(curses.KEY_UP)  # round to your own row
+    s.draw(Scr(30, 110))
+    assert shown[-1] == 1
+    s.interrupt()
+    t.join(2)
+
+
+def test_the_bars_rules_take_the_modes_colour_while_it_asks():
+    s = screen()
+    rows, _ = s.input_rows(80)
+    assert rows[0][0][1] == "frame" and rows[-1][0][1] == "frame"
+    t, got = put(s)
+    rows, _ = s.input_rows(80)
+    assert rows[0][0][1] == "auto" and rows[-1][0][1] == "auto"
+    s.interrupt()
+    t.join(2)
+
+
+def test_a_question_of_several_lines_is_wrapped_under_its_mark():
+    s = screen()
+    t, got = put(s, "```ask\nWhich colour should the button be?\nIt shows on every page of the site, and on the sign-in form as well.\n```")
+    rows = panel(s, 50)
+    assert rows[0] == "? Which colour should the button be?"
+    assert rows[1].startswith("  It shows on every page") and rows[2].startswith("  ") and "as well." in rows[2]
+    assert all(len(r) <= 50 for r in rows)
+    s.interrupt()
+    t.join(2)
+
+
+def test_a_long_choice_is_cut_to_the_bar_until_it_is_the_highlighted_one():
+    long = "Create a new module for the helpers and move every shared function into it"
+    s = screen()
+    t, got = put(s, f"```ask\nWhere should the helpers go?\n- utils.py\n- {long}\n```")
+    rows = panel(s, 50)
+    assert rows[3].startswith("  2. Create a new module") and rows[3].endswith("…") and len(rows) == 5
+    s.key(curses.KEY_DOWN)
+    rows = panel(s, 50)
+    assert len(rows) == 6 and " ".join(r.strip() for r in rows[3:5]) == tui.MARK + " 2. " + long  # whole, over two rows
+    s.interrupt()
+    t.join(2)
+
+
+def test_on_a_short_screen_the_choices_scroll_with_the_highlight_and_the_conversation_keeps_its_room():
+    s = screen()
+    s.items.append({"t": "user", "text": "pick a number"})
+    t, got = put(s, "```ask\nWhich one?\n" + "\n".join(f"- choice {n}" for n in range(1, 10)) + "\n```")
+    scr = Scr(16, 110)
+    s.draw(scr)
+    seen = "\n".join(scr.text(y) for y in range(16))
+    assert "Which one?" in seen and "1. choice 1" in seen and "9. choice 9" not in seen
+    assert "pick a number" in seen  # the conversation is still there
+    for _ in range(8):
+        s.key(curses.KEY_DOWN)
+    scr = Scr(16, 110)
+    s.draw(scr)
+    seen = "\n".join(scr.text(y) for y in range(16))
+    assert tui.MARK + " 9. choice 9" in seen and "1. choice 1" not in seen and "Which one?" in seen
+    s.interrupt()
+    t.join(2)
+
+
+def test_while_it_waits_the_question_is_on_the_screen_once_and_afterwards_stands_in_the_conversation():
+    s = screen()
+    s.items.append({"t": "user", "text": "style the button"})
     t, got = put(s, "```ask\nWhich colour should the button be?\nIt shows on every page.\n- red\n- blue\n```")
     text = "\n".join(drawn(s))
-    assert "Which colour should the button be?" in text and "It shows on every page." in text  # never folded away
-    assert "red" in text and "blue" in text and "your answer?" in text
+    assert text.count("Which colour should the button be?") == 1 and "It shows on every page." in text
+    assert "1. red" in text and "2. blue" in text
+    assert not any(kind == "" and item is s.items[-1] for kind, _, item in s.lines(90))  # no window of its own yet
     s.key(curses.KEY_DOWN)
     s.key("\r")
     t.join(2)
     s.show_result(sprint.ANSWERED + "blue")
     text = "\n".join(drawn(s))
     assert s.items[-1]["state"] == "done" and "→ blue" in text and "answered" in text
-    assert "The user answered" not in text and "waits" not in text
+    assert text.count("Which colour should the button be?") == 1 and "It shows on every page." in text
+    assert "The user answered" not in text and "waits" not in text and "Something else" not in text
 
 
-def test_the_choices_are_listed_over_the_bar_with_the_highlighted_one_marked():
+def test_a_question_too_long_for_the_bar_is_cut_there_and_stands_whole_in_the_conversation():
     s = screen()
     s.items.append({"t": "user", "text": "style the button"})
-    s.sidebar = s.history = False  # (so that a row holds nothing but the choice)
+    lines = [f"Reason number {n} for asking." for n in range(1, 31)]
+    t, got = put(s, "```ask\n" + "\n".join(lines) + "\n- red\n- blue\n```")
+    text = "\n".join(drawn(s, 24))
+    assert "Reason number 1 for asking." in text and "1. red" in text and "2. blue" in text  # the choices keep their room
+    assert any(item is s.items[-1] for _, _, item in s.lines(90))
+    assert "Reason number 30 for asking." in "\n".join(flat(spans) for _, spans, _ in s.lines(90))
+    s.interrupt()
+    t.join(2)
+
+
+def test_the_keys_under_the_bar_are_the_ones_that_answer():
+    s = screen()
+    s.items.append({"t": "user", "text": "style the button"})
+    s.sidebar = s.history = False
     t, got = put(s, CHOICE)
-    scr = Scr(30, 110)
-    s.draw(scr)
-    rows = [y for y in range(30) if scr.text(y).strip() in ("red", "blue", "green")]
-    assert len(rows) == 3 and rows == list(range(rows[0], rows[0] + 3))
-    assert any(y == rows[0] and attr & curses.A_REVERSE for y, x, n, attr in scr.marks)
-    typed(s, "t")
-    scr = Scr(30, 110)
-    s.draw(scr)
-    assert not [y for y in range(30) if scr.text(y).strip() in ("red", "blue", "green")]
+    last = drawn(s)[-1]
+    assert "enter select" in last and "1-3" in last and "esc the model decides" in last
+    s.key(curses.KEY_UP)
+    last = drawn(s)[-1]
+    assert "enter answer" in last and "enter select" not in last
     s.interrupt()
     t.join(2)
 
