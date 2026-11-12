@@ -492,6 +492,11 @@ def short(model):
     return re.sub(r"^hf\.co/[^/]+/|-GGUF", "", model)
 
 
+def trim(text, w):
+    """text in at most w columns: the end of a longer one gives way to an ellipsis"""
+    return text if len(text) <= w else text[:w - 1] + "…"
+
+
 def tilde(path):
     """a path as you would write it: your home folder as ~"""
     return path.replace(str(Path.home()), "~", 1)
@@ -504,6 +509,22 @@ def size(n):
 def row(spans, value=None, keep=False):
     """one line of a popup. value None: only shown, cannot be chosen. keep: stays when the list is filtered"""
     return {"s": spans if isinstance(spans, list) else [(spans, "")], "v": value, "keep": keep}
+
+
+def edit_size(body):
+    """what an edit changes, as it is said beside one: +lines put in, -lines taken out"""
+    old, new = split_edit(body) or ("", body)
+    return f"+{len(new.splitlines())} -{len(old.splitlines())}"
+
+
+def boxed(spans, w):
+    """a line inside a box w wide: the spans, cut or padded to fit between its two sides"""
+    return [("│ ", "frame")] + clip(spans, w - 4) + [(" │", "frame")]
+
+
+def box_foot(hint, w):
+    """the bottom edge of a box w wide, with a hint set into it"""
+    return [("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]
 
 
 def took(it):
@@ -672,7 +693,7 @@ class Screen:
         colours the screen stays the terminal's own"""
         self.base, self.exact = 0, False  # the pair plain text is drawn in (8 when the theme has a background); exact colours?
         shown = None  # the background the terminal itself should take: the theme's, once it is known the screen shows it
-        self.stale = True  # what is on the screen is in the old colours: the next frame sends every cell again (see draw)
+        self.stale = True  # what is on the screen is in the old colours: the next frame sends every cell again (see wipe)
         try:
             if not curses.has_colors():
                 return
@@ -776,9 +797,9 @@ class Screen:
         return self.answer
 
     def show_plan(self, steps, at):
-        last = next((i for i in reversed(self.items) if i["t"] in ("plan", "user")), None)
-        if last and last["t"] == "plan":
-            last["at"] = at
+        plan = self.plan_now()
+        if plan:
+            plan["at"] = at
         else:
             self.items.append({"t": "plan", "steps": list(steps), "at": at})
 
@@ -1442,8 +1463,7 @@ class Screen:
             mark = {"done": ("✓", "green"), "failed": ("✗", "red"), "denied": ("✗", "red"),
                     "waiting": ("?", self.agent.mode), "parked": ("‖", "warn")}.get(it["state"], ("…", "warn"))
             if c.tool == "edit":
-                old, new = split_edit(c.body) or ("", c.body)
-                extra = f" +{len(new.splitlines())} -{len(old.splitlines())}"
+                extra = " " + edit_size(c.body)
             elif c.tool == "write":
                 extra = f" +{len(c.body.splitlines())}"
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
@@ -1491,10 +1511,10 @@ class Screen:
             shift = max(0, e["col"] - (w - 6))
             shown = e["lines"][e["top"]:e["top"] + room]
             for i, text in enumerate(shown + [""] * (room - len(shown)), e["top"]):  # a full window, however short the text
-                lines.append([("│ ", "frame")] + clip([(text[shift:] if i == e["row"] else text, "")], w - 4) + [(" │", "frame")])
+                lines.append(boxed([(text[shift:] if i == e["row"] else text, "")], w))
             p["cursor"] = (1 + e["row"] - e["top"], e["col"] - shift)
             hint = " ctrl+s save · ctrl+r default · esc cancel "
-            return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], None, None
+            return lines + [box_foot(hint, w)], None, None
         if p.get("tabs"):  # a strip of pages under the title, the one on show marked
             strip, p["tabs_at"] = [("│ ", "frame")], []
             for n, (name, _) in enumerate(p["tabs"]):
@@ -1504,7 +1524,7 @@ class Screen:
             lines.append(clip(strip, w - 2) + [(" " * max(0, w - 2 - len(flat(strip))) + " │", "frame")])
         if p["field"]:
             field_at = len(lines)
-            lines.append([("│ ", "frame")] + clip([(p["field"]["label"] + " ", "dim"), (p["field"]["text"], "")], w - 4) + [(" │", "frame")])
+            lines.append(boxed([(p["field"]["label"] + " ", "dim"), (p["field"]["text"], "")], w))
         room, at = max(1, tall - len(lines) - 1), rows.index(chosen) if chosen else 0
         # a long list starts around the chosen row, then scrolls only as far as that row needs: it holds still under the mouse
         start = max(at - room + 1, min(p.get("top", at - room // 2), at if p["sel"] else 0))
@@ -1514,12 +1534,12 @@ class Screen:
             sel_at = len(lines) if r is chosen else sel_at
             if id(r) in nth:
                 p["at"][len(lines)] = nth[id(r)]
-            lines.append([("│ ", "frame")] + clip(r["s"], w - 4) + [(" │", "frame")])
+            lines.append(boxed(r["s"], w))
         field = p["field"] or {}
         hint = " " + " · ".join(x for x in ("←→ pages" if p.get("tabs") else "", "↑↓ move" if len(can) > 1 else "", "type to filter" if field.get("filter") else "",
                                            "enter choose" if can and p["pick"] else "enter confirm" if field.get("submit") else "",
                                            "esc back" if p["back"] else "esc close") if x) + " "
-        return lines + [[("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]], sel_at, field_at
+        return lines + [box_foot(hint, w)], sel_at, field_at
 
     def popup_to(self, n):
         """move the choice to the nth row that can be chosen, kept in range, and tell the popup (a theme previews itself)"""
@@ -1688,7 +1708,7 @@ class Screen:
         rows = []
         for n in names:
             params, quant, weight = self.details.get(n, ("", "", 0))
-            name, quant = short(n) if len(short(n)) <= 34 else short(n)[:33] + "…", "" if quant == "unknown" else quant
+            name, quant = trim(short(n), 34), "" if quant == "unknown" else quant
             rows.append(row([("● " if n == a.model else "  ", a.mode), (f"{name:<34}", "bold" if n == a.model else ""),
                              (f"{params:>8}  {quant:<8} {size(weight) if weight else '':>8}", "dim")], ("use", n)))
         rows += [] if names else [row([("no models installed yet", "dim")])]
@@ -1855,7 +1875,7 @@ class Screen:
 
     def race_popup(self):
         rivals = [n for n in self.installed() if n != self.agent.model]
-        rows = [row([(f"{short(n) if len(short(n)) <= 40 else short(n)[:39] + '…':<41}", ""), (self.details.get(n, ("",))[0], "dim")], n)
+        rows = [row([(f"{trim(short(n), 40):<41}", ""), (self.details.get(n, ("",))[0], "dim")], n)
                 for n in rivals] or [row([("there is no second model installed: add one with /model", "dim")])]
         self.pop("Race against", rows, pick=self.race_ask, field={"label": "›", "text": "", "filter": True})
 
@@ -2079,8 +2099,7 @@ class Screen:
         room = w - len(flat(head)) - len(flat(tail)) - 3
         flag = ""
         if c.tool == "edit":
-            old, new = split_edit(c.body) or ("", c.body)
-            flag = f"  +{len(new.splitlines())} -{len(old.splitlines())}"
+            flag = "  " + edit_size(c.body)
         elif c.tool == "write":
             flag = "  replaces file" if it["old"] else "  new file"
         flag = flag if room > 24 else ""
@@ -2090,14 +2109,16 @@ class Screen:
         gap = w - len(flat(head + mid + tail))
         top = head + mid + [(" " + "─" * (gap - 1), "frame")] + tail
         hint = f" … +{hidden} lines · ctrl+o " if hidden else " ctrl+o to collapse " if full and len(body) > self.peek else ""
-        foot = [("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]
-        return [("", top, it)] + [("", [("│ ", "frame")] + clip(r, inner) + [(" │", "frame")], it) for r in rows] + \
-               [("", foot, it)]
+        return [("", top, it)] + [("", boxed(r, w), it) for r in rows] + [("", box_foot(hint, w), it)]
 
     def plan_now(self):
         """the checklist of the message in hand, if plan mode made one for it"""
         last = next((i for i in reversed(self.items) if i["t"] in ("plan", "user")), None)
         return last if last and last["t"] == "plan" else None
+
+    def step_mark(self, n, at):
+        """how step n of a plan is marked when step at is the one in hand: done, doing now, still to do"""
+        return ("✓ ", "green") if n < at else ("▸ ", self.agent.mode) if n == at else ("· ", "dim")
 
     def plan_rows(self, plan, w, room):
         """the plan for the right-hand panel: every step wrapped to its width, done / in hand / still to do, and as many
@@ -2105,7 +2126,7 @@ class Screen:
         at, rows, first = plan["at"], [], 0
         for n, step in enumerate(plan["steps"]):
             first = len(rows) if n == at else first
-            mark, role = ("✓ ", "green") if n < at else ("▸ ", self.agent.mode) if n == at else ("· ", "dim")
+            mark, role = self.step_mark(n, at)
             for k, r in enumerate(wrap([(step, "bold" if n == at else "dim")], max(8, w - 2))):
                 rows.append([(mark if k == 0 else "  ", role)] + r)
         start = max(0, min(first - 1, len(rows) - room))
@@ -2128,9 +2149,9 @@ class Screen:
                     rows = [("user", [("▌", tone), (" ", "")] + ([("!" if mine else MARK, tone), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
                 elif it["t"] == "plan":  # plan mode's checklist: done, doing now, still to do
-                    at, me = it["at"], self.agent.mode
-                    rows = [("", [("  ", ""), ("✓ " if n < at else "▸ " if n == at else "· ", "green" if n < at else me if n == at else "dim"),
-                                  (step[:max(8, w - 6)], "bold" if n == at else "dim")], None) for n, step in enumerate(it["steps"])]
+                    at = it["at"]
+                    rows = [("", [("  ", ""), self.step_mark(n, at), (step[:max(8, w - 6)], "bold" if n == at else "dim")], None)
+                            for n, step in enumerate(it["steps"])]
                 elif it["t"] == "note":
                     rows = [("", [("  ", "")] + r, None) for line in it["text"].split("\n")
                             for r in wrap([(line, it["role"])], w - 2)]
@@ -2272,7 +2293,7 @@ class Screen:
         self.aside = bool(self.geo[2])
         lines = self.lines(mw)
         if self.jump is not None:  # a click in a side panel: bring that item to the top
-            at = next((i for i, row in enumerate(lines) if row[2] is self.jump), None)
+            at = next((i for i, line in enumerate(lines) if line[2] is self.jump), None)
             self.scroll = self.scroll if at is None else len(lines) - vh - max(0, at - 1)
             self.jump = None
         self.scroll = max(0, min(self.scroll, len(lines) - vh))
