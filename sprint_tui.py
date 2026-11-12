@@ -871,6 +871,12 @@ class Screen:
     # --- input
 
     def submit(self, line):
+        """a line you sent: a command is done there and then; anything else starts a turn, unless one is still running"""
+        if not self.run_command(line) and not self.busy():
+            self.send(line)
+
+    def run_command(self, line):
+        """do what the line asks, if it is a command -> was it one? (One that sprint does not know brings up the help)"""
         cmd, _, arg = line.partition(" ")
         a, arg = self.agent, arg.strip()
         if cmd in ("/exit", "/quit", "/bye"):
@@ -881,16 +887,7 @@ class Screen:
                 a.reset()
                 self.items, self.cache, self.scroll = [], {}, 0
         elif cmd in ("/sidebar", "/history"):
-            right = cmd == "/sidebar"
-            if arg.isdigit():  # a width: show the panel at that size
-                size = max(20 if right else 16, min(80, int(arg)))
-                self.sidebar, self.side_w, self.history, self.left_w = (True, size, self.history, self.left_w) if right else \
-                    (self.sidebar, self.side_w, True, size)
-            elif right:
-                self.sidebar = not self.sidebar
-            else:
-                self.history = not self.history
-            sprint.save_config(sidebar=self.sidebar, sidebar_w=self.side_w, history=self.history, history_w=self.left_w)
+            self.set_panel(cmd == "/sidebar", arg)
         elif cmd == "/tools":
             self.toggle_all()
         elif cmd in ("/directory", "/dir", "/cd") and self.busy():
@@ -908,14 +905,7 @@ class Screen:
         elif cmd == "/paste":
             self.paste_image()
         elif cmd == "/update":
-            self.tell("updating sprint…")
-
-            def work():  # off the screen's back: it asks the network
-                ok, said = sprint.fetch_update()
-                self.newer = "" if ok else self.newer
-                self.tell(said) if ok else self.say(said, "err")
-
-            self.background(work)
+            self.fetch_update()
         elif cmd == "/showthink":
             self.showthink = not self.showthink
             sprint.save_config(showthink=self.showthink)
@@ -928,18 +918,49 @@ class Screen:
             self.tell(flat(rows[0]) if rows else "")
         elif cmd.startswith("/"):
             self.help_popup()
-        elif not self.busy():
-            mine = line[1:].strip() if line.startswith("!") else ""  # !command: run it yourself, no model involved
-            if mine or not line.startswith("!"):
-                line = full = line if mine else self.chipify(line)
-                chips, self.chips = {label: path for label, path in self.chips.items() if label in line}, {}
-                for label, text in self.pastes.items():  # the screen keeps the chip; the model gets what was pasted
-                    full = full.replace(label, sprint.clip(text, self.agent.cap * 2))
-                self.pastes = {}
-                self.items.append({"t": "user", "text": line})
-                self.began, self.got, self.down = time.time(), 0, False
-                self.worker = threading.Thread(target=self.bang if mine else self.work, args=(mine,) if mine else (full, chips), daemon=True)
-                self.worker.start()
+        else:
+            return False
+        return True
+
+    def set_panel(self, right, arg):
+        """/sidebar and /history: show or hide that panel, or with a number show it that wide; kept for next time"""
+        if arg.isdigit():  # a width: show the panel at that size
+            wide = max(20 if right else 16, min(80, int(arg)))
+            if right:
+                self.sidebar, self.side_w = True, wide
+            else:
+                self.history, self.left_w = True, wide
+        elif right:
+            self.sidebar = not self.sidebar
+        else:
+            self.history = not self.history
+        sprint.save_config(sidebar=self.sidebar, sidebar_w=self.side_w, history=self.history, history_w=self.left_w)
+
+    def fetch_update(self):
+        """/update: get the newest sprint and say how that went"""
+        self.tell("updating sprint…")
+
+        def work():  # off the screen's back: it asks the network
+            ok, said = sprint.fetch_update()
+            self.newer = "" if ok else self.newer
+            self.tell(said) if ok else self.say(said, "err")
+
+        self.background(work)
+
+    def send(self, line):
+        """start a turn: the message goes to the model, or after a ! is a command you run yourself, no model involved"""
+        mine = line[1:].strip() if line.startswith("!") else ""
+        if line.startswith("!") and not mine:
+            return  # a ! with nothing after it
+        line = full = line if mine else self.chipify(line)
+        chips, self.chips = {label: path for label, path in self.chips.items() if label in line}, {}
+        for label, text in self.pastes.items():  # the screen keeps the chip; the model gets what was pasted
+            full = full.replace(label, sprint.clip(text, self.agent.cap * 2))
+        self.pastes = {}
+        self.items.append({"t": "user", "text": line})
+        self.began, self.got, self.down = time.time(), 0, False
+        self.worker = threading.Thread(target=self.bang if mine else self.work, args=(mine,) if mine else (full, chips), daemon=True)
+        self.worker.start()
 
     def bang(self, cmd):
         try:
