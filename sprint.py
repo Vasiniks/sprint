@@ -606,7 +606,7 @@ class Agent:
         self.thread = 0                          # the thread running the current turn, so stop() can hang up on it
         self.limit = 0                           # tokens the next reply may use: free room, up to half the window
         self.cpt = 3.5            # chars per token; only ever revised downward, which is the safe side
-        self.tools = not url.rstrip("/").endswith("/v1")  # native tool calls on Ollama, until a model refuses them
+        self.tools = not v1(url)  # native tool calls on Ollama, until a model refuses them
         self.out = out or sys.stdout
         self.color = self.out.isatty()
         self.col0, self.busy = True, False  # cursor at line start? status line showing?
@@ -779,7 +779,7 @@ class Agent:
 
     def chat(self, msgs):
         """stream a reply: yields text chunks, plus {"prompt": n} / {"cut": True} / {"call": {...}} facts"""
-        native = not self.url.rstrip("/").endswith("/v1")  # Ollama's own API lets us set num_ctx
+        native = not v1(self.url)  # Ollama's own API lets us set num_ctx
         body = {"model": self.model, "messages": msgs, "stream": True}
         if native:  # thinking off: it eats a tiny model's reply budget and made tool use worse in testing
             body.update(options={"num_ctx": self.ctx, "num_predict": self.limit or self.max_out, **self.sampling},
@@ -853,7 +853,7 @@ class Agent:
         room = self.ctx - self.used() - self.ctx // 16  # a long file needs a long reply: up to half the window,
         self.limit = max(self.max_out, min(self.ctx // 2, room))  # no more, or a rambling model wastes minutes
         buf, cut, shown, raw, told, mused = "", False, 0, None, False, ""
-        keep = ("role", "content", "tool_calls", "tool_name") + (() if self.url.rstrip("/").endswith("/v1") else ("images",))
+        keep = ("role", "content", "tool_calls", "tool_name") + (() if v1(self.url) else ("images",))
         stream = self.chat([{k: m[k] for k in keep if k in m} for m in self.msgs])
         began, wrote, secs, asked, self.thread = time.time(), 0, 0.0, 0, threading.get_ident()
         self.status("thinking")
@@ -1170,8 +1170,13 @@ def answers(url):
     return True
 
 
+def v1(url):
+    """does url lead to an OpenAI-compatible server (it ends in /v1) rather than to Ollama's own API?"""
+    return url.rstrip("/").endswith("/v1")
+
+
 def local(url):
-    return urllib.parse.urlparse(url).hostname in ("localhost", "127.0.0.1", "::1") and not url.rstrip("/").endswith("/v1")
+    return urllib.parse.urlparse(url).hostname in ("localhost", "127.0.0.1", "::1") and not v1(url)
 
 
 def stop_server(url):
@@ -1208,9 +1213,14 @@ def serve(url, note=lambda s: None):
     return False
 
 
-def installed(url, model):
+def model_names(url):
+    """the models the Ollama at url has installed"""
     with urllib.request.urlopen(url.rstrip("/") + "/api/tags", timeout=5) as r:
-        names = [m["name"] for m in json.load(r)["models"]]
+        return [m["name"] for m in json.load(r)["models"]]
+
+
+def installed(url, model):
+    names = model_names(url)
     return model in names or model + ":latest" in names
 
 
@@ -1416,6 +1426,16 @@ def bar(n, top, width=20):
     return "█" * max(1 if n else 0, round(width * n / top)) if top else ""
 
 
+def short(model):
+    """a model's name without where it was fetched from: hf.co/someone/ and -GGUF say nothing you need to read"""
+    return re.sub(r"^hf\.co/[^/]+/|-GGUF", "", model)
+
+
+def tilde(path):
+    """a path as you would type it, with ~ for your home folder"""
+    return str(path).replace(str(Path.home()), "~", 1)
+
+
 def usage_pages(agent):
     """/usage, a page to a subject: this session with its tokens taken apart, the last fourteen days as a chart with
     the lifetime under it, and every model ranked -> [(title, rows), ...]"""
@@ -1426,7 +1446,6 @@ def usage_pages(agent):
         add(life, t)
     head = lambda title, more="": [(title, "bold"), (more, "dim")]
     line = lambda *spans: [("  ", "")] + list(spans)
-    name = lambda model: re.sub(r"^hf\.co/[^/]+/|-GGUF", "", model)
 
     def about(t):  # counts, the three kinds of token as bars, time, tools
         calls, top = sum(t["tools"].values()), max(t["sent"], t["written"], 1)
@@ -1440,7 +1459,7 @@ def usage_pages(agent):
 
     # --- the session: what it used, the tokens taken apart, and what is in the window now
     session = [head("Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
-                               f"{clock(time.time() - agent.started)} ago · {name(agent.model)[:30]}")]
+                               f"{clock(time.time() - agent.started)} ago · {short(agent.model)[:30]}")]
     session += about(s) if s["messages"] or s["replies"] else [line(("nothing yet this session", "dim"))]
     if s["replies"]:
         n, calls = s["replies"], sum(s["tools"].values())
@@ -1480,7 +1499,7 @@ def usage_pages(agent):
     most, whole = max([m.get("written", 0) for _, m in ranked] + [1]), max(1, sum(m.get("written", 0) for _, m in life["models"].items()))
     for model, m in ranked:
         speed = f" · {m['written'] / m['secs']:.0f} tok/s" if m.get("secs") else ""
-        models += [line((f"{name(model)[:22]:<22} ", ""), (f"{bar(m.get('written', 0), most, 12):<12} ", "magenta"),
+        models += [line((f"{short(model)[:22]:<22} ", ""), (f"{bar(m.get('written', 0), most, 12):<12} ", "magenta"),
                         (f"{m.get('written', 0) * 100 // whole:>3}%", "bold"), (f"  ↓ {human(m.get('written', 0)):>6}  ↑ {human(m.get('sent', 0)):>6}", "")),
                    line((f"  {m.get('replies', 0)} replies{speed}" + (" · this session" if model == agent.model else ""), "dim"))]
     if not life["models"]:
@@ -1497,7 +1516,7 @@ def context_rows(agent):
     """the context window as a 20x10 grid of cells, with what each colour is beside it"""
     parts, cells = agent.breakdown(), context_cells(agent)
     spent = sum(n for _, n in parts[:5])
-    side = [[(re.sub(r"^hf\.co/[^/]+/|-GGUF", "", agent.model), "bold")],
+    side = [[(short(agent.model), "bold")],
             [(f"{spent:,} of {agent.ctx:,} tokens in use ({spent * 100 // agent.ctx}%)", "")], []]
     side += [[("□ " if what == "free" else "■ ", SHADE[what]), (f"{what:<23}{n:>6,} {n * 100 / agent.ctx:5.1f}%", "")] for what, n in parts]
     rows = [[("  ", "")] + [(glyph, colour) for glyph, colour in cells[r * 20:r * 20 + 20]] + [("   ", "")] + side[r] for r in range(10)]
@@ -1559,13 +1578,12 @@ def command(agent, line):
                     "levels: low · medium · high")
     if cmd == "/model":
         if arg:
-            agent.model, agent.tools = arg, not agent.url.rstrip("/").endswith("/v1")
+            agent.model, agent.tools = arg, not v1(agent.url)
             save_config(model=arg)
             warm(agent.url, arg)
             return note(f"model: {arg}")
         try:
-            with urllib.request.urlopen(agent.url.rstrip("/") + "/api/tags", timeout=5) as r:
-                names = [m["name"] for m in json.load(r)["models"]]
+            names = model_names(agent.url)
         except (OSError, ValueError, KeyError):
             return note("cannot list models: is Ollama running?")
         return note("installed models (switch with /model NAME):", *("  " + n + ("   ← current" if n == agent.model else "") for n in names))
@@ -1608,7 +1626,7 @@ def command(agent, line):
             lines = []
         rows = [[(x.pop("t", "")[11:] + "  ", "dim"), (f"{x.pop('kind', ''):<8}", "bold"),
                  ("  ".join(str(v).replace("\n", " ")[:90] for v in x.values()), "red" if "error" in x else "")] for x in lines]
-        return (rows or note("nothing logged yet")) + note("full log: " + str(log_file()).replace(str(Path.home()), "~", 1))
+        return (rows or note("nothing logged yet")) + note("full log: " + tilde(log_file()))
     if cmd in ("/directory", "/dir", "/cd"):
         if arg:
             path = os.path.abspath(os.path.expanduser(arg))
@@ -1616,16 +1634,15 @@ def command(agent, line):
                 return note(f"cannot go there: {arg} is not a folder")
             os.chdir(path)  # the file listing in the system prompt follows at the next message
             save_config(recent=([path] + [p for p in load_config().get("recent", []) if p != path])[:6])
-        return note("working in " + folder().replace(str(Path.home()), "~", 1))
+        return note("working in " + tilde(folder()))
     if cmd in ("/systemprompt", "/system"):
         if arg == "reset":
             agent.custom = ""
             save_prompt("")
             return note("system prompt back to the default")
         text = agent.custom or (SYSTEM_TOOLS if agent.tools else SYSTEM.split("\n", 1)[0])
-        where = str(prompt_file()).replace(str(Path.home()), "~", 1)
         return [[(line, "")] for line in text.split("\n")] + \
-            note(f"{'yours' if agent.custom else 'the default'} · to change it edit {where} · /systemprompt reset undoes it")
+            note(f"{'yours' if agent.custom else 'the default'} · to change it edit {tilde(prompt_file())} · /systemprompt reset undoes it")
     if cmd == "/config":
         key, _, value = arg.partition(" ")
         value = value.strip()
@@ -1640,7 +1657,7 @@ def command(agent, line):
                 agent.set_effort(new)
             elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout"):
                 setattr(agent, key, new)
-            agent.tools = agent.tools if key not in ("url", "model") else not agent.url.rstrip("/").endswith("/v1")
+            agent.tools = agent.tools if key not in ("url", "model") else not v1(agent.url)
             save_config(**{key: new})
         kept = load_config()
         now = {"model": agent.model, "url": agent.url, "ctx": agent.ctx, "steps": agent.steps, "mode": agent.mode,
@@ -1649,13 +1666,13 @@ def command(agent, line):
                "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout, "theme": kept.get("theme", "sprint"),
                "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
         return [[(f"  {k:<12}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
-            note(f"change with /config KEY VALUE · kept in {str(CONFIG).replace(str(Path.home()), '~', 1)}")
+            note(f"change with /config KEY VALUE · kept in {tilde(CONFIG)}")
     return None
 
 
 def warm(url, model):
     """ask Ollama, in the background, to load the model now, so the first reply does not have to wait for it"""
-    if url.rstrip("/").endswith("/v1"):
+    if v1(url):
         return None
 
     def load():
@@ -1905,7 +1922,7 @@ def main():
     try:
         ready = serve(a.url, agent.status)
         agent.status("")
-        if ready and not a.url.rstrip("/").endswith("/v1") and not installed(a.url, a.model) and sys.stdin.isatty():
+        if ready and not v1(a.url) and not installed(a.url, a.model) and sys.stdin.isatty():
             if input(f"  {a.model} is not installed - pull it now? [Y/n] ").strip().lower()[:1] in ("", "y"):
                 subprocess.run(["ollama", "pull", a.model],
                                env={**os.environ, "OLLAMA_HOST": urllib.parse.urlparse(a.url).netloc})
@@ -1927,7 +1944,7 @@ def main():
     except ImportError:
         pass
     say("◆ sprint", "1;35")
-    say(f"  {agent.model} · {folder().replace(str(Path.home()), '~', 1)}\n", "2")
+    say(f"  {agent.model} · {tilde(folder())}\n", "2")
     say(f"  {'shift+tab' if hotkey else '/mode'} switches ask → edits → auto · /help for more\n", "2")
     line, draft, gap = " ".join(a.task), "", "\n"
     while True:
