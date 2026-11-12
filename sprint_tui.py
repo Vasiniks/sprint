@@ -371,7 +371,17 @@ DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "edi
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
-CELLS = "▰▱" if VT else "■□"  # a filled and an empty cell: the working animation and the mode icons (Windows fonts lack the slanted ones)
+
+
+def cell_glyphs(env):
+    """a filled and an empty cell, for the working animation and the mode icons: slanted where the font has them.
+    Windows console fonts do not; nor does the font Ghostty and cmux come with, and there the ones borrowed from
+    another font are wider than a cell and run into each other"""
+    ghostty = "ghostty" in env.get("TERM", "") or env.get("TERM_PROGRAM") == "ghostty" or any(k.startswith(("CMUX_", "GHOSTTY_")) for k in env)
+    return "▰▱" if VT and not ghostty else "■□"
+
+
+CELLS = cell_glyphs(os.environ)
 MODE_ICON = {"ask": CELLS[0] + CELLS[1] * 2, "edits": CELLS[0] * 2 + CELLS[1], "auto": CELLS[0] * 3}  # fuller, the more runs unasked
 
 CODE = re.compile(

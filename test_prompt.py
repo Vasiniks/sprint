@@ -35,7 +35,7 @@ def typed(s, text):
 def test_the_working_animation_held_still_is_four_filled_cells_at_the_start_of_a_slanted_track():
     full, empty = tui.CELLS
     text = flat(tui.dash())
-    assert tui.CELLS == ("▰▱" if tui.VT else "■□") and len(text) == tui.RUN == 14  # the same fourteen cells as the website's
+    assert tui.CELLS in ("▰▱", "■□") and len(text) == tui.RUN == 14  # the same fourteen cells as the website's
     assert text[:4] == full * 4 and text[4:] == empty * 10
     assert {role for cell, role in tui.dash()[4:]} == {"ghost"}  # the track itself is grey
 
