@@ -129,7 +129,20 @@ When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One o
 
 The model has a sixth tool, `ask`: a question for you, when only you can answer it, with choices if it has some to offer. It is never a thing to approve, whatever the mode.
 
-- The question stands in the conversation and the prompt bar becomes the answer's. Type one and press Enter, or pick a choice with the arrows (Tab puts it in the bar to change).
+- The question takes the prompt bar's place until you answer: what it asks, its choices as a numbered list, and a last row for an answer of your own. The current choice is marked and stands on a highlighted band; it starts on the first.
+
+  ```
+  ? Which colour should the button be?
+
+  ❯ 1. red
+    2. blue
+    3. green
+    4. Something else…
+  ```
+
+- The arrows move the highlight and Enter takes it. A choice's number takes it at once, and so does a click on it. Typing anything else writes your own answer on the last row; Tab puts the highlighted choice there to change.
+- A choice too long for its row is shown whole once it is highlighted. On a short screen the choices scroll with the highlight, so the conversation keeps its room.
+- Once it is over, the question and what you answered stand in the conversation.
 - `esc` leaves it to the model. `ctrl+c` stops the turn.
 - It waits one minute (`/config question_timeout N`; `0` waits for ever; any key starts the wait again). With no answer, the model is told to decide for itself, say what it chose, and carry on.
 - What you were typing when the question came is put by and given back afterwards.
