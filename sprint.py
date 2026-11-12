@@ -26,6 +26,7 @@ import urllib.request
 import zlib
 from pathlib import Path
 
+ASK_BLOCK = "```ask\na question, when only the user can answer it\n```\n"  # left out of the prompt with /config questions off
 SYSTEM = """You are a coding agent in the user's project folder. Use relative paths.
 To act, reply with ONE tool block, then stop and wait for the result:
 
@@ -44,7 +45,7 @@ new lines
 ```
 ```fetch https://example.com
 ```
-
+""" + ASK_BLOCK + """
 Any other code block is NOT saved or run.
 When the task is done, reply with a short answer and no tool block."""
 
@@ -79,12 +80,14 @@ def bash_path():
     return guess if os.path.isfile(guess) else None
 
 
-def tools():
+def tools(questions=True):
+    """what a model that calls tools natively is offered; without the ask tool where questions are switched off"""
     return [_tool("shell", f"Run a {'bash' if bash_path() else 'PowerShell'} command", "command"),
             _tool("read", "Read a file (from_line starts part-way into a long one), or list a folder", "path", "from_line?"),
             _tool("write", "Create or overwrite a file", "path", "content"),
             _tool("edit", "Replace exact text in a file", "path", "old", "new"),
-            _tool("fetch", "Get a web page as text", "url")]
+            _tool("fetch", "Get a web page as text", "url")] + \
+        [_tool("ask", "Ask the user a question, when only they can answer it (options: choices to offer)", "question", "options?")] * questions
 
 
 TOOLS = tools()
@@ -92,10 +95,13 @@ NEXT = "If the task is done, say so in plain words. Otherwise send the next tool
 REFUSAL = re.compile(r"(do not|don't|cannot|can't|can not|unable to)( directly)? (have )?(access|read|see|open|view)|"
                      r"(provide|share|paste|copy)[^.]{0,40}(content|file|path|location)", re.I)
 ALIAS = {"shell": "shell", "bash": "shell", "sh": "shell", "zsh": "shell", "tool": "shell", "read": "read",
-         "write": "write", "edit": "edit", "fetch": "fetch", "webfetch": "fetch"}
+         "write": "write", "edit": "edit", "fetch": "fetch", "webfetch": "fetch",
+         "ask": "ask", "question": "ask", "ask_user": "ask", "askuser": "ask"}
 Call = collections.namedtuple("Call", "tool arg body end start")
 MODES = ("ask", "edits", "auto")
 FENCE = re.compile(r"^\s*(`{3,})[ \t]*([A-Za-z_]+)[ \t]*(.*)$")
+OPTION = re.compile(r"\s*(?:[-*•]|\d{1,2}[.)]|[A-Za-z][.)])\s+(.+)$")  # a line that is one of a question's choices
+ANSWERED = "The user answered: "  # how the result of an ask call begins when you answered it
 
 
 # Every web request notes its socket under its thread, so that another thread can hang up on it. Ollama sends
@@ -120,7 +126,7 @@ urllib.request.install_opener(urllib.request.build_opener(_Handler))
 # ---------- reply -> tool call ----------
 
 def _call(tool, arg, body, end, start):
-    if tool == "shell":
+    if tool in ("shell", "ask"):
         arg, body = "", "\n".join(x for x in (arg, body.strip()) if x)
     elif tool in ("read", "fetch"):
         arg, body = (arg or body).strip().split("\n")[0].strip(), ""
@@ -140,8 +146,65 @@ def from_args(name, a, end, start):
         return None
     get = lambda *keys: next((str(a[k]) for k in keys if a.get(k)), "")
     body = get("old") + "\n====\n" + get("new") if tool == "edit" else get("content", "command", "cmd")
+    if tool == "ask":
+        body = get("question", "text", "prompt", "message", "query") + choice_lines(a.get("options") or a.get("choices"))
     where = get("from_line", "start", "line", "offset") if tool == "read" else ""
     return _call(tool, get("path", "file", "url") + (" " + where if where.isdecimal() else ""), body, end, start)
+
+
+def choice_lines(given):
+    """the choices of a native ask call, however the model sent them (a list, a JSON list typed out, or text split
+    by lines, bars or commas) -> a line each, to go under the question. Nothing when it is no list of choices: small
+    models fill the field with a remark ("None, just a simple question"), and one choice is no choice"""
+    if isinstance(given, str) and given.strip().startswith("["):
+        try:
+            given = json.loads(given)
+        except ValueError:
+            pass
+    if isinstance(given, str) and re.search(r"\n|\|", given):
+        given = re.split(r"\n|\|", given)
+    elif isinstance(given, str):  # commas part choices only when every piece is short: a sentence has commas too
+        given = given.split(",") if all(len(piece.split()) <= 3 for piece in given.split(",")) else []
+    if not isinstance(given, (list, tuple)):
+        return ""
+    bare = [(OPTION.match(str(x)) or [0, str(x)])[1].strip() for x in given]  # (without a bullet of its own)
+    bare = [x for x in bare if x]
+    return "".join(f"\n- {x}" for x in bare) if len(bare) > 1 else ""
+
+
+def question_parts(body):
+    """what an ask call carries -> (the question, its choices). The choices are a list at its end, two or more
+    lines that each start with a bullet, a number or a letter; without one there are none, and all of it is the question"""
+    lines = body.strip().splitlines()
+    n = len(lines)
+    while n and OPTION.match(lines[n - 1]):
+        n -= 1
+    options = [OPTION.match(x)[1].strip() for x in lines[n:]]
+    return ("\n".join(lines[:n]).strip(), options[:9]) if n and len(options) > 1 else (body.strip(), [])
+
+
+def timed_line(secs):
+    """a line typed at the terminal -> the line, or None when none came within secs seconds (0: wait for ever)"""
+    if secs and WINDOWS:  # a console cannot be waited on: watch for the first key, then take the line however long it takes
+        import msvcrt
+        end = time.time() + secs
+        while not msvcrt.kbhit():
+            if time.time() >= end:
+                return None
+            time.sleep(0.05)
+    elif secs:
+        import select
+        if not select.select([sys.stdin], [], [], secs)[0]:
+            try:  # what was half typed must not turn up at the next prompt
+                import termios
+                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+            except Exception:  # no terminal settings here (termios has an error of its own): nothing to drop
+                pass
+            return None
+    try:
+        return input()
+    except EOFError:
+        return None
 
 
 def _json_call(text):
@@ -606,10 +669,12 @@ class Agent:
         self.custom, self.timeout = "", 60       # your own system prompt, if any; seconds a shell command may run
         self.ask_timeout = 20                    # seconds a question waits for you before the call is set aside (0: for ever)
         self.parked, self.passes = [], []        # calls set aside unanswered; (tool, target) you have since allowed, once
+        self.questions, self.question_timeout = True, 60  # may the model ask you things? seconds its question waits (0: for ever)
         self.allow = []                          # calls that never ask: "shell git status*", "write notes/*", ...
         self.rate, self.took = 0.0, 0.0          # tokens a second in the last reply, and how long it took
         self.tally, self.unsaved, self.started = blank(), blank(), time.time()  # this session's use; the part not yet on disk
         self.thread = 0                          # the thread running the current turn, so stop() can hang up on it
+        self.heard = None                        # when the last piece of the reply now arriving came (None: none has, or no reply is)
         self.limit = 0                           # tokens the next reply may use: free room, up to half the window
         self.cpt = 3.5            # chars per token; only ever revised downward, which is the safe side
         self.tools = not v1(url)  # native tool calls on Ollama, until a model refuses them
@@ -665,16 +730,18 @@ class Agent:
                 raw = (x.get("tool_calls") or [{}])[0].get("function")
                 c = from_args(raw.get("name"), raw.get("arguments"), 0, 0) if raw else parse(x["content"], final=True)
                 doing = f"{c.tool} {self.target(c).split(chr(10))[0][:60]}" if c else ""
+                doing = f"asked you: {question_parts(c.body)[0].split(chr(10))[0][:80]}" if c and c.tool == "ask" else doing
                 lines += [] if c or not x["content"].strip() else [f"- answered: {x['content'].strip().split(chr(10))[0][:100]}"]
             elif doing:  # what that call gave back
                 got = re.sub(r"^\[\w+ result\]\n", "", x["content"]).strip().split("\n")[0]
-                lines += [f"- {doing} → {got[:50]}"]
+                got = got[len(ANSWERED):][:100] if got.startswith(ANSWERED) else got[:50]  # what you said is kept longer
+                lines += [f"- {doing} → {got}"]
                 doing = ""
         request = (current["content"] if current and not current.get("summary")
                    else current["content"].partition("The current request: ")[2] if current else "")
         room = max(6, self.ctx // 400)
-        if len(lines) > room:  # what you asked and what changed files outlast what was merely looked at
-            vital = [i for i, ln in enumerate(lines) if ln.startswith(("- you asked", "- write ", "- edit "))]
+        if len(lines) > room:  # what you asked or answered and what changed files outlast what was merely looked at
+            vital = [i for i, ln in enumerate(lines) if ln.startswith(("- you asked", "- asked you", "- write ", "- edit "))]
             vital = vital[:1] + vital[1:][-(room // 2 - 1):]
             rest = [i for i in range(len(lines)) if i not in vital][-(room - len(vital)):]
             lines = [lines[i] for i in sorted(vital + rest)]
@@ -709,6 +776,7 @@ class Agent:
         base = SYSTEM_TOOLS if self.tools else SYSTEM
         if self.custom:  # your own prompt; a model without tool calls still needs the block format spelled out
             base = self.custom if self.tools else self.custom + "\n" + SYSTEM.split("\n", 1)[1]
+        base = base if self.questions else base.replace(ASK_BLOCK, "")
         shell_note = f"\nThis is Windows: shell commands run in {'Git Bash' if bash_path() else 'PowerShell'}." if WINDOWS else ""
         return base + shell_note + "\n" + here()
 
@@ -717,7 +785,7 @@ class Agent:
 
     def extra(self):
         """prompt chars the server adds on top of the messages: the tool schemas"""
-        return len(json.dumps(tools())) if self.tools else 0
+        return len(json.dumps(tools(self.questions))) if self.tools else 0
 
     def say(self, s, style=""):
         if s:
@@ -759,6 +827,36 @@ class Agent:
         a = input("  allow? [Y]es · [n]o · [a]lways this one ").strip().lower()[:1]
         return "always" if a == "a" else a in ("", "y")
 
+    def question(self, text, options=()):
+        """put the model's question to you (show_call has it on show already, with its choices numbered) -> what you
+        typed; a choice, for its number; "" to leave it to the model; None when no line came in time, or there is no
+        terminal to ask on. A front end replaces this with its own"""
+        if not sys.stdin.isatty():
+            return None
+        self.say("  " + ("a number, or your own words" if options else "your answer") + " (enter alone: the model decides) ", "36")
+        line = timed_line(self.question_timeout)
+        self.col0 = True
+        if line is None:
+            self.say("\n  no answer: the model decides\n", "2")
+            return None
+        line = line.strip()
+        pick = int(line) if line.isdecimal() and len(line) < 3 else 0
+        return options[pick - 1] if 1 <= pick <= len(options) else line
+
+    def consult(self, c):
+        """the ask tool: put the question to you -> what the model is told. Nobody answering is not a failure and
+        must not hold the work up: the model is told to decide for itself and to say what it chose"""
+        text, options = question_parts(c.body)
+        if not text:
+            return "error: ask needs the question inside the block"
+        answer = self.question(text, options)
+        if answer is None:
+            wait = f" within {self.question_timeout:g} seconds" if self.question_timeout else ""
+            return f"no answer: the user did not reply{wait}. Decide yourself, say what you chose, and carry on."
+        if not str(answer).strip():
+            return "The user leaves this to you. Decide yourself, say what you chose, and carry on."
+        return ANSWERED + str(answer).strip()
+
     def show_call(self, c):
         self.say("" if self.col0 else "\n")
         self.say("● ", "36")
@@ -766,7 +864,10 @@ class Agent:
         self.say(f" {c.arg}")
         self.say(" (replaces existing file)" if c.tool == "write" and os.path.isfile(os.path.expanduser(c.arg)) else "", "33")
         self.say("\n")
-        if c.tool == "shell":
+        if c.tool == "ask":
+            text, options = question_parts(c.body)
+            rows = [("1", x) for x in text.splitlines()] + [("", f"{n}. {o}") for n, o in enumerate(options, 1)]
+        elif c.tool == "shell":
             rows = [("", ("$ " if i == 0 else "  ") + x) for i, x in enumerate(c.body.splitlines())]
         elif c.tool == "edit":
             old, new = split_edit(c.body) or ("", c.body)
@@ -791,7 +892,7 @@ class Agent:
             body.update(options={"num_ctx": self.ctx, "num_predict": self.limit or self.max_out, **self.sampling},
                         think=self.effort if self.think else False, keep_alive="30m")
             if self.tools and not self.bare:
-                body["tools"] = tools()
+                body["tools"] = tools(self.questions)
         else:
             body.update(max_tokens=self.limit or self.max_out, stream_options={"include_usage": True})
         headers = {"Content-Type": "application/json"}
@@ -865,6 +966,7 @@ class Agent:
         self.status("thinking")
         try:
             for chunk in stream:
+                self.heard = time.time()  # a model writing a tool call sends nothing till it is whole: a front end can say so
                 if self.cancel:
                     raise KeyboardInterrupt
                 if isinstance(chunk, dict):
@@ -906,6 +1008,7 @@ class Agent:
         finally:
             getattr(stream, "close", lambda: None)()
             SOCKETS.pop(self.thread, None)
+            self.heard = None
             self.status("")
             if mused and not told:  # reasoning that was on show is closed however the reply ended: stopped, cut, or nothing after it
                 told = self.thought(buf, mused)
@@ -936,7 +1039,9 @@ class Agent:
             pass
 
     def target(self, c):
-        return c.body.strip() if c.tool == "shell" else c.arg if c.tool != "fetch" or "://" in c.arg else "https://" + c.arg
+        if c.tool in ("shell", "ask"):
+            return c.body.strip()
+        return c.arg if c.tool != "fetch" or "://" in c.arg else "https://" + c.arg
 
     def allowed(self, c):
         return any(rule.partition(" ")[0] == c.tool and fnmatch.fnmatchcase(self.target(c), rule.partition(" ")[2]) for rule in self.allow)
@@ -956,12 +1061,11 @@ class Agent:
         return True
 
     def show_thinking(self, text):
-        """the reasoning so far, each time it has grown: a terminal's passing line counts its words and shows the newest,
-        as many as fit on one line. show_thought gets the whole of it once it is over"""
-        words, room = text.split(), max(0, shutil.get_terminal_size().columns - 32)
-        said = " ".join(words)
+        """the reasoning so far, each time it has grown: a terminal's passing line says how much of it there is and
+        shows the newest words, as many as fit on one line. show_thought gets the whole of it once it is over"""
+        said, room = " ".join(text.split()), max(0, shutil.get_terminal_size().columns - 46)
         last = said if len(said) <= room else said[len(said) - room:].split(" ", 1)[-1]  # cut between words, not through one
-        self.status(f"thinking · {len(words)} word{'s' * (len(words) != 1)} · {last}")
+        self.status(f"thinking · {size(text, self.cpt)} · {last}")
 
     def show_thought(self, text):
         lines = text.splitlines()
@@ -976,6 +1080,8 @@ class Agent:
         return f"allowed once: {c.tool} {self.target(c).splitlines()[0][:60]} (it runs when the model next asks for it)"
 
     def do(self, c):
+        if c.tool == "ask":  # a question for you is nothing to approve, whatever the mode
+            return self.consult(c)
         key, risky = (c.tool, self.target(c)), guarded(c)  # deleting this folder or beyond it, or changing sprint's own files
         edits = self.mode == "edits" and c.tool in ("write", "edit") and inside(c.arg)  # edits mode frees this folder's files, no others
         free = c.tool == "read" or self.mode == "auto" or edits or self.allowed(c)
@@ -1240,7 +1346,7 @@ CONFIG = config_dir() / "config.json"
 SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "think": bool, "effort": str,
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
             "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool,
-            "update_check": bool, "ask_timeout": int, "plan_h": int}
+            "update_check": bool, "ask_timeout": int, "plan_h": int, "questions": bool, "question_timeout": int}
 SHADE = {"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
          "tool results": "yellow", "reserved for the reply": "dim", "free": "dim"}
 ANSI = {"": "", "dim": "2", "bold": "1", "blue": "34", "magenta": "35", "cyan": "36", "green": "32", "yellow": "33", "red": "31"}
@@ -1422,6 +1528,13 @@ def keep_usage(more):
 
 def human(n):
     return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.1f}k" if n >= 1000 else str(int(n))
+
+
+def size(text, cpt):
+    """how much reasoning there is, both ways: "14 tokens · 10 words". The tokens are reckoned from its length by the
+    agent's own measure of one (the server counts a reply's tokens only as a whole, reasoning and answer together)"""
+    tokens, words = max(1, int(len(text) / cpt)), len(text.split())
+    return f"{human(tokens)} token{'s' * (tokens != 1)} · {words} word{'s' * (words != 1)}"
 
 
 def clock(secs):
@@ -1713,7 +1826,7 @@ def set_config(agent, key, value):
         return f"{key} cannot be {value}"
     if key == "effort":
         agent.set_effort(new)
-    elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout"):
+    elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout", "questions", "question_timeout"):
         setattr(agent, key, new)
     if key in ("url", "model"):  # native tool calls on Ollama again, until this model refuses them
         agent.tools = not v1(agent.url)
@@ -1734,8 +1847,8 @@ def cmd_config(agent, arg):
            "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
            "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
            "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout,
-           "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
-    return [[(f"  {k:<12}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
+           "questions": agent.questions, "question_timeout": agent.question_timeout, "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
+    return [[(f"  {k:<17}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
         notes(f"change with /config KEY VALUE · kept in {tilde(CONFIG)}")
 
 
@@ -1781,6 +1894,7 @@ def race(agent, rival, task, tell=lambda model: None):
         r = Agent(model, agent.url, agent.ctx, agent.steps, "ask", agent.key, vars(agent).get("chat"), lambda call: False,
                   io.StringIO(), agent.think, agent.effort)
         r.custom = agent.custom
+        r.questions, r.question = False, lambda text, options=(): None  # a race does not stop to ask, and is not told it could
         tell(model)
         began = time.time()
         try:
@@ -1816,7 +1930,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.13"  # the same as in pyproject.toml
+VERSION = "0.4.14"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
@@ -2103,6 +2217,7 @@ def build_agent(a):
                   think=bool(saved.get("think")), effort=effort)
     agent.custom, agent.timeout, agent.allow = load_prompt(), saved.get("timeout", 60), list(saved.get("allow", []))
     agent.ask_timeout = saved.get("ask_timeout", 20)
+    agent.questions, agent.question_timeout = bool(saved.get("questions", True)), saved.get("question_timeout", 60)
     return agent
 
 

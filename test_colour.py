@@ -213,7 +213,7 @@ def test_an_open_thought_sits_in_a_dashed_square_frame_of_its_own():
     rows = thought("First I should read the file.\nThen change the word.", open=True, secs=1.24)
     text = [flat(spans) for _, spans, _ in rows]
     assert all(len(t) == 60 for t in text) and len(text) == 4
-    assert text[0] == "┌┄ thought  10 words " + "┄" * 38 + "┐" and text[-1] == "└" + "┄" * 58 + "┘"
+    assert text[0] == "┌┄ thought  14 tokens · 10 words " + "┄" * 26 + "┐" and text[-1] == "└" + "┄" * 58 + "┘"  # its size both ways
     assert text[1] == "┆ First I should read the file." + " " * 28 + "┆" and text[2].startswith("┆ Then change the word. ")
     assert not set("╭╮╰╯│─▸▾") & set("".join(text))  # nothing of a tool window's frame
     assert "done" not in text[0] and "1.2s" not in text[0] and "think " not in text[0]  # reasoning is not an action: no status, no time
@@ -221,7 +221,7 @@ def test_an_open_thought_sits_in_a_dashed_square_frame_of_its_own():
 
 def test_a_thought_is_drawn_quietly_and_its_frame_like_any_frame():
     rows = thought("Check the tests first.", open=True)
-    assert rows[0][1][:3] == [("┌┄ ", "frame"), ("thought", "dim"), ("  4 words ", "dim")]
+    assert rows[0][1][:3] == [("┌┄ ", "frame"), ("thought", "dim"), ("  6 tokens · 4 words ", "dim")]
     assert rows[1][1][0] == ("┆ ", "frame") and rows[1][1][1] == ("Check the tests first.", "thought") and rows[1][1][-1] == (" ┆", "frame")
     assert {r for _, r in rows[2][1]} == {"frame"} and all(item is rows[0][2] for _, _, item in rows)
     assert ROLE["thought"] == (0, curses.A_DIM | ITALIC)
@@ -238,7 +238,7 @@ def test_a_long_thought_is_wrapped_never_cut():
 
 def test_a_folded_thought_is_one_dashed_line_that_matches_the_box():
     (kind, spans, item), = thought("First I should read the file.\nThen change the word.")
-    assert flat(spans).rstrip() == "  ┄ thought  10 words" and len(flat(spans)) == 60 and spans[0] == ("  ┄ ", "frame")
+    assert flat(spans).rstrip() == "  ┄ thought  14 tokens · 10 words" and len(flat(spans)) == 60 and spans[0] == ("  ┄ ", "frame")
     assert "▸" not in flat(spans) and "First" not in flat(spans)
 
 
@@ -247,7 +247,7 @@ def test_showthink_opens_every_thought_into_the_dashed_box():
     s.show_thought("one two three")
     s.showthink = True
     text = [flat(spans) for _, spans, _ in s.window(s.items[-1], 50)]
-    assert text[0].startswith("┌┄ thought  3 words ┄") and text[1].startswith("┆ one two three") and text[2].startswith("└┄")
+    assert text[0].startswith("┌┄ thought  3 tokens · 3 words ┄") and text[1].startswith("┆ one two three") and text[2].startswith("└┄")
 
 
 def test_tool_windows_are_exactly_as_they_were(monkeypatch):

@@ -54,11 +54,11 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 
 | part | what it shows |
 |---|---|
-| Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. |
+| Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. The wheel over the list scrolls it, and the heading says which are on show (`4-12 of 31`). |
 | Conversation (middle) | Your messages on a bright band with a bar down the side in the mode's colour, the model's replies, and one window per tool call. Under each answer, what the message cost: tokens up and down, and the time. |
-| Sidebar (right) | At the top, the context window in small with how full it is; on a tall screen also a legend of what fills it, and the session in labelled rows (model, thinking, showthink, effort, plan, speed, tokens, tool calls, time; the mode is by the prompt). Then a log of every tool call and how it ended. In plan mode its bottom half is the plan: how far along it is, and each step ticked, in hand, or still to do; drag the line above it to give it more or less room. |
+| Sidebar (right) | At the top, the context window in small with how full it is; on a tall screen also a legend of what fills it, and the session in labelled rows (model, thinking, showthink, effort, plan, speed, tokens, tool calls, time; the mode is by the prompt). Then a log of every tool call and how it ended, which the wheel scrolls like the message list. In plan mode its bottom half is the plan: how far along it is, and each step ticked, in hand, or still to do; drag the line above it to give it more or less room. |
 | Prompt (bottom) | The line you type on, between two rules, with the model and context on the upper one. Under it, the mode with its icon (`▰▱▱` ask, `▰▰▱` edits, `▰▰▰` auto: fuller, the more runs without asking) and a reminder that Tab cycles it. |
-| Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. |
+| Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. A glint of colour crosses the words every couple of seconds. When a model goes quiet to write a tool call (the server holds a call back until it is whole), the line says `preparing the next step`. |
 
 Tool windows start collapsed to a few lines, and each says how long the call took:
 
@@ -101,7 +101,7 @@ Drag the line beside either side panel to resize it. A panel that would squeeze 
 | `ctrl+o` | expand or collapse all tool windows; click one to toggle just it |
 | `ctrl+y` | copy the last answer |
 | `ctrl+l` | clear the conversation |
-| mouse wheel, `pgup`, `pgdn` | scroll. Scrolled up, a `↓ jump to bottom` button appears at the foot of the conversation: click it, or press `end` on an empty prompt. |
+| mouse wheel, `pgup`, `pgdn` | scroll. The wheel scrolls what the mouse is over: the conversation, or the list in either side panel. Scrolled up, a `↓ jump to bottom` button appears at the foot of the conversation: click it, or press `end` on an empty prompt. |
 | `up`, `down` | recall earlier messages |
 | `ctrl+c` | clear the line, else stop the turn; twice on an empty prompt to quit. If a turn will not stop, pressing on offers the way out all the same: nothing can keep you in. |
 
@@ -123,7 +123,19 @@ When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One o
 
 **sprint's own files always ask.** A model may read sprint's settings, your system prompt, the usage tallies and the log, but writing, editing or running a command that could change one of them (or `sprint config`) is put to you in every mode and can never be allowed for ever. A model that can rewrite the settings could put itself on the allow list.
 
-**A question nobody answers does not stall the work.** After 20 seconds (`/config ask_timeout N`; `0` waits for ever; any key starts the wait again) the call is set aside, not run: the model is told to carry on without it, and the prompt shows that something is waiting. `/permissions` lists what was set aside; Enter on one allows it once, and it runs the next time the model asks for it. (Plain mode, `--plain`, waits as long as it takes.)
+**An approval nobody gives does not stall the work.** After 20 seconds (`/config ask_timeout N`; `0` waits for ever; any key starts the wait again) the call is set aside, not run: the model is told to carry on without it, and the prompt shows that something is waiting. `/permissions` lists what was set aside; Enter on one allows it once, and it runs the next time the model asks for it. (Plain mode, `--plain`, waits as long as it takes.)
+
+## When the model asks you something
+
+The model has a sixth tool, `ask`: a question for you, when only you can answer it, with choices if it has some to offer. It is never a thing to approve, whatever the mode.
+
+- The question stands in the conversation and the prompt bar becomes the answer's. Type one and press Enter, or pick a choice with the arrows (Tab puts it in the bar to change).
+- `esc` leaves it to the model. `ctrl+c` stops the turn.
+- It waits one minute (`/config question_timeout N`; `0` waits for ever; any key starts the wait again). With no answer, the model is told to decide for itself, say what it chose, and carry on.
+- What you were typing when the question came is put by and given back afterwards.
+- It works with thinking on or off and in plan mode, where later steps know what you answered. A folded conversation keeps your answers.
+- `/config questions off` takes the tool away, and with it the line about it in the prompt. Models set against each other with `/race` are never offered it.
+- In plain mode the question is printed and the next line you type is the answer; a number picks a choice.
 
 ## Commands
 
@@ -161,7 +173,7 @@ Everything sprint keeps lives in `~/.config/sprint/` (`%APPDATA%\sprint` on Wind
 
 | file | |
 |---|---|
-| `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, how long a question waits, panel sizes, allow list, recent folders |
+| `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, how long an approval and a question of the model's wait, whether it may ask, panel sizes, allow list, recent folders |
 | `system.md` | your own system prompt, if you wrote one |
 | `sprint.log` | messages, tool calls and errors, so there is something to read when a run goes wrong |
 | `usage.json` | one tally per day of tokens, replies, time and tool calls; what `/usage` adds up |
@@ -180,7 +192,7 @@ Command-line options override the environment, which overrides saved settings.
 
 ## How it copes with small models
 
-**Tool calls.** On Ollama the five tools (`shell`, `read`, `write`, `edit`, `fetch`) are offered as native tool schemas. Models without tool support fall back automatically to fenced blocks (` ```shell `, ` ```write path `), which need no JSON escaping.
+**Tool calls.** On Ollama the six tools (`shell`, `read`, `write`, `edit`, `fetch`, `ask`) are offered as native tool schemas. Models without tool support fall back automatically to fenced blocks (` ```shell `, ` ```write path `), which need no JSON escaping.
 
 **A short prompt that names the files.** The system prompt lists the folder's contents. Without that, a 0.8B model often claims it cannot see a file instead of reading it.
 
