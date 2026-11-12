@@ -415,6 +415,12 @@ def guarded(c):
     return deletion(c.body) or ("settings" if touches_own(c.body) else "")
 
 
+def inside(path):
+    """is this file in the folder sprint is working in (or below it)? Where links lead is what counts"""
+    at, cwd = (os.path.normcase(os.path.realpath(os.path.expanduser(p))) for p in (path, folder()))
+    return at == cwd or at.startswith(cwd.rstrip(os.sep) + os.sep)
+
+
 SEEN = [""]  # the last working folder known to exist
 
 
@@ -971,7 +977,8 @@ class Agent:
 
     def do(self, c):
         key, risky = (c.tool, self.target(c)), guarded(c)  # deleting this folder or beyond it, or changing sprint's own files
-        free = c.tool == "read" or self.mode == "auto" or (self.mode == "edits" and c.tool in ("write", "edit")) or self.allowed(c)
+        edits = self.mode == "edits" and c.tool in ("write", "edit") and inside(c.arg)  # edits mode frees this folder's files, no others
+        free = c.tool == "read" or self.mode == "auto" or edits or self.allowed(c)
         if key in self.passes:  # set aside earlier, and since allowed by you
             self.passes.remove(key)
             answer = True

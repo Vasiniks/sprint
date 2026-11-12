@@ -112,7 +112,7 @@ Drag over text to copy it: in the conversation, in the prompt, or in either side
 | mode | runs without asking |
 |---|---|
 | `ask` (default) | reading files |
-| `edits` | reading, writing and editing files |
+| `edits` | reading files anywhere; writing and editing files in the folder sprint is working in (one outside it is asked about) |
 | `auto` | everything, except deleting the working folder or anything outside it |
 
 The mode you leave in is the mode you come back to (starting with `-y` or `--mode` is for that run only).

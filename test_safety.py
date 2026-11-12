@@ -373,3 +373,49 @@ def test_the_question_says_it_is_sprints_own_settings():
     s.pending, s.choice = call, 0
     question, keys = s.input_rows(110)[0][1:3]
     assert "sprint's own settings" in flat(question) and "always" not in flat(keys)
+
+
+# ---------- writing outside the folder: asked about, unless you are in auto ----------
+
+def beside(proj, name="out.txt"):
+    return str(proj.parent / name)
+
+
+def test_in_edits_mode_a_write_inside_the_folder_is_free_and_one_outside_it_asks(proj):
+    a = asking(False, mode="edits")
+    assert a.do(sprint.Call("write", "new.txt", "x", 0, 0)).startswith("wrote") and a.asked == []
+    assert a.do(sprint.Call("write", "sub/deep.txt", "x", 0, 0)).startswith("wrote") and a.asked == []
+    assert a.do(sprint.Call("write", beside(proj), "x", 0, 0)).startswith("denied") and len(a.asked) == 1
+    assert a.do(sprint.Call("write", "../out.txt", "x", 0, 0)).startswith("denied") and len(a.asked) == 2
+    assert a.do(sprint.Call("write", "~/sprint-never-written.txt", "x", 0, 0)).startswith("denied") and len(a.asked) == 3
+    assert not (proj.parent / "out.txt").exists()
+
+
+def test_an_edit_outside_the_folder_asks_in_edits_mode_too(proj):
+    (proj.parent / "gone.txt").write_text("old\n")
+    a = asking(False, mode="edits")
+    assert a.do(sprint.Call("edit", beside(proj, "gone.txt"), "old\n=======\nnew", 0, 0)).startswith("denied")
+    assert len(a.asked) == 1 and (proj.parent / "gone.txt").read_text() == "old\n"
+
+
+def test_in_auto_mode_a_write_outside_the_folder_goes_without_a_question(proj):
+    a = asking(False)
+    assert a.do(sprint.Call("write", beside(proj), "x", 0, 0)).startswith("wrote") and a.asked == []
+
+
+def test_such_a_write_is_an_ordinary_question_always_can_be_remembered(proj, monkeypatch):
+    monkeypatch.setattr(sprint, "save_config", lambda **kw: None)
+    a = asking("always", mode="edits")
+    a.do(sprint.Call("write", beside(proj), "x", 0, 0))
+    a.do(sprint.Call("write", beside(proj), "y", 0, 0))
+    assert len(a.asked) == 1 and (proj.parent / "out.txt").read_text() == "y\n"
+
+
+def test_the_question_says_the_file_is_outside_the_folder(proj):
+    call = sprint.Call("write", beside(proj), "x", 0, 0)
+    s = waiting(call, mode="edits")
+    s.pending, s.choice = call, 0
+    question, keys = s.input_rows(110)[0][1:3]
+    assert "outside this folder" in flat(question) and "always" in flat(keys)
+    s.pending = sprint.Call("write", "new.txt", "x", 0, 0)
+    assert "outside" not in flat(s.input_rows(110)[0][1])

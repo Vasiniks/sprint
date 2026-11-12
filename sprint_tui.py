@@ -1968,6 +1968,8 @@ class Screen:
             kind = sprint.guarded(c)  # why this one is asked whatever the mode
             why = [("  " + {"own": "deletes this very folder", "outside": "deletes outside this folder",
                             "settings": "changes sprint's own settings"}.get(kind, "deletes: cannot tell what"), "err")] * bool(kind)
+            if not kind and c.tool in ("write", "edit") and not sprint.inside(c.arg):
+                why = [("  outside this folder", "warn")]  # why edits mode asks about this one
             return [rule, clip([(MARK, a.mode), (" allow ", a.mode), (c.tool, "bold"), ("  " + what, "")], max(8, bw - len(flat(why)))) + why,
                     keys, foot], []
         text, cur = (self.buf[1:], max(0, self.cur - 1)) if shell else (self.buf, self.cur)  # the ! is the mark itself
