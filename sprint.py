@@ -141,7 +141,7 @@ def from_args(name, a, end, start):
     get = lambda *keys: next((str(a[k]) for k in keys if a.get(k)), "")
     body = get("old") + "\n====\n" + get("new") if tool == "edit" else get("content", "command", "cmd")
     where = get("from_line", "start", "line", "offset") if tool == "read" else ""
-    return _call(tool, get("path", "file", "url") + (" " + where if where.isdigit() else ""), body, end, start)
+    return _call(tool, get("path", "file", "url") + (" " + where if where.isdecimal() else ""), body, end, start)
 
 
 def _json_call(text):
@@ -1569,7 +1569,7 @@ def change_allowed(agent, arg):
     tool, _, pattern = rest.partition(" ")
     if verb == "allow" and tool in ("shell", "write", "edit", "fetch") and pattern.strip():
         agent.allow.append(rest.strip())
-    elif verb == "forget" and rest.strip().isdigit() and 0 < int(rest) <= len(agent.allow):
+    elif verb == "forget" and rest.strip().isdecimal() and 0 < int(rest) <= len(agent.allow):
         del agent.allow[int(rest) - 1]
     else:
         return notes("cannot do that: /permissions allow shell git status*   or   /permissions forget 1")
@@ -1656,6 +1656,7 @@ def cmd_log(agent, arg):
         lines = [json.loads(x) for x in log_file().read_text(encoding="utf-8", errors="replace").splitlines()[-15:]]
     except (OSError, ValueError):
         lines = []
+    lines = [x for x in lines if isinstance(x, dict)]  # a line that is not one of sprint's own is passed over
     rows = [[(x.pop("t", "")[11:] + "  ", "dim"), (f"{x.pop('kind', ''):<8}", "bold"),
              ("  ".join(str(v).replace("\n", " ")[:90] for v in x.values()), "red" if "error" in x else "")] for x in lines]
     return (rows or notes("nothing logged yet")) + notes("full log: " + tilde(log_file()))
@@ -1705,7 +1706,7 @@ def cmd_system(agent, arg):
 def set_config(agent, key, value):
     """/config KEY VALUE: check the value, hand it to the running agent and save it -> what is wrong with it, if anything"""
     kind = SETTINGS[key]
-    if kind is int and not value.isdigit():
+    if kind is int and not value.isdecimal():  # (isdigit would let a ² through, which is no number)
         return f"{key} needs a number"
     new = int(value) if kind is int else value.lower() in ("on", "true", "yes", "1") if kind is bool else value
     if key == "mode" and new not in MODES or key == "effort" and new not in EFFORT or key == "ctx" and new < 1024:
@@ -1987,8 +1988,9 @@ def plain_line(agent, text):
         show_rows(agent, rows)
     elif cmd.startswith("/"):  # not a command there is: list the ones there are
         show_rows(agent, help_rows())
-    elif cmd.startswith("!") and text[1:].strip():
-        agent.bang(text[1:].strip())
+    elif cmd.startswith("!"):
+        if text[1:].strip():  # (a lone ! is nothing to run, and nothing to send either)
+            agent.bang(text[1:].strip())
     elif cmd:
         plain_message(agent, text)
 
@@ -2021,7 +2023,8 @@ def plain_session(agent, first=""):
             if cmd == "/~":  # shift+tab: next mode, prompt redrawn in place, typed text kept
                 agent.cycle()
                 draft, gap = arg, "\033[A\033[2K\r" if tty else ""
-                rl.remove_history_item(rl.get_current_history_length() - 1)
+                if rl and rl.get_current_history_length():  # (typed by hand there may be no such entry, or no readline)
+                    rl.remove_history_item(rl.get_current_history_length() - 1)
             elif cmd in ("/bye", "/quit", "/exit"):
                 return
             else:
@@ -2074,19 +2077,19 @@ def cli(argv):
     return 0
 
 
-def arguments():
+def arguments(argv=None):
     """the options a session takes, read from the command line"""
     ap = argparse.ArgumentParser(prog="sprint", description=__doc__, epilog="sprint help lists the other commands: config, serve, update")
     ap.add_argument("task", nargs="*", help="optional first message")
     ap.add_argument("-m", "--model", help="model name (default: the one used last, else Qwen 3.5 0.8B Q4_K_M)")
     ap.add_argument("-u", "--url", help="Ollama URL, or any OpenAI-compatible URL ending in /v1")
     ap.add_argument("-c", "--ctx", type=int, help="context window in tokens (default 8192)")
-    ap.add_argument("-s", "--steps", type=int, help="max tool calls per message (default 30)")
+    ap.add_argument("-s", "--steps", type=int, help="max tool calls per message (default: 8, 16 or 32 by effort)")
     ap.add_argument("--mode", choices=MODES,
                     help="ask: confirm every action (default) · edits: accept file edits · auto: run everything")
     ap.add_argument("-y", "--yes", action="store_true", help="same as --mode auto")
     ap.add_argument("--plain", action="store_true", help="line-by-line session instead of the full screen")
-    return ap.parse_args()
+    return ap.parse_args(argv)
 
 
 def build_agent(a):
@@ -2106,10 +2109,14 @@ def build_agent(a):
 def get_ready(agent):
     """before the session opens: ask for the model to be loaded, start a local model server that is not up, and
     offer to pull a model that is not installed"""
-    warm(agent.url, agent.model)
+    up = v1(agent.url) or answers(agent.url)
+    if up:
+        warm(agent.url, agent.model)  # at once, while the rest is checked
     try:
         ready = serve(agent.url, agent.status)
         agent.status("")
+        if ready and not up:
+            warm(agent.url, agent.model)  # the server had to be started first: asked before that, nothing would have heard
         if ready and not v1(agent.url) and not installed(agent.url, agent.model) and sys.stdin.isatty():
             if input(f"  {agent.model} is not installed - pull it now? [Y/n] ").strip().lower()[:1] in ("", "y"):
                 subprocess.run(["ollama", "pull", agent.model],
@@ -2139,4 +2146,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
