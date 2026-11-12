@@ -612,7 +612,7 @@ class Agent:
         self.thread = 0                          # the thread running the current turn, so stop() can hang up on it
         self.limit = 0                           # tokens the next reply may use: free room, up to half the window
         self.cpt = 3.5            # chars per token; only ever revised downward, which is the safe side
-        self.tools = not url.rstrip("/").endswith("/v1")  # native tool calls on Ollama, until a model refuses them
+        self.tools = not v1(url)  # native tool calls on Ollama, until a model refuses them
         self.out = out or sys.stdout
         self.color = self.out.isatty()
         self.col0, self.busy = True, False  # cursor at line start? status line showing?
@@ -785,7 +785,7 @@ class Agent:
 
     def chat(self, msgs):
         """stream a reply: yields text chunks, plus {"prompt": n} / {"cut": True} / {"call": {...}} facts"""
-        native = not self.url.rstrip("/").endswith("/v1")  # Ollama's own API lets us set num_ctx
+        native = not v1(self.url)  # Ollama's own API lets us set num_ctx
         body = {"model": self.model, "messages": msgs, "stream": True}
         if native:  # thinking off: it eats a tiny model's reply budget and made tool use worse in testing
             body.update(options={"num_ctx": self.ctx, "num_predict": self.limit or self.max_out, **self.sampling},
@@ -859,7 +859,7 @@ class Agent:
         room = self.ctx - self.used() - self.ctx // 16  # a long file needs a long reply: up to half the window,
         self.limit = max(self.max_out, min(self.ctx // 2, room))  # no more, or a rambling model wastes minutes
         buf, cut, shown, raw, told, mused = "", False, 0, None, False, ""
-        keep = ("role", "content", "tool_calls", "tool_name") + (() if self.url.rstrip("/").endswith("/v1") else ("images",))
+        keep = ("role", "content", "tool_calls", "tool_name") + (() if v1(self.url) else ("images",))
         stream = self.chat([{k: m[k] for k in keep if k in m} for m in self.msgs])
         began, wrote, secs, asked, self.thread = time.time(), 0, 0.0, 0, threading.get_ident()
         self.status("thinking")
@@ -1177,8 +1177,13 @@ def answers(url):
     return True
 
 
+def v1(url):
+    """does url lead to an OpenAI-compatible server (it ends in /v1) rather than to Ollama's own API?"""
+    return url.rstrip("/").endswith("/v1")
+
+
 def local(url):
-    return urllib.parse.urlparse(url).hostname in ("localhost", "127.0.0.1", "::1") and not url.rstrip("/").endswith("/v1")
+    return urllib.parse.urlparse(url).hostname in ("localhost", "127.0.0.1", "::1") and not v1(url)
 
 
 def stop_server(url):
@@ -1215,9 +1220,14 @@ def serve(url, note=lambda s: None):
     return False
 
 
-def installed(url, model):
+def model_names(url):
+    """the models the Ollama at url has installed"""
     with urllib.request.urlopen(url.rstrip("/") + "/api/tags", timeout=5) as r:
-        names = [m["name"] for m in json.load(r)["models"]]
+        return [m["name"] for m in json.load(r)["models"]]
+
+
+def installed(url, model):
+    names = model_names(url)
     return model in names or model + ":latest" in names
 
 
@@ -1423,6 +1433,16 @@ def bar(n, top, width=20):
     return "█" * max(1 if n else 0, round(width * n / top)) if top else ""
 
 
+def short(model):
+    """a model's name without where it was fetched from: hf.co/someone/ and -GGUF say nothing you need to read"""
+    return re.sub(r"^hf\.co/[^/]+/|-GGUF", "", model)
+
+
+def tilde(path):
+    """a path as you would type it, with ~ for your home folder"""
+    return str(path).replace(str(Path.home()), "~", 1)
+
+
 def usage_pages(agent):
     """/usage, a page to a subject: this session with its tokens taken apart, the last fourteen days as a chart with
     the lifetime under it, and every model ranked -> [(title, rows), ...]"""
@@ -1433,7 +1453,6 @@ def usage_pages(agent):
         add(life, t)
     head = lambda title, more="": [(title, "bold"), (more, "dim")]
     line = lambda *spans: [("  ", "")] + list(spans)
-    name = lambda model: re.sub(r"^hf\.co/[^/]+/|-GGUF", "", model)
 
     def about(t):  # counts, the three kinds of token as bars, time, tools
         calls, top = sum(t["tools"].values()), max(t["sent"], t["written"], 1)
@@ -1447,7 +1466,7 @@ def usage_pages(agent):
 
     # --- the session: what it used, the tokens taken apart, and what is in the window now
     session = [head("Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
-                               f"{clock(time.time() - agent.started)} ago · {name(agent.model)[:30]}")]
+                               f"{clock(time.time() - agent.started)} ago · {short(agent.model)[:30]}")]
     session += about(s) if s["messages"] or s["replies"] else [line(("nothing yet this session", "dim"))]
     if s["replies"]:
         n, calls = s["replies"], sum(s["tools"].values())
@@ -1487,7 +1506,7 @@ def usage_pages(agent):
     most, whole = max([m.get("written", 0) for _, m in ranked] + [1]), max(1, sum(m.get("written", 0) for _, m in life["models"].items()))
     for model, m in ranked:
         speed = f" · {m['written'] / m['secs']:.0f} tok/s" if m.get("secs") else ""
-        models += [line((f"{name(model)[:22]:<22} ", ""), (f"{bar(m.get('written', 0), most, 12):<12} ", "magenta"),
+        models += [line((f"{short(model)[:22]:<22} ", ""), (f"{bar(m.get('written', 0), most, 12):<12} ", "magenta"),
                         (f"{m.get('written', 0) * 100 // whole:>3}%", "bold"), (f"  ↓ {human(m.get('written', 0)):>6}  ↑ {human(m.get('sent', 0)):>6}", "")),
                    line((f"  {m.get('replies', 0)} replies{speed}" + (" · this session" if model == agent.model else ""), "dim"))]
     if not life["models"]:
@@ -1504,7 +1523,7 @@ def context_rows(agent):
     """the context window as a 20x10 grid of cells, with what each colour is beside it"""
     parts, cells = agent.breakdown(), context_cells(agent)
     spent = sum(n for _, n in parts[:5])
-    side = [[(re.sub(r"^hf\.co/[^/]+/|-GGUF", "", agent.model), "bold")],
+    side = [[(short(agent.model), "bold")],
             [(f"{spent:,} of {agent.ctx:,} tokens in use ({spent * 100 // agent.ctx}%)", "")], []]
     side += [[("□ " if what == "free" else "■ ", SHADE[what]), (f"{what:<23}{n:>6,} {n * 100 / agent.ctx:5.1f}%", "")] for what, n in parts]
     rows = [[("  ", "")] + [(glyph, colour) for glyph, colour in cells[r * 20:r * 20 + 20]] + [("   ", "")] + side[r] for r in range(10)]
@@ -1512,157 +1531,232 @@ def context_rows(agent):
     return rows + [[]] + [[(f"  {note}counted at {agent.cpt:.1f} characters per token", "dim")]]
 
 
+# ---------- slash commands ----------
+# The commands both front ends share, a function to each: it takes the agent and what was typed after the command's
+# name, and gives back rows of (text, colour) to show. command(), below them, picks the one to run.
+
+def notes(*lines):
+    """lines of grey text as rows, a line to a row: how a command usually answers"""
+    return [[(x, "dim")] for x in lines]
+
+
+def cmd_model(agent, arg):
+    """/model NAME switches to that model and starts loading it; /model alone lists the ones installed"""
+    if arg:
+        agent.model, agent.tools = arg, not v1(agent.url)
+        save_config(model=arg)
+        warm(agent.url, arg)
+        return notes(f"model: {arg}")
+    try:
+        names = model_names(agent.url)
+    except (OSError, ValueError, KeyError):
+        return notes("cannot list models: is Ollama running?")
+    return notes("installed models (switch with /model NAME):", *("  " + n + ("   ← current" if n == agent.model else "") for n in names))
+
+
+def cmd_mode(agent, arg):
+    """/mode ask|edits|auto sets the mode; anything else moves on to the next one"""
+    if arg in MODES:
+        agent.set_mode(arg)
+    else:
+        agent.cycle()
+    return notes(f"{agent.mode}: {ABOUT[agent.mode]}")
+
+
+def change_allowed(agent, arg):
+    """/permissions allow TOOL PATTERN adds a rule to the allow list; /permissions forget N takes the Nth one off it"""
+    verb, _, rest = arg.partition(" ")
+    tool, _, pattern = rest.partition(" ")
+    if verb == "allow" and tool in ("shell", "write", "edit", "fetch") and pattern.strip():
+        agent.allow.append(rest.strip())
+    elif verb == "forget" and rest.strip().isdigit() and 0 < int(rest) <= len(agent.allow):
+        del agent.allow[int(rest) - 1]
+    else:
+        return notes("cannot do that: /permissions allow shell git status*   or   /permissions forget 1")
+    save_config(allow=agent.allow)
+    return notes("always allowed: " + (", ".join(agent.allow) or "nothing"))
+
+
+def cmd_permissions(agent, arg):
+    """/permissions alone shows what runs without asking; a mode after it sets that mode; allow and forget change the list"""
+    if arg.split(" ")[0] in ("allow", "forget"):
+        return change_allowed(agent, arg)
+    if arg in MODES:
+        agent.set_mode(arg)
+    if arg:
+        return notes(f"{agent.mode}: {ABOUT[agent.mode]}")
+    free = {"read": True, "write": agent.mode != "ask", "edit": agent.mode != "ask",
+            "shell": agent.mode == "auto", "fetch": agent.mode == "auto"}
+    return notes(f"mode {agent.mode}: {ABOUT[agent.mode]}") + \
+        [[(f"  {tool:<7}", ""), ("runs without asking", "green") if ok else ("asks first", "yellow")] for tool, ok in free.items()] + \
+        notes("always allowed:" if agent.allow else "nothing is always allowed yet") + \
+        [[(f"  {n}  ", "dim"), (rule, "")] for n, rule in enumerate(agent.allow, 1)] + \
+        notes("change with /permissions ask | edits | auto · allow TOOL PATTERN · forget N")
+
+
+def cmd_think(agent, arg):
+    """/think: the model reasons before it replies, on or off"""
+    agent.think = not agent.think
+    save_config(think=agent.think)
+    return notes("thinking on: the model reasons first, out of each reply's token budget" if agent.think else "thinking off")
+
+
+def cmd_effort(agent, arg):
+    """/effort LEVEL sets how long a reply may be and how many steps a message gets; alone it says where that stands"""
+    if arg in EFFORT:
+        agent.set_effort(arg)
+        save_config(effort=arg)
+    return notes(f"effort {agent.effort}: replies up to {agent.max_out:,} tokens, {agent.steps} steps per message",
+                 "levels: low · medium · high")
+
+
+def cmd_compact(agent, arg):
+    """/compact: fold the conversation into a short summary, unless that would leave it no shorter"""
+    before, kept, forgotten = agent.used(), agent.msgs, agent.forgotten
+    folded = agent.compact() or agent.compact(everything=True)  # nothing older to fold: then the latest exchange as well
+    if folded and agent.used() >= before:  # a summary no shorter than what it replaces: leave the conversation be
+        agent.msgs, agent.forgotten, folded = kept, forgotten, 0
+    return notes(f"folded {folded} message{'s' * (folded != 1)} into a summary: {before:,} → {agent.used():,} tokens" if folded else
+                 "nothing to compact: the conversation is empty" if len(agent.msgs) < 2 else
+                 f"already as short as a summary would be: {before:,} tokens")
+
+
+def cmd_copy(agent, arg):
+    """/copy puts the last answer on the clipboard; /copy code the last code block, shown or written to a file;
+    /copy all the whole conversation"""
+    said = [m["content"] for m in agent.msgs if m["role"] == "assistant" and m["content"].strip()]
+    wrote = [c.body for m in agent.msgs for t in m.get("tool_calls", [])
+             for c in [from_args(t["function"].get("name"), t["function"].get("arguments"), 0, 0)] if c and c.tool == "write"]
+    blocks = re.findall(r"```[^\n]*\n(.*?)```", "\n".join(said), re.S)
+    if arg == "all" and len(agent.msgs) > 1:
+        text, what = transcript(agent), "the whole conversation"
+    elif arg == "code":
+        text, what = (blocks or wrote or [""])[-1], "the last code block"
+    else:
+        text, what = (said or [""])[-1], "the last answer"
+    if not text.strip():
+        return notes("nothing to copy yet")
+    return notes(f"copied {what} ({len(text):,} characters)" if clipboard(text) else
+                 "cannot copy: no clipboard tool found (pbcopy, wl-copy or xclip)")
+
+
+def cmd_export(agent, arg):
+    """/export FILE saves the conversation as markdown; with no name, as sprint-DATE-TIME.md in the working folder"""
+    path = os.path.expanduser(arg) if arg else time.strftime("sprint-%Y%m%d-%H%M%S.md")
+    try:
+        Path(path).write_text(transcript(agent) + "\n", encoding="utf-8")
+    except OSError as e:
+        return notes(f"cannot save there: {e}")
+    return notes(f"conversation saved to {path}")
+
+
+def cmd_log(agent, arg):
+    """/log: the last fifteen things noted in sprint.log, and where the whole of it is"""
+    try:
+        lines = [json.loads(x) for x in log_file().read_text(encoding="utf-8", errors="replace").splitlines()[-15:]]
+    except (OSError, ValueError):
+        lines = []
+    rows = [[(x.pop("t", "")[11:] + "  ", "dim"), (f"{x.pop('kind', ''):<8}", "bold"),
+             ("  ".join(str(v).replace("\n", " ")[:90] for v in x.values()), "red" if "error" in x else "")] for x in lines]
+    return (rows or notes("nothing logged yet")) + notes("full log: " + tilde(log_file()))
+
+
+def cmd_directory(agent, arg):
+    """/directory PATH moves sprint to that folder and keeps it among the recent ones; alone it says where sprint is"""
+    if arg:
+        path = os.path.abspath(os.path.expanduser(arg))
+        if not os.path.isdir(path):
+            return notes(f"cannot go there: {arg} is not a folder")
+        os.chdir(path)  # the file listing in the system prompt follows at the next message
+        save_config(recent=([path] + [p for p in load_config().get("recent", []) if p != path])[:6])
+    return notes("working in " + tilde(folder()))
+
+
+def cmd_plan(agent, arg):
+    """/plan: split each message into steps first, on or off"""
+    on = not load_config().get("plan", False)
+    save_config(plan=on)
+    return notes("plan mode on: each message is split into steps first" if on else "plan mode off")
+
+
+def cmd_race(agent, arg):
+    """/race MODEL MESSAGE: the message goes to this model and to that one; what each answered, and how fast"""
+    rival, _, task = arg.partition(" ")
+    if not task.strip():
+        return notes("race two models on one message: /race OTHER-MODEL your message")
+    rows = []
+    for r in race(agent, rival, task.strip()):
+        rows += [[(r["model"], "bold"), (f"   {r['seconds']:.1f}s · {r['rate']:.0f} tok/s · {r['steps']} tool calls", "dim")]]
+        rows += [[("  " + line, "")] for line in r["answer"].split("\n")] + [[]]
+    return rows
+
+
+def cmd_system(agent, arg):
+    """/systemprompt shows what the model is told at the start and which file changes it; /systemprompt reset drops yours"""
+    if arg == "reset":
+        agent.custom = ""
+        save_prompt("")
+        return notes("system prompt back to the default")
+    text = agent.custom or (SYSTEM_TOOLS if agent.tools else SYSTEM.split("\n", 1)[0])
+    return [[(line, "")] for line in text.split("\n")] + \
+        notes(f"{'yours' if agent.custom else 'the default'} · to change it edit {tilde(prompt_file())} · /systemprompt reset undoes it")
+
+
+def set_config(agent, key, value):
+    """/config KEY VALUE: check the value, hand it to the running agent and save it -> what is wrong with it, if anything"""
+    kind = SETTINGS[key]
+    if kind is int and not value.isdigit():
+        return f"{key} needs a number"
+    new = int(value) if kind is int else value.lower() in ("on", "true", "yes", "1") if kind is bool else value
+    if key == "mode" and new not in MODES or key == "effort" and new not in EFFORT or key == "ctx" and new < 1024:
+        return f"{key} cannot be {value}"
+    if key == "effort":
+        agent.set_effort(new)
+    elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout"):
+        setattr(agent, key, new)
+    if key in ("url", "model"):  # native tool calls on Ollama again, until this model refuses them
+        agent.tools = not v1(agent.url)
+    save_config(**{key: new})
+    return ""
+
+
+def cmd_config(agent, arg):
+    """/config lists the settings as they stand; /config KEY VALUE changes one first (the lists have commands of their own)"""
+    key, _, value = arg.partition(" ")
+    value = value.strip()
+    if key in SETTINGS and value and SETTINGS[key] is not list:
+        wrong = set_config(agent, key, value)
+        if wrong:
+            return notes(wrong)
+    kept = load_config()
+    now = {"model": agent.model, "url": agent.url, "ctx": agent.ctx, "steps": agent.steps, "mode": agent.mode,
+           "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
+           "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
+           "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout,
+           "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
+    return [[(f"  {k:<12}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
+        notes(f"change with /config KEY VALUE · kept in {tilde(CONFIG)}")
+
+
+# the three at the end need no function of their own: each is one call to something that already exists
+HANDLERS = {"/model": cmd_model, "/mode": cmd_mode, "/permissions": cmd_permissions, "/think": cmd_think, "/effort": cmd_effort,
+            "/compact": cmd_compact, "/copy": cmd_copy, "/export": cmd_export, "/log": cmd_log,
+            "/directory": cmd_directory, "/dir": cmd_directory, "/cd": cmd_directory, "/plan": cmd_plan, "/race": cmd_race,
+            "/systemprompt": cmd_system, "/system": cmd_system, "/config": cmd_config,
+            "/context": lambda agent, arg: context_rows(agent), "/usage": lambda agent, arg: usage_rows(agent),
+            "/update": lambda agent, arg: notes(fetch_update()[1])}
+
+
 def command(agent, line):
     """slash commands both front ends share -> rows of (text, colour) to show, or None if it is not one of them"""
     cmd, _, arg = line.partition(" ")
-    arg = arg.strip()
-    note = lambda *lines: [[(x, "dim")] for x in lines]
-    if cmd == "/permissions" and arg.split(" ")[0] in ("allow", "forget"):
-        verb, _, rest = arg.partition(" ")
-        if verb == "allow" and rest.partition(" ")[0] in ("shell", "write", "edit", "fetch") and rest.partition(" ")[2].strip():
-            agent.allow.append(rest.strip())
-        elif verb == "forget" and rest.strip().isdigit() and 0 < int(rest) <= len(agent.allow):
-            del agent.allow[int(rest) - 1]
-        else:
-            return note("cannot do that: /permissions allow shell git status*   or   /permissions forget 1")
-        save_config(allow=agent.allow)
-        return note("always allowed: " + (", ".join(agent.allow) or "nothing"))
-    if cmd == "/plan":
-        on = not load_config().get("plan", False)
-        save_config(plan=on)
-        return note("plan mode on: each message is split into steps first" if on else "plan mode off")
-    if cmd == "/race":
-        rival, _, task = arg.partition(" ")
-        if not task.strip():
-            return note("race two models on one message: /race OTHER-MODEL your message")
-        rows = []
-        for r in race(agent, rival, task.strip()):
-            rows += [[(r["model"], "bold"), (f"   {r['seconds']:.1f}s · {r['rate']:.0f} tok/s · {r['steps']} tool calls", "dim")]]
-            rows += [[("  " + line, "")] for line in r["answer"].split("\n")] + [[]]
-        return rows
-    if cmd in ("/mode", "/permissions"):
-        if arg in MODES:
-            agent.set_mode(arg)
-        elif cmd == "/mode":
-            agent.cycle()
-        if cmd == "/mode" or arg:
-            return note(f"{agent.mode}: {ABOUT[agent.mode]}")
-        free = {"read": True, "write": agent.mode != "ask", "edit": agent.mode != "ask",
-                "shell": agent.mode == "auto", "fetch": agent.mode == "auto"}
-        return note(f"mode {agent.mode}: {ABOUT[agent.mode]}") + \
-            [[(f"  {tool:<7}", ""), ("runs without asking", "green") if ok else ("asks first", "yellow")] for tool, ok in free.items()] + \
-            note("always allowed:" if agent.allow else "nothing is always allowed yet") + \
-            [[(f"  {n}  ", "dim"), (rule, "")] for n, rule in enumerate(agent.allow, 1)] + \
-            note("change with /permissions ask | edits | auto · allow TOOL PATTERN · forget N")
-    if cmd == "/think":
-        agent.think = not agent.think
-        save_config(think=agent.think)
-        return note("thinking on: the model reasons first, out of each reply's token budget" if agent.think else "thinking off")
-    if cmd == "/effort":
-        if arg in EFFORT:
-            agent.set_effort(arg)
-            save_config(effort=arg)
-        return note(f"effort {agent.effort}: replies up to {agent.max_out:,} tokens, {agent.steps} steps per message",
-                    "levels: low · medium · high")
-    if cmd == "/model":
-        if arg:
-            agent.model, agent.tools = arg, not agent.url.rstrip("/").endswith("/v1")
-            save_config(model=arg)
-            warm(agent.url, arg)
-            return note(f"model: {arg}")
-        try:
-            with urllib.request.urlopen(agent.url.rstrip("/") + "/api/tags", timeout=5) as r:
-                names = [m["name"] for m in json.load(r)["models"]]
-        except (OSError, ValueError, KeyError):
-            return note("cannot list models: is Ollama running?")
-        return note("installed models (switch with /model NAME):", *("  " + n + ("   ← current" if n == agent.model else "") for n in names))
-    if cmd == "/update":
-        return note(fetch_update()[1])
-    if cmd == "/compact":
-        before, kept, forgotten = agent.used(), agent.msgs, agent.forgotten
-        folded = agent.compact() or agent.compact(everything=True)  # nothing older to fold: then the latest exchange as well
-        if folded and agent.used() >= before:  # a summary no shorter than what it replaces: leave the conversation be
-            agent.msgs, agent.forgotten, folded = kept, forgotten, 0
-        return note(f"folded {folded} message{'s' * (folded != 1)} into a summary: {before:,} → {agent.used():,} tokens" if folded else
-                    "nothing to compact: the conversation is empty" if len(agent.msgs) < 2 else
-                    f"already as short as a summary would be: {before:,} tokens")
-    if cmd == "/context":
-        return context_rows(agent)
-    if cmd == "/usage":
-        return usage_rows(agent)
-    if cmd == "/export":
-        path = os.path.expanduser(arg) if arg else time.strftime("sprint-%Y%m%d-%H%M%S.md")
-        try:
-            Path(path).write_text(transcript(agent) + "\n", encoding="utf-8")
-        except OSError as e:
-            return note(f"cannot save there: {e}")
-        return note(f"conversation saved to {path}")
-    if cmd == "/copy":
-        answers = [m["content"] for m in agent.msgs if m["role"] == "assistant" and m["content"].strip()]
-        wrote = [c.body for m in agent.msgs for t in m.get("tool_calls", [])
-                 for c in [from_args(t["function"].get("name"), t["function"].get("arguments"), 0, 0)] if c and c.tool == "write"]
-        blocks = re.findall(r"```[^\n]*\n(.*?)```", "\n".join(answers), re.S)
-        text, what = (transcript(agent), "the whole conversation") if arg == "all" and len(agent.msgs) > 1 else \
-            ((blocks or wrote or [""])[-1], "the last code block") if arg == "code" else ((answers or [""])[-1], "the last answer")
-        if not text.strip():
-            return note("nothing to copy yet")
-        return note(f"copied {what} ({len(text):,} characters)" if clipboard(text) else
-                    "cannot copy: no clipboard tool found (pbcopy, wl-copy or xclip)")
-    if cmd == "/log":
-        try:
-            lines = [json.loads(x) for x in log_file().read_text(encoding="utf-8", errors="replace").splitlines()[-15:]]
-        except (OSError, ValueError):
-            lines = []
-        rows = [[(x.pop("t", "")[11:] + "  ", "dim"), (f"{x.pop('kind', ''):<8}", "bold"),
-                 ("  ".join(str(v).replace("\n", " ")[:90] for v in x.values()), "red" if "error" in x else "")] for x in lines]
-        return (rows or note("nothing logged yet")) + note("full log: " + str(log_file()).replace(str(Path.home()), "~", 1))
-    if cmd in ("/directory", "/dir", "/cd"):
-        if arg:
-            path = os.path.abspath(os.path.expanduser(arg))
-            if not os.path.isdir(path):
-                return note(f"cannot go there: {arg} is not a folder")
-            os.chdir(path)  # the file listing in the system prompt follows at the next message
-            save_config(recent=([path] + [p for p in load_config().get("recent", []) if p != path])[:6])
-        return note("working in " + folder().replace(str(Path.home()), "~", 1))
-    if cmd in ("/systemprompt", "/system"):
-        if arg == "reset":
-            agent.custom = ""
-            save_prompt("")
-            return note("system prompt back to the default")
-        text = agent.custom or (SYSTEM_TOOLS if agent.tools else SYSTEM.split("\n", 1)[0])
-        where = str(prompt_file()).replace(str(Path.home()), "~", 1)
-        return [[(line, "")] for line in text.split("\n")] + \
-            note(f"{'yours' if agent.custom else 'the default'} · to change it edit {where} · /systemprompt reset undoes it")
-    if cmd == "/config":
-        key, _, value = arg.partition(" ")
-        value = value.strip()
-        if key in SETTINGS and value and SETTINGS[key] is not list:
-            kind = SETTINGS[key]
-            if kind is int and not value.isdigit():
-                return note(f"{key} needs a number")
-            new = int(value) if kind is int else value.lower() in ("on", "true", "yes", "1") if kind is bool else value
-            if key == "mode" and new not in MODES or key == "effort" and new not in EFFORT or key == "ctx" and new < 1024:
-                return note(f"{key} cannot be {value}")
-            if key == "effort":
-                agent.set_effort(new)
-            elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout"):
-                setattr(agent, key, new)
-            agent.tools = agent.tools if key not in ("url", "model") else not agent.url.rstrip("/").endswith("/v1")
-            save_config(**{key: new})
-        kept = load_config()
-        now = {"model": agent.model, "url": agent.url, "ctx": agent.ctx, "steps": agent.steps, "mode": agent.mode,
-               "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
-               "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
-               "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout, "theme": kept.get("theme", "sprint"),
-               "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
-        return [[(f"  {k:<12}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
-            note(f"change with /config KEY VALUE · kept in {str(CONFIG).replace(str(Path.home()), '~', 1)}")
-    return None
+    handler = HANDLERS.get(cmd)
+    return handler(agent, arg.strip()) if handler else None
 
 
 def warm(url, model):
     """ask Ollama, in the background, to load the model now, so the first reply does not have to wait for it"""
-    if url.rstrip("/").endswith("/v1"):
+    if v1(url):
         return None
 
     def load():
@@ -1771,10 +1865,7 @@ def fetch_update(home=None):
         ok, out = done.returncode == 0, (done.stdout or "") + (done.stderr or "")
     except (OSError, subprocess.SubprocessError) as e:
         ok, out = False, str(e)
-    try:
-        update_file().unlink()  # look again for what is newest next time
-    except OSError:
-        pass
+    look_again()
     if not ok:
         return False, "the update did not go through: " + (out.strip().splitlines() or ["no reason given"])[-1][:200]
     try:
@@ -1796,15 +1887,20 @@ def update(home=None):
     except OSError:
         ok = False
     print("  done: start sprint again" if ok else "  the update did not go through; the command above is what was tried")
-    try:
-        update_file().unlink()  # look again for what is newest next time
-    except OSError:
-        pass
+    look_again()
     return 0 if ok else 1
 
 
 def update_file():
     return CONFIG.with_name("update.json")  # the newest version seen, and when sprint last looked
+
+
+def look_again():
+    """forget which version was last seen to be the newest, so that the next check asks afresh"""
+    try:
+        update_file().unlink()
+    except OSError:
+        pass
 
 
 def newer(a, b):
@@ -1841,6 +1937,102 @@ def check_update():
             pass
     return latest if newer(latest, VERSION) else ""
 
+
+# ---------- the plain session ----------
+# Line by line, for where there is no full screen: a pipe, a terminal without curses, or --plain.
+
+def show_rows(agent, rows):
+    """rows of (text, colour) spans, printed a row to a line"""
+    for row in rows:
+        for text, colour in row:
+            agent.say(text, ANSI[colour])
+        agent.say("\n")
+
+
+def plain_prompt(agent, rl, tty, draft, gap):
+    """ask for the next line at a prompt in the mode's colour -> what was typed. gap is written before the prompt;
+    draft is text to begin the line with (what was there when shift+tab changed the mode), which takes readline"""
+    on, off = (f"\033[1;{TINT[agent.mode]}m", "\033[0m") if tty else ("", "")
+    if on and rl:  # tell readline the colour codes take no room
+        on, off = f"\001{on}\002", f"\001{off}\002"
+    if rl:
+        rl.set_startup_hook((lambda d=draft: rl.insert_text(d)) if draft else None)
+    sys.stdout.write(gap)
+    try:
+        return input(f"{on}{agent.mode} ❯{off} ").strip()
+    finally:
+        if rl:
+            rl.set_startup_hook(None)  # or the draft would be typed into the next prompt too
+
+
+def plain_message(agent, text):
+    """send a message to the model, then say what it cost and how full the window is"""
+    say = agent.say
+    before, began = dict(agent.tally), time.time()
+    stop = (agent.run_plan if load_config().get("plan") else agent.run)(text)
+    say(f"  {stop}\n" if stop.startswith("stopped:") else "", "33")
+    say(f"  {agent.receipt(before, began)}\n", "2")
+    n = round(min(agent.used() / agent.ctx, 1) * 10)
+    speed = f" · {agent.rate:.0f} tok/s" if agent.rate else ""
+    say(f"  {'━' * n}{'─' * (10 - n)} {agent.used() * 100 // agent.ctx}% of {agent.ctx} ctx{speed}\n", "2")
+
+
+def plain_line(agent, text):
+    """act on one line: a slash command, a !command of your own, or else a message for the model"""
+    cmd = text.partition(" ")[0]
+    if cmd == "/clear":
+        agent.reset()
+        agent.say("  context cleared\n", "2")
+    elif (rows := command(agent, text)) is not None:
+        show_rows(agent, rows)
+    elif cmd.startswith("/"):  # not a command there is: list the ones there are
+        show_rows(agent, help_rows())
+    elif cmd.startswith("!") and text[1:].strip():
+        agent.bang(text[1:].strip())
+    elif cmd:
+        plain_message(agent, text)
+
+
+def plain_session(agent, first=""):
+    """the session itself: prompt, act on the line, again, until /bye or the end of input. first is a message to
+    start with, as if it had been typed at the first prompt"""
+    say, tty, rl, hotkey = agent.say, sys.stdout.isatty(), None, False
+    try:
+        import readline as rl
+        if tty and "libedit" not in (rl.__doc__ or ""):
+            rl.parse_and_bind(r'"\e[Z": "\C-a/~ \C-m"')  # shift+tab submits the line as "/~ <draft>"
+            hotkey = True
+    except ImportError:
+        pass
+    say("◆ sprint", "1;35")
+    say(f"  {agent.model} · {tilde(folder())}\n", "2")
+    say(f"  {'shift+tab' if hotkey else '/mode'} switches ask → edits → auto · /help for more\n", "2")
+    line, draft, gap = first, "", "\n"
+    while True:
+        if not line:
+            try:
+                line = plain_prompt(agent, rl, tty, draft, gap)
+            except (EOFError, KeyboardInterrupt):
+                return print()
+            draft, gap = "", "\n"
+        text, line = line, ""
+        cmd, _, arg = text.partition(" ")
+        try:
+            if cmd == "/~":  # shift+tab: next mode, prompt redrawn in place, typed text kept
+                agent.cycle()
+                draft, gap = arg, "\033[A\033[2K\r" if tty else ""
+                rl.remove_history_item(rl.get_current_history_length() - 1)
+            elif cmd in ("/bye", "/quit", "/exit"):
+                return
+            else:
+                plain_line(agent, text)
+        except KeyboardInterrupt:
+            say("\n  interrupted\n", "33")
+        except (RuntimeError, OSError) as e:
+            say(f"  {e}\n", "31")
+
+
+# ---------- starting: the command line, then a session ----------
 
 def cli(argv):
     """the words sprint takes besides a message: help, config, serve, update -> exit code, or None to carry on"""
@@ -1882,10 +2074,8 @@ def cli(argv):
     return 0
 
 
-def main():
-    done = cli(sys.argv[1:])
-    if done is not None:
-        return done
+def arguments():
+    """the options a session takes, read from the command line"""
     ap = argparse.ArgumentParser(prog="sprint", description=__doc__, epilog="sprint help lists the other commands: config, serve, update")
     ap.add_argument("task", nargs="*", help="optional first message")
     ap.add_argument("-m", "--model", help="model name (default: the one used last, else Qwen 3.5 0.8B Q4_K_M)")
@@ -1896,28 +2086,48 @@ def main():
                     help="ask: confirm every action (default) · edits: accept file edits · auto: run everything")
     ap.add_argument("-y", "--yes", action="store_true", help="same as --mode auto")
     ap.add_argument("--plain", action="store_true", help="line-by-line session instead of the full screen")
-    a = ap.parse_args()
-    if WINDOWS:
-        os.system("")  # switches on colour codes in the classic Windows console
-    saved = load_config()  # flags beat the environment, which beats saved settings
-    a.model = a.model or os.environ.get("SPRINT_MODEL") or saved.get("model", DEFAULT_MODEL)
-    a.url = a.url or os.environ.get("SPRINT_URL") or saved.get("url", "http://localhost:11434")
+    return ap.parse_args()
+
+
+def build_agent(a):
+    """the agent as this run asks for it: flags beat the environment, which beats saved settings"""
+    saved = load_config()
+    model = a.model or os.environ.get("SPRINT_MODEL") or saved.get("model", DEFAULT_MODEL)
+    url = a.url or os.environ.get("SPRINT_URL") or saved.get("url", "http://localhost:11434")
     effort = saved.get("effort", "medium") if saved.get("effort") in EFFORT else "medium"
-    agent = Agent(a.model, a.url, a.ctx or saved.get("ctx", 8192), a.steps or saved.get("steps", EFFORT[effort][1]),
+    agent = Agent(model, url, a.ctx or saved.get("ctx", 8192), a.steps or saved.get("steps", EFFORT[effort][1]),
                   "auto" if a.yes else a.mode or saved.get("mode", "ask"), os.environ.get("SPRINT_KEY", ""),
                   think=bool(saved.get("think")), effort=effort)
     agent.custom, agent.timeout, agent.allow = load_prompt(), saved.get("timeout", 60), list(saved.get("allow", []))
     agent.ask_timeout = saved.get("ask_timeout", 20)
-    warm(a.url, a.model)
+    return agent
+
+
+def get_ready(agent):
+    """before the session opens: ask for the model to be loaded, start a local model server that is not up, and
+    offer to pull a model that is not installed"""
+    warm(agent.url, agent.model)
     try:
-        ready = serve(a.url, agent.status)
+        ready = serve(agent.url, agent.status)
         agent.status("")
-        if ready and not a.url.rstrip("/").endswith("/v1") and not installed(a.url, a.model) and sys.stdin.isatty():
-            if input(f"  {a.model} is not installed - pull it now? [Y/n] ").strip().lower()[:1] in ("", "y"):
-                subprocess.run(["ollama", "pull", a.model],
-                               env={**os.environ, "OLLAMA_HOST": urllib.parse.urlparse(a.url).netloc})
+        if ready and not v1(agent.url) and not installed(agent.url, agent.model) and sys.stdin.isatty():
+            if input(f"  {agent.model} is not installed - pull it now? [Y/n] ").strip().lower()[:1] in ("", "y"):
+                subprocess.run(["ollama", "pull", agent.model],
+                               env={**os.environ, "OLLAMA_HOST": urllib.parse.urlparse(agent.url).netloc})
     except (OSError, ValueError, KeyboardInterrupt):
         pass  # the first message will report whatever is wrong
+
+
+def main():
+    """sprint as it is started: one of its own words (see cli), or else a session, full-screen where that can be had"""
+    done = cli(sys.argv[1:])
+    if done is not None:
+        return done
+    a = arguments()
+    if WINDOWS:
+        os.system("")  # switches on colour codes in the classic Windows console
+    agent = build_agent(a)
+    get_ready(agent)
     if sys.stdin.isatty() and sys.stdout.isatty() and not a.plain:
         try:
             import sprint_tui
@@ -1925,70 +2135,7 @@ def main():
         except ImportError:  # no curses here: fall through to the line-by-line session
             if WINDOWS:
                 print("for the full screen on Windows: pip install windows-curses")
-    say, tty, rl, hotkey = agent.say, sys.stdout.isatty(), None, False
-    try:
-        import readline as rl
-        if tty and "libedit" not in (rl.__doc__ or ""):
-            rl.parse_and_bind(r'"\e[Z": "\C-a/~ \C-m"')  # shift+tab submits the line as "/~ <draft>"
-            hotkey = True
-    except ImportError:
-        pass
-    say("◆ sprint", "1;35")
-    say(f"  {agent.model} · {folder().replace(str(Path.home()), '~', 1)}\n", "2")
-    say(f"  {'shift+tab' if hotkey else '/mode'} switches ask → edits → auto · /help for more\n", "2")
-    line, draft, gap = " ".join(a.task), "", "\n"
-    while True:
-        if not line:
-            on, off = (f"\033[1;{TINT[agent.mode]}m", "\033[0m") if tty else ("", "")
-            if on and rl:  # tell readline the colour codes take no room
-                on, off = f"\001{on}\002", f"\001{off}\002"
-            if rl:
-                rl.set_startup_hook((lambda d=draft: rl.insert_text(d)) if draft else None)
-            sys.stdout.write(gap)
-            try:
-                line = input(f"{on}{agent.mode} ❯{off} ").strip()
-            except (EOFError, KeyboardInterrupt):
-                return print()
-            finally:
-                if rl:
-                    rl.set_startup_hook(None)  # or the draft would be typed into the next prompt too
-            draft, gap = "", "\n"
-        cmd, _, arg = line.partition(" ")
-        line = ""
-        try:
-            if cmd == "/~":  # shift+tab: next mode, prompt redrawn in place, typed text kept
-                agent.cycle()
-                draft, gap = arg, "\033[A\033[2K\r" if tty else ""
-                rl.remove_history_item(rl.get_current_history_length() - 1)
-            elif cmd in ("/bye", "/quit", "/exit"):
-                return
-            elif cmd == "/clear":
-                agent.reset()
-                say("  context cleared\n", "2")
-            elif (rows := command(agent, cmd + _ + arg)) is not None:
-                for row in rows:
-                    for text, colour in row:
-                        say(text, ANSI[colour])
-                    say("\n")
-            elif cmd.startswith("/"):
-                for row in help_rows():
-                    for text, colour in row:
-                        say(text, ANSI[colour])
-                    say("\n")
-            elif cmd.startswith("!") and (cmd + _ + arg)[1:].strip():
-                agent.bang((cmd + _ + arg)[1:].strip())
-            elif cmd:
-                before, began = dict(agent.tally), time.time()
-                stop = (agent.run_plan if load_config().get("plan") else agent.run)(cmd + _ + arg)
-                say(f"  {stop}\n" if stop.startswith("stopped:") else "", "33")
-                say(f"  {agent.receipt(before, began)}\n", "2")
-                n = round(min(agent.used() / agent.ctx, 1) * 10)
-                speed = f" · {agent.rate:.0f} tok/s" if agent.rate else ""
-                say(f"  {'━' * n}{'─' * (10 - n)} {agent.used() * 100 // agent.ctx}% of {agent.ctx} ctx{speed}\n", "2")
-        except KeyboardInterrupt:
-            say("\n  interrupted\n", "33")
-        except (RuntimeError, OSError) as e:
-            say(f"  {e}\n", "31")
+    return plain_session(agent, " ".join(a.task))
 
 
 if __name__ == "__main__":
