@@ -53,7 +53,10 @@ HELP = [("In a message", [("@path", "attach that file; tab completes the name"),
                   ("ctrl+y", "copy the last answer"),
                   ("ctrl+l", "clear the conversation"),
                   ("ctrl+c twice", "quit")]),
-        ("Mouse", [("wheel", "scroll the conversation"),
+        ("When the model asks you", [("type, then enter", "your answer; it waits a minute, then the model decides"),
+                                     ("up  down, then enter", "take one of the choices it gave"),
+                                     ("esc", "leave it to the model")]),
+        ("Mouse", [("wheel", "scroll what it is over: the conversation, or a side panel's list"),
                    ("drag over text", "copy it"),
                    ("click a tool window", "open or close just that one"),
                    ("click a message", "jump to it; so does a line under Activity"),
@@ -122,10 +125,11 @@ def dash(t=None):
 
 def glint(text, t=None):
     """the words that say what is happening, as spans: bold, and every few seconds a glint of colour crosses them
-    from the left, each time in the next colour, as it does the wordmark. t in seconds; None holds them plain"""
+    from the left, as one does the wordmark, in the colour the runner beside them has as it sets off. t in seconds;
+    None holds them plain"""
     turn, into = divmod(t, GLINT_EVERY_PASS) if t is not None else (0, GLINT_EVERY_PASS)
     front = int(into / GLINT_PASS * (len(text) + GLINT_LETTERS))  # the letter the glint has reached; past the end, it rests
-    hue, spans = HUES[int(turn) % 3] + ".bold", []
+    hue, spans = HUES[round(turn * GLINT_EVERY_PASS / LAP) % 3] + ".bold", []
     for i, ch in enumerate(text):
         role = hue if 0 <= front - i < GLINT_LETTERS else "bold"
         spans[-1:] = [(spans[-1][0] + ch, role)] if spans and spans[-1][1] == role else spans[-1:] + [(ch, role)]

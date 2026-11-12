@@ -113,14 +113,16 @@ def spread(spans):
     return [(ch, role) for text, role in spans for ch in text]
 
 
-def test_between_passes_the_words_rest_and_each_pass_is_in_the_next_colour():
+def test_between_passes_the_words_rest_and_each_pass_is_in_the_runners_colour():
     word = "thinking"
     assert tui.glint(word, tui.GLINT_PASS + 0.1) == [(word, "bold")]  # crossed, and resting
     hue = lambda n: {role for _, role in tui.glint(word, n * tui.GLINT_EVERY_PASS + 0.2 * tui.GLINT_PASS)} - {"bold"}
-    hues = [hue(n) for n in range(4)]
+    hues = [hue(n) for n in range(7)]
     assert all(len(h) == 1 for h in hues)
     names = [h.pop().split(".")[0] for h in hues]
-    assert names[:3] == list(tui.HUES) and names[3] == names[0]
+    runner = lambda t: next(role for _, role in tui.dash(t) if role != "ghost").split(".")[0]
+    assert names == [runner(n * tui.GLINT_EVERY_PASS + 0.2 * tui.GLINT_PASS) for n in range(7)]  # one colour on the line at a time
+    assert set(names) == set(tui.HUES) and names[3] == names[0]  # and all three take their turn
     assert all(role == "bold" or role.endswith(".bold") for _, role in tui.glint(word, 0.2))  # lit letters stay bold
 
 

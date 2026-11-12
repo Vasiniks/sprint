@@ -20,7 +20,7 @@ def test_help_is_a_list_in_sections_with_every_command_on_its_own_line():
     p = s.popup
     assert p["title"] == "Help" and p["field"]["filter"]
     heads = [flat(r["s"]) for r in rows(s) if r["v"] is None and flat(r["s"]).strip()]
-    assert heads == ["In a message", "Keys", "Mouse", "Commands"]
+    assert heads == ["In a message", "Keys", "When the model asks you", "Mouse", "Commands"]
     assert all(r["s"][0][1] == "title" for r in rows(s) if r["v"] is None and flat(r["s"]).strip())
     text = "\n".join(flat(r["s"]) for r in rows(s))
     for name, about in tui.COMMANDS:
