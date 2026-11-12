@@ -119,9 +119,9 @@ def test_an_ask_with_no_question_in_it_is_an_error_and_nobody_is_bothered():
 
 def test_where_there_is_nobody_to_ask_the_model_is_told_at_once(monkeypatch):
     a = Agent(chat=scripted(ASK, "Grey."), out=io.StringIO(), mode="auto")
-    began = time.time()
+    began = time.monotonic()
     assert a.run("style the button") == "Grey."  # (under test the input is no terminal)
-    assert time.time() - began < 2 and "no answer" in told(a).lower()
+    assert time.monotonic() - began < 2 and "no answer" in told(a).lower()
 
 
 # ---------- with reasoning, native tool calls and plan mode ----------
@@ -307,8 +307,8 @@ def test_the_plain_terminal_shows_the_question_as_a_question():
 def test_a_typed_line_is_waited_for_only_so_long(monkeypatch):
     r, w = os.pipe()
     monkeypatch.setattr(sys, "stdin", os.fdopen(r))
-    began = time.time()
-    assert sprint.timed_line(0.3) is None and 0.25 <= time.time() - began < 2
+    began = time.monotonic()
+    assert sprint.timed_line(0.3) is None and 0.25 <= time.monotonic() - began < 2
     threading.Timer(0.2, lambda: os.write(w, b"teal\n")).start()
     assert sprint.timed_line(3) == "teal"
     os.write(w, b"at once\n")

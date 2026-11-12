@@ -645,7 +645,7 @@ class Screen:
         self.buf, self.cur, self.past, self.at, self.pick = "", 0, [], 0, 0  # input line, cursor, history, popup row
         self.scroll, self.page, self.hits = 0, 10, {}
         self.pending, self.answer, self.gate = None, None, threading.Event()  # a tool call waiting for approval
-        self.deadline = None  # when the question stops waiting for you and the call is set aside
+        self.deadline = None  # when the wait for you runs out, counted (time.monotonic) so a change of the clock cannot end it
         self.asking, self.draft = None, None  # a question of the model's that waits for your answer; what you were typing when it came
         self.worker, self.models, self.quit, self.colors = None, None, False, False
         self.mouse_on, self.drag, self.jump, self.geo = True, None, None, (0, 0, 0)  # geo: screen, list and sidebar widths
@@ -841,9 +841,9 @@ class Screen:
         self.gate.clear()
         self.pending, self.choice = call, 0  # every question starts on "once"
         limit = self.agent.ask_timeout
-        self.deadline = time.time() + limit if limit else None
+        self.deadline = time.monotonic() + limit if limit else None
         while not self.gate.wait(0.05):
-            if self.deadline and time.time() >= self.deadline:
+            if self.deadline and time.monotonic() >= self.deadline:
                 break
         answered, self.pending, self.deadline = self.gate.is_set(), None, None
         if not answered:
@@ -865,9 +865,9 @@ class Screen:
         # seen: what was written on that row when the screen last looked; cut: is it too long to stand whole in the bar?
         q = self.asking = {"q": text, "options": list(options), "at": 0, "seen": "", "cut": False}
         limit = self.agent.question_timeout
-        self.deadline = time.time() + limit if limit else None
+        self.deadline = time.monotonic() + limit if limit else None
         while not self.gate.wait(0.05):
-            if self.deadline and time.time() >= self.deadline:
+            if self.deadline and time.monotonic() >= self.deadline:
                 break
         answered, self.deadline = self.gate.is_set(), None
         if self.asking is q:
@@ -1182,7 +1182,7 @@ class Screen:
             self.leave, self.toast = 0.0, ("", 0.0) if self.toast[1] == self.leave else self.toast
         q = self.asked()
         if q and self.deadline:
-            self.deadline = time.time() + self.agent.question_timeout  # you are there: the wait starts again
+            self.deadline = time.monotonic() + self.agent.question_timeout  # you are there: the wait starts again
         if self.pending:  # only the approval keys count while a call waits
             return self.answer_key(k)
         if self.popup:
@@ -1253,7 +1253,7 @@ class Screen:
         """a key while a call waits for your say-so: move the highlighted answer, take it, or give one by its letter"""
         can = [text[0] for text in self.choices()]
         if self.deadline:
-            self.deadline = time.time() + self.agent.ask_timeout  # you are there: the wait starts again
+            self.deadline = time.monotonic() + self.agent.ask_timeout  # you are there: the wait starts again
         if k in (curses.KEY_LEFT, curses.KEY_RIGHT, "\t", curses.KEY_BTAB):  # move the highlighted choice
             self.choice = (self.choice + (1 if k in (curses.KEY_RIGHT, "\t") else -1)) % len(can)
             return
@@ -2142,7 +2142,7 @@ class Screen:
         """what sits under the bar: the mode's icon and name, and how to change it; or that this line is a command"""
         mode, held = self.agent.mode, len(self.agent.parked)
         if self.asking:  # the model's question: whose turn it is, and how long it still waits before the model goes on
-            left = [(f"  waits {max(0, round(self.deadline - time.time()))}s", "dim")] if self.deadline else []
+            left = [(f"  waits {max(0, round(self.deadline - time.monotonic()))}s", "dim")] if self.deadline else []
             return [("?", mode), (" asking you", mode)] + left
         if self.buf.startswith("!") and not self.pending:
             return [("!", "shell"), (" shell", "shell"), (" (runs it yourself, no model)", "dim")]
@@ -2222,7 +2222,7 @@ class Screen:
                 keys += [(f" {text} ", "chosen")] if n == self.choice else [(" " + text[0], "bold"), (text[1:] + " ", "dim")]
                 keys += [("  ", "")]
             if self.deadline:  # how long the question still waits before the call is set aside
-                keys += [(f"waits {max(0, round(self.deadline - time.time()))}s   ", "dim")]
+                keys += [(f"waits {max(0, round(self.deadline - time.monotonic()))}s   ", "dim")]
             keys += [("←→", "bold"), (" move  ", "dim"), ("enter", "bold"), (" choose  ", "dim"), ("esc", "bold"), (" stop", "dim")]
             kind = sprint.guarded(c)  # why this one is asked whatever the mode
             why = [("  " + {"own": "deletes this very folder", "outside": "deletes outside this folder",

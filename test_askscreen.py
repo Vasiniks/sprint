@@ -248,9 +248,26 @@ def test_a_question_nobody_answers_gives_up_after_the_wait():
     s.agent.question_timeout = 0.3
     call = sprint.parse(ASK)
     s.show_call(call)
-    began = time.time()
-    assert s.question("Which colour should the button be?") is None and 0.25 <= time.time() - began < 2
+    began = time.monotonic()
+    assert s.question("Which colour should the button be?") is None and 0.25 <= time.monotonic() - began < 2
     assert s.asking is None and s.deadline is None
+
+
+def test_the_computers_clock_being_changed_does_not_cut_the_wait_short(monkeypatch):
+    s = screen()
+    s.items.append({"t": "user", "text": "style the button"})
+    t, got = put(s)
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + 3600)  # the clock is put on an hour (a sync, a change of zone)
+    time.sleep(0.2)
+    assert got == [] and s.asking  # still waiting: the minute is counted, not read off the clock
+    text = "\n".join(drawn(s))
+    assert "waits 60s" in text or "waits 59s" in text
+    s.key("x")  # and a key starts the same minute again
+    time.sleep(0.2)
+    assert got == [] and s.asking
+    s.interrupt()
+    t.join(2)
 
 
 def test_any_key_starts_the_wait_again():
@@ -283,9 +300,9 @@ def test_the_wait_is_the_questions_own_setting_not_the_approvals():
     s = screen()
     s.agent.ask_timeout, s.agent.question_timeout = 5, 60
     t, got = put(s)
-    assert 55 < s.deadline - time.time() <= 60
+    assert 55 < s.deadline - time.monotonic() <= 60
     s.key("x")
-    assert 55 < s.deadline - time.time() <= 60
+    assert 55 < s.deadline - time.monotonic() <= 60
     s.interrupt()
     t.join(2)
 
