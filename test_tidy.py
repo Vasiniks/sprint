@@ -75,3 +75,99 @@ def test_the_mode_key_typed_by_hand_does_not_bring_the_plain_session_down(monkey
     a = agent(mode="ask")
     sprint.plain_session(a)  # no history entry to take back: must not raise
     assert a.mode == "edits"
+
+
+# ---------- found in the screen while it was being tidied ----------
+
+import threading
+
+import sprint_tui as tui
+from sprint_tui import Screen
+
+
+def held():
+    """a screen whose model waits until it is let go, and the list of what it was sent"""
+    go, sent = threading.Event(), []
+
+    def chat(msgs):
+        sent.append(msgs[-1]["content"])
+        go.wait(5)
+        yield "ok"
+
+    return Screen(Agent(chat=chat, out=io.StringIO(), mode="auto")), go, sent
+
+
+def test_a_queued_message_keeps_what_was_pasted_into_it():
+    """sending one message threw away every paste and attachment, those of messages still waiting too: the model got
+    the label, [Pasted #1 +5 lines], and never the text"""
+    s, go, sent = held()
+    s.submit("first")
+    s.paste("one\ntwo\nthree\nfour\nfive")
+    label = s.buf.strip()
+    s.buf = f"how long is {label} ?"
+    s.cur = len(s.buf)
+    s.key("\r")  # enter while the first is still being answered: it waits in the queue
+    assert s.queue == [f"how long is {label} ?"] and label in s.pastes
+    s.queue.insert(0, "second")  # and something goes out before it
+    go.set()
+    s.worker.join(5)
+    s.advance()
+    s.worker.join(5)
+    assert label in s.pastes  # still there for the message it belongs to
+    go.set()
+    s.worker.join(5)
+    s.advance()  # the queue's turn
+    s.worker.join(5)
+    assert "one\ntwo\nthree\nfour\nfive" in sent[-1] and "[Pasted" not in sent[-1]
+    assert s.pastes == {}  # and gone once it has gone out
+
+
+def test_a_new_paste_never_takes_the_number_of_one_still_waiting():
+    s, go, sent = held()
+    s.paste("a\nb\nc\nd")
+    one = s.buf.strip()
+    s.buf = ""
+    s.paste("e\nf\ng\nh")
+    two = s.buf.strip()
+    assert one != two
+    s.pastes.pop(one)  # the first has gone out
+    s.buf = ""
+    s.paste("i\nj\nk\nl")
+    assert s.buf.strip() not in (one, two) and len(s.pastes) == 2
+    go.set()
+
+
+def test_a_paste_in_a_command_of_your_own_is_run_with_its_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ran = []
+    monkeypatch.setattr(tui.sprint.Agent, "bang", lambda self, cmd: ran.append(cmd) or "")
+    s = Screen(Agent(chat=scripted(), out=io.StringIO()))
+    s.paste("echo one\necho two\necho three\necho four")
+    s.submit("!" + s.buf.strip())
+    s.worker.join(5)
+    assert ran and "echo one\necho two" in ran[0] and "[Pasted" not in ran[0]
+
+
+def test_a_question_that_goes_away_mid_frame_does_not_bring_the_screen_down():
+    """the wait for an answer ends on the agent's thread; the screen may be half way through drawing the question"""
+    s = Screen(Agent(chat=scripted(), out=io.StringIO()))
+    s.pending = None
+    assert len(s.choices()) == 3
+    s.answer_key("y")  # a key that arrives just as the question is withdrawn
+
+    class Once:  # there when asked whether, gone when read again
+        def __init__(self):
+            self.reads = 0
+
+        def __get__(self, obj, kind):
+            self.reads += 1
+            return tui.sprint.Call("shell", "", "ls", 0, 0) if self.reads == 1 else None
+
+        def __set__(self, obj, value):
+            pass
+
+    class Flaky(Screen):
+        pending = Once()
+
+    f = Flaky(Agent(chat=scripted(), out=io.StringIO()))
+    f.input_rows(80)  # must not raise

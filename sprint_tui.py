@@ -516,6 +516,12 @@ def size(n):
     return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
 
 
+def next_number(labels, kind):
+    """the number for a new chip of this kind: one past the highest in use, so it can never be mistaken for one that
+    is still waiting in a queued message"""
+    return 1 + max((int(m.group(1)) for m in (re.match(r"\[" + kind + r" #(\d+)", label) for label in labels) if m), default=0)
+
+
 def row(spans, value=None, keep=False):
     """one line of a popup. value None: only shown, cannot be chosen. keep: stays when the list is filtered"""
     return {"s": spans if isinstance(spans, list) else [(spans, "")], "v": value, "keep": keep}
@@ -783,8 +789,8 @@ class Screen:
 
     def choices(self):
         """what the question can be answered with, its key first. A deletion can be allowed once, never for ever"""
-        c = self.pending
-        return ("y once", "n no") if sprint.guarded(c) else ("y once", "a always this", "n no")
+        c = self.pending  # (read once: the wait for an answer ends on the agent's thread, and may end right now)
+        return ("y once", "n no") if c and sprint.guarded(c) else ("y once", "a always this", "n no")
 
     def ask(self, call):
         """put a call to you. A question nobody answers must not hold the work up: after the wait (20 seconds unless
@@ -984,10 +990,14 @@ class Screen:
         if line.startswith("!") and not mine:
             return  # a ! with nothing after it
         line = full = line if mine else self.chipify(line)
-        chips, self.chips = {label: path for label, path in self.chips.items() if label in line}, {}
-        for label, text in self.pastes.items():  # the screen keeps the chip; the model gets what was pasted
-            full = full.replace(label, sprint.clip(text, self.agent.cap * 2))
-        self.pastes = {}
+        chips = {label: path for label, path in self.chips.items() if label in line}
+        for label in [label for label in self.pastes if label in line]:  # the screen keeps the chip; the model gets what was pasted
+            full = full.replace(label, sprint.clip(self.pastes[label], self.agent.cap * 2))
+        mine = full[1:].strip() if mine else ""  # (a command of your own is run with what was pasted into it, too)
+        # what was attached to a message still typed or still queued stays for it; the rest has gone out, or was deleted
+        waiting = lambda label: label in self.buf or any(label in queued for queued in self.queue)
+        self.chips = {label: path for label, path in self.chips.items() if waiting(label)}
+        self.pastes = {label: text for label, text in self.pastes.items() if waiting(label)}
         self.items.append({"t": "user", "text": line})
         self.began, self.got, self.down = time.time(), 0, False
         self.worker = threading.Thread(target=self.bang if mine else self.work, args=(mine,) if mine else (full, chips), daemon=True)
@@ -1208,7 +1218,7 @@ class Screen:
 
     def chip(self, path):
         kind = sprint.kind_of(path)
-        label = f"[{kind} #{1 + sum(1 for known in self.chips if known.startswith('[' + kind + ' #'))}]"
+        label = f"[{kind} #{next_number(self.chips, kind)}]"
         self.chips[label] = path
         return label
 
@@ -1232,7 +1242,7 @@ class Screen:
         if files:
             self.insert("".join(self.chip(p) + " " for p in files))
         elif text.count("\n") >= 3 or len(text) > 600:  # too much to show on the prompt line
-            lines, n = text.count("\n") + 1, len(self.pastes) + 1
+            lines, n = text.count("\n") + 1, next_number(self.pastes, "Pasted")
             label = f"[Pasted #{n} +{lines} lines]" if lines > 1 else f"[Pasted #{n} {len(text):,} chars]"
             self.pastes[label] = text
             self.insert(label + " ")
@@ -2034,8 +2044,8 @@ class Screen:
         right = f" {short(a.model)}" + ("" if side else f" · {used}%") + " "
         rule = [("─" * max(0, bw - len(right) - 2), line_role), (right, "dim"), ("──", line_role)]
         foot = [("─" * bw, line_role)]
-        if self.pending:
-            c = self.pending
+        c = self.pending  # read once, for the same reason as in choices
+        if c:
             what = c.body.split("\n")[0] if c.tool == "shell" else c.arg
             keys = [("  ", "")]
             for n, text in enumerate(self.choices()):  # the highlighted one is what enter takes
