@@ -111,6 +111,28 @@ def test_an_empty_answer_leaves_it_to_the_model():
     assert "leaves this to you" in told(a) and "The user answered" not in told(a)
 
 
+def test_your_own_question_asked_back_is_not_put_to_you():
+    """magi 1.2 2B, asked "what is 17 times 23?", used the ask tool to ask you "What is 17 times 23?": in 17 of 36
+    everyday questions it handed the question back like that. It is told to answer instead, and you are not bothered"""
+    for said, back in (("what is 17 times 23?", "What is 17 times 23?"),
+                       ("what does newton's second law say?", "What does Newton's second law of motion say?"),
+                       ("what is 3/4 + 2/3? give it as a fraction", "What is 3/4 + 2/3?"),
+                       ("a train leaves at 2:15 pm and the trip takes 3 hours 50 minutes. when does it arrive?", "When does the train arrive?"),
+                       ("how do you say 'good morning' in Spanish?", "how do you say 'good morning' in Spanish?")):
+        a = asker(f"```ask\n{back}\n```", "391.")
+        assert a.run(said) == "391." and a.put == [], said
+        assert "their own question" in told(a) and "Answer it yourself" in told(a)
+
+
+def test_a_question_of_its_own_about_your_message_still_reaches_you():
+    for said, asks in (("style the button", "Which colour should the button be?"),
+                       ("what is the area of my room?", "How long and how wide is the room?"),
+                       ("make me a website for my bakery", "What is the bakery called?")):
+        a = asker(f"```ask\n{asks}\n```", "Done.")
+        a.run(said)
+        assert [q for q, _ in a.put] == [asks], said
+
+
 def test_an_ask_with_no_question_in_it_is_an_error_and_nobody_is_bothered():
     a = asker("```ask\n```", "ok")
     a.run("style the button")

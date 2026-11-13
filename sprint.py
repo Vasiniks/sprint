@@ -4,6 +4,7 @@ import argparse
 import base64
 import collections
 import datetime
+import difflib
 import fnmatch
 import glob
 import html
@@ -735,6 +736,18 @@ SPIN = "You are repeating yourself. If the task is done, say so in plain words. 
 # Said to a model that calls tools, while the to-do list is on offer. A small model heeds a line here far more than a
 # tool's own description: with the description alone, magi 1.2 2B never once reached for the list
 LISTS = "\nBefore a big job with several files or parts, call todowrite first to list the steps. Small jobs and questions need no list."
+# A message that asks for something to be made or changed. Only such a message is offered the to-do list: left the
+# choice, magi 1.2 2B wrote a list for "what is 17 times 23?" and went round in circles rewriting it
+JOB = re.compile(r"\b(make|build|create|write|rewrite|add|implement|fix|refactor|generate|design|develop|convert|port|migrate|"
+                 r"update|change|rename|redesign|set ?up)\b", re.I)
+
+
+def echoes(question, said):
+    """is the model's question for the user only the user's own message, handed back?"""
+    words = lambda text: " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+    q, s = words(question), words(said)
+    mine = set(q.split())  # (said in other words it is still the same question: nearly all its words are the user's)
+    return bool(q) and (q in s or difflib.SequenceMatcher(None, q, s).ratio() >= 0.75 or len(mine & set(s.split())) >= 0.8 * len(mine))
 
 
 class Agent:
@@ -750,6 +763,7 @@ class Agent:
         self.parked, self.passes = [], []        # calls set aside unanswered; (tool, target) you have since allowed, once
         self.questions, self.question_timeout = True, 60  # may the model ask you things? seconds its question waits (0: for ever)
         self.planning = PLANNING                 # may it keep a to-do list for a big job? (/plan)
+        self.job = True                          # does the message in hand ask for something to be made or changed?
         self.allow = []                          # calls that never ask: "shell git status*", "write notes/*", ...
         self.rate, self.took = 0.0, 0.0          # tokens a second in the last reply, and how long it took
         self.tally, self.unsaved, self.started = blank(), blank(), time.time()  # this session's use; the part not yet on disk
@@ -867,8 +881,8 @@ class Agent:
         if self.custom:  # your own prompt; a model without tool calls still needs the block format spelled out
             base = self.custom if self.tools else self.custom + "\n" + SYSTEM.split("\n", 1)[1]
         base = base if self.questions else base.replace(ASK_BLOCK, "")
-        base = base if self.planning else base.replace(TODO_BLOCK, "")
-        base += LISTS if self.planning and self.tools else ""
+        base = base if self.lists else base.replace(TODO_BLOCK, "")
+        base += LISTS if self.lists and self.tools else ""
         shell_note = f"\nThis is Windows: shell commands run in {'Git Bash' if bash_path() else 'PowerShell'}." if WINDOWS else ""
         return base + shell_note + "\n" + here()
 
@@ -877,7 +891,13 @@ class Agent:
 
     def extra(self):
         """prompt chars the server adds on top of the messages: the tool schemas"""
-        return len(json.dumps(tools(self.questions, self.planning))) if self.tools else 0
+        return len(json.dumps(tools(self.questions, self.lists))) if self.tools else 0
+
+    @property
+    def lists(self):
+        """is the to-do list on offer for the message in hand? With /plan on, and then only for a message that asks
+        for something to be made or changed, or while a list has work left on it"""
+        return self.planning and self.job
 
     def say(self, s, style=""):
         if s:
@@ -941,6 +961,9 @@ class Agent:
         text, options = question_parts(c.body)
         if not text:
             return "error: ask needs the question inside the block"
+        yours = next((m["content"] for m in reversed(self.msgs) if m.get("human") and not m.get("summary")), "")
+        if not options and echoes(text, yours):  # a small model hands your question back to you instead of answering it
+            return "The user leaves this to you: that is their own question, asked back. Answer it yourself."
         answer = self.question(text, options)
         if answer is None:
             wait = f" within {self.question_timeout:g} seconds" if self.question_timeout else ""
@@ -998,7 +1021,7 @@ class Agent:
             body.update(options={"num_ctx": self.ctx, "num_predict": self.limit or self.max_out, **self.sampling},
                         think=self.effort if self.think else False, keep_alive="30m")
             if self.tools:
-                body["tools"] = tools(self.questions, self.planning)
+                body["tools"] = tools(self.questions, self.lists)
         else:  # (of the sampling settings, such a server is sent the ones every one of them knows)
             body.update(max_tokens=self.limit or self.max_out, stream_options={"include_usage": True},
                         **{k: v for k, v in self.sampling.items() if k in OPENAI})
@@ -1257,15 +1280,17 @@ class Agent:
             self.unsaved = blank()
 
     def _run(self, task, chips=None):
-        self.msgs[0]["content"] = self.system()  # refresh the file listing
+        if not any(state in OPEN for _, state in self.todos):
+            self.todos = []  # a list with nothing left on it was the last job's: it is put away
+        self.job = bool(self.todos or JOB.search(task))  # only a job, or a list with work left, has the list on offer
+        acting = bool(JOB.search(task) or re.search(r"\bsave\b", task, re.I))  # code shown in answer to a question is the answer
+        self.msgs[0]["content"] = self.system()  # refresh the file listing, and say what is on offer for this message
         self.cancel = False
         log("message", text=task[:300], model=self.model, mode=self.mode, cwd=folder())
         text, images = attach(task, self.cap, chips)
         self.reply(None, text, human=True)
         if images:
             self.msgs[-1].setdefault("images", []).extend(images)
-        if not any(state in OPEN for _, state in self.todos):
-            self.todos = []  # a list with nothing left on it was the last job's: it is put away
         last, seen, spins, empties, nudged, cuts, said, wrote, failed, reminded = None, set(), 0, 0, False, 0, [], None, None, False
         left = spare = self.steps  # bringing its list up to date costs a message none of its steps, up to as many again
         while left > 0:
@@ -1290,7 +1315,7 @@ class Agent:
                 if empties > 2:
                     return "stopped: the model keeps sending empty replies"
                 self.reply(text, "Empty reply. " + NEXT)
-            elif call is None and "```" in text and not nudged and last is None:  # showed code instead of acting
+            elif call is None and "```" in text and not nudged and last is None and acting:  # showed code instead of acting
                 nudged = True
                 self.reply(text, "That code was only shown: it was not saved or run. "
                                  "Use write to save it to a file. If you are finished, just say so.")
@@ -2181,7 +2206,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
-VERSION = "0.4.18"  # the same as in pyproject.toml
+VERSION = "0.4.19"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),

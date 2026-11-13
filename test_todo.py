@@ -217,6 +217,54 @@ def test_folding_the_conversation_keeps_the_list_in_front_of_the_model():
     assert "Todos updated" not in summary  # (the calls themselves are not listed: the list as it stands says it all)
 
 
+# ---------- a question is not a job ----------
+
+def offered(monkeypatch, said, before=()):
+    """what tools and what system prompt the request for this message carries (after these earlier replies)"""
+    a = Agent(model="tiny", url="http://localhost:11434", out=io.StringIO(), mode="auto")
+    for todos in before:
+        a.todos = todos
+    sent = fake_urlopen(monkeypatch, DONE)
+    a.run(said)
+    return [t["function"]["name"] for t in sent["body"]["tools"]], sent["body"]["messages"][0]["content"]
+
+
+def test_a_plain_question_is_not_offered_the_list_at_all(monkeypatch):
+    """magi 1.2 2B, asked what 17 times 23 is, wrote a to-do list for it; in a conversation about derivatives it
+    rewrote its list until it was stopped. A message that asks for nothing to be made or changed gets no list tool"""
+    for said in ("what is 17 times 23?", "why is the sky blue?", "evaluate both derivatives at x = 2", "hi there",
+                 "what does count.py do?", "how many days are in a leap year?", "thanks, that works"):
+        names, system = offered(monkeypatch, said)
+        assert "todowrite" not in names and "todowrite" not in system, said
+        assert names[:5] == ["shell", "read", "write", "edit", "fetch"]  # the rest is as ever
+
+
+def test_a_message_that_asks_for_something_to_be_made_or_changed_is_offered_it(monkeypatch):
+    for said in ("make me a website for my bakery", "can you build a portfolio site with four pages?", "Fix the bug in stats.py",
+                 "add a --verbose flag to cli.py and mention it in the README", "refactor utils.py into three modules",
+                 "write a snake game in python", "please create a landing page", "set up a small flask app", "rename load to load_config"):
+        names, system = offered(monkeypatch, said)
+        assert "todowrite" in names and "todowrite first" in system, said
+
+
+def test_with_work_left_on_the_list_it_stays_on_offer_whatever_you_say(monkeypatch):
+    open_list = [("Write a.txt", "completed"), ("Write b.txt", "pending")]
+    for said in ("continue", "why did you stop?", "ok go on"):
+        names, _ = offered(monkeypatch, said, before=[open_list])
+        assert "todowrite" in names, said
+    names, _ = offered(monkeypatch, "what is 2 + 2?", before=[[("Write a.txt", "completed")]])  # a finished one is put away
+    assert "todowrite" not in names
+
+
+def test_the_window_is_counted_for_the_message_in_hand(monkeypatch):
+    a = Agent(model="tiny", url="http://localhost:11434", out=io.StringIO(), mode="auto")
+    fake_urlopen(monkeypatch, DONE)
+    a.run("make me a website for my bakery")
+    job = a.extra()
+    a.run("what is 2 + 2?")
+    assert a.extra() < job
+
+
 # ---------- what the model is offered ----------
 
 def names(a):
