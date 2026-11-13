@@ -85,7 +85,7 @@ def test_the_bar_has_the_model_on_its_top_rule_and_the_mode_on_its_bottom_rule()
     rows, _ = s.input_rows(60, used=7)
     top, prompt, bottom = rows
     assert len(flat(top)) == len(flat(bottom)) == 60 and set(flat(top)[:20]) == {"─"}
-    assert "Qwen3.5-0.8B" in flat(top) and "7%" in flat(top) and "edits" not in flat(top)
+    assert "magi-1.2-2B" in flat(top) and "7%" in flat(top) and "edits" not in flat(top)
     assert set(flat(bottom)) == {"─"} and "edits" not in flat(bottom)  # a plain rule: the mode sits under it
 
 
@@ -298,7 +298,7 @@ def test_while_a_turn_runs_the_status_is_above_the_bar_and_the_footer_is_free_fo
     s.tell("copied 12 characters")
     rows, c = drawn(s, monkeypatch)
     assert rows[19].startswith("   " + tui.CELLS[0]) and "working (0s | ↑" in rows[19]  # where the blank row was
-    assert rows[20].startswith("  ───") and "Qwen3.5-0.8B" in rows[20]
+    assert rows[20].startswith("  ───") and "magi-1.2-2B" in rows[20]
     assert rows[21].startswith("  " + tui.MARK + " Ask anything") and "░" not in rows[21] and c.at == (21, 4)
     assert set(rows[22].strip()) == {"─"}  # a plain rule; the mode sits on the row under it
     assert rows[23].strip().startswith(tui.MODE_ICON["auto"] + " auto (tab to cycle)") and rows[23].endswith("copied 12 characters")
@@ -320,7 +320,7 @@ def test_the_approval_question_sits_between_the_same_two_rules(tmp_path, monkeyp
             break
         s.worker.join(0.02)
     rows, _ = drawn(s, monkeypatch)
-    assert "waiting for you (" in rows[18] and "Qwen" in rows[19] and "allow shell  echo 1" in rows[20]
+    assert "waiting for you (" in rows[18] and "magi" in rows[19] and "allow shell  echo 1" in rows[20]
     assert "always this" in rows[21] and set(rows[22].strip()) == {"─"} and " ask (tab to cycle)" in rows[23]
     s.key("n")
     finish(s)
@@ -331,7 +331,7 @@ def test_the_home_screen_has_the_same_bar_under_the_logo(monkeypatch):
     s.motion = False
     rows, c = drawn(s, monkeypatch, h=30, w=100)
     bar = next(i for i, r in enumerate(rows) if tui.MARK + " Ask anything" in r)
-    assert "Qwen3.5-0.8B" in rows[bar - 1] and set(rows[bar + 1].strip()) == {"─"} and c.at[0] == bar
+    assert "magi-1.2-2B" in rows[bar - 1] and set(rows[bar + 1].strip()) == {"─"} and c.at[0] == bar
     assert "░░░░░░░░" in rows[bar - 8] and "pgup" not in "".join(rows)
     assert rows[bar].index(tui.MARK) == c.at[1] - 2
 
@@ -448,7 +448,7 @@ def test_queued_messages_are_listed_above_the_bar_three_at_most(monkeypatch):
     s.queue = ["then run the tests", "and\ncommit"]
     rows, _ = drawn(s, monkeypatch)
     assert "working (" in rows[17] and rows[18:20] == ["    queued 1  then run the tests", "    queued 2  and …"]
-    assert "Qwen3.5-0.8B" in rows[20] and "enter run queued now  esc interrupt" in rows[23]
+    assert "magi-1.2-2B" in rows[20] and "enter run queued now  esc interrupt" in rows[23]
     s.queue += ["three", "four", "five"]
     rows, _ = drawn(s, monkeypatch)
     assert "working (" in rows[15] and rows[18:20] == ["    queued 3  three", "    +2 more"] and "go" in rows[1]

@@ -525,7 +525,7 @@ def test_input_area_is_a_titled_rule_and_a_trail_prompt_not_a_box():
     rows, typed = s.input_rows(60, used=7)
     text = [flat(r) for r in rows]
     assert len(rows) == 3 and len(text[0]) == len(text[2]) == 60  # a rule above and a rule below
-    assert "Qwen3.5-0.8B" in text[0] and "7%" in text[0] and set(text[2]) == {"─"} and "ask" in flat(s.mode_row())
+    assert "magi-1.2-2B" in text[0] and "7%" in text[0] and set(text[2]) == {"─"} and "ask" in flat(s.mode_row())
     assert text[1].startswith(tui.MARK + " make it so") and "┃" not in "".join(text)
 
 

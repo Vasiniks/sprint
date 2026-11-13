@@ -34,7 +34,7 @@ sprint
 
 - If Ollama isn't running, sprint starts it and leaves it running.
 - If the model isn't installed, sprint offers to pull it.
-- The first model is Qwen 3.5 0.8B at 4-bit (`hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M`, 737 MB). After that it opens with whichever model you used last.
+- The first model is magi 1.2 2B (`hf.co/GEHIRNS/magi-1.2-2B`, 826 MB), the one that did best in [the tests below](#what-to-expect). After that it opens with whichever model you used last.
 
 Type a request and press Enter. In the default mode sprint asks before it runs a command or changes a file.
 
