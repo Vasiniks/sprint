@@ -3,6 +3,7 @@
 import argparse
 import base64
 import collections
+import datetime
 import fnmatch
 import glob
 import html
@@ -27,6 +28,7 @@ import zlib
 from pathlib import Path
 
 ASK_BLOCK = "```ask\na question, when only the user can answer it\n```\n"  # left out of the prompt with /config questions off
+TODO_BLOCK = "```todo\n[x] a step that is done\n[>] the step in hand\n[ ] a step to do (a list only for a big job)\n```\n"  # and with /plan off
 SYSTEM = """You are a coding agent in the user's project folder. Use relative paths.
 To act, reply with ONE tool block, then stop and wait for the result:
 
@@ -45,7 +47,7 @@ new lines
 ```
 ```fetch https://example.com
 ```
-""" + ASK_BLOCK + """
+""" + ASK_BLOCK + TODO_BLOCK + """
 Any other code block is NOT saved or run.
 When the task is done, reply with a short answer and no tool block."""
 
@@ -80,14 +82,35 @@ def bash_path():
     return guess if os.path.isfile(guess) else None
 
 
-def tools(questions=True):
-    """what a model that calls tools natively is offered; without the ask tool where questions are switched off"""
+# The to-do list, after opencode's todowrite: its wording, its four states, and the whole list sent every time
+STATES = ("pending", "in_progress", "completed", "cancelled")
+OPEN = ("pending", "in_progress")  # the states of an item that still has work in it
+TODO_TOOL = {"type": "function", "function": {
+    "name": "todowrite",
+    # opencode's wording, less its "use it proactively" and "when in doubt, use it". A shorter one was tried (it saves
+    # some ninety tokens a request): the model then wrote its list once and never brought it up to date
+    "description": "Create and update a todo list for the current session. The user sees it as your working plan. Use it "
+                   "when a task has 3 or more distinct steps, or when the user gives several tasks or asks for a todo list. "
+                   "Skip it for a single simple task or a purely conversational request. Send the full list on every call; "
+                   "it replaces the previous one. Mark items in_progress when you start them and completed as soon as "
+                   "they're actually done. Only call it when the list changes.",
+    "parameters": {"type": "object", "required": ["todos"], "properties": {"todos": {
+        "type": "array", "description": "The updated todo list", "items": {
+            "type": "object", "required": ["content", "status"], "properties": {
+                "content": {"type": "string", "description": "Brief description of the task"},
+                "status": {"type": "string", "enum": list(STATES)}}}}}}}}
+
+
+def tools(questions=True, planning=True):
+    """what a model that calls tools natively is offered; without the ask tool where questions are switched off, and
+    without the to-do list where that is"""
     return [_tool("shell", f"Run a {'bash' if bash_path() else 'PowerShell'} command", "command"),
             _tool("read", "Read a file (from_line starts part-way into a long one), or list a folder", "path", "from_line?"),
             _tool("write", "Create or overwrite a file", "path", "content"),
             _tool("edit", "Replace exact text in a file", "path", "old", "new"),
             _tool("fetch", "Get a web page as text", "url")] + \
-        [_tool("ask", "Ask the user a question, when only they can answer it (options: choices to offer)", "question", "options?")] * questions
+        [_tool("ask", "Ask the user a question, when only they can answer it (options: choices to offer)", "question", "options?")] * questions + \
+        [TODO_TOOL] * planning
 
 
 TOOLS = tools()
@@ -96,12 +119,17 @@ REFUSAL = re.compile(r"(do not|don't|cannot|can't|can not|unable to)( directly)?
                      r"(provide|share|paste|copy)[^.]{0,40}(content|file|path|location)", re.I)
 ALIAS = {"shell": "shell", "bash": "shell", "sh": "shell", "zsh": "shell", "tool": "shell", "read": "read",
          "write": "write", "edit": "edit", "fetch": "fetch", "webfetch": "fetch",
-         "ask": "ask", "question": "ask", "ask_user": "ask", "askuser": "ask"}
+         "ask": "ask", "question": "ask", "ask_user": "ask", "askuser": "ask",
+         "todo": "todo", "todos": "todo", "todowrite": "todo", "todo_write": "todo", "todolist": "todo"}
 Call = collections.namedtuple("Call", "tool arg body end start")
 MODES = ("ask", "edits", "auto")
 FENCE = re.compile(r"^\s*(`{3,})[ \t]*([A-Za-z_]+)[ \t]*(.*)$")
 OPTION = re.compile(r"\s*(?:[-*•]|\d{1,2}[.)]|[A-Za-z][.)])\s+(.+)$")  # a line that is one of a question's choices
 ANSWERED = "The user answered: "  # how the result of an ask call begins when you answered it
+MARKS = {"completed": "[x]", "in_progress": "[>]", "pending": "[ ]", "cancelled": "[-]"}  # a to-do item's state, as written
+MARKED = re.compile(r"\s*\[([ xX✓>•~*-])\]\s*(.*)$")
+SAID = {"done": "completed", "complete": "completed", "finished": "completed", "doing": "in_progress", "active": "in_progress",
+        "in progress": "in_progress", "inprogress": "in_progress", "started": "in_progress", "canceled": "cancelled"}
 
 
 # Every web request notes its socket under its thread, so that another thread can hang up on it. Ollama sends
@@ -126,7 +154,7 @@ urllib.request.install_opener(urllib.request.build_opener(_Handler))
 # ---------- reply -> tool call ----------
 
 def _call(tool, arg, body, end, start):
-    if tool in ("shell", "ask"):
+    if tool in ("shell", "ask", "todo"):
         arg, body = "", "\n".join(x for x in (arg, body.strip()) if x)
     elif tool in ("read", "fetch"):
         arg, body = (arg or body).strip().split("\n")[0].strip(), ""
@@ -148,7 +176,9 @@ def from_args(name, a, end, start):
     body = get("old") + "\n====\n" + get("new") if tool == "edit" else get("content", "command", "cmd")
     if tool == "ask":
         body = get("question", "text", "prompt", "message", "query") + choice_lines(a.get("options") or a.get("choices"))
-    where = get("from_line", "start", "line", "offset") if tool == "read" else ""
+    if tool == "todo":
+        body = todo_lines(next((a[k] for k in ("todos", "items", "tasks", "list", "todo") if a.get(k)), []))
+    where =get("from_line", "start", "line", "offset") if tool == "read" else ""
     return _call(tool, get("path", "file", "url") + (" " + where if where.isdecimal() else ""), body, end, start)
 
 
@@ -170,6 +200,53 @@ def choice_lines(given):
     bare = [(OPTION.match(str(x)) or [0, str(x)])[1].strip() for x in given]  # (without a bullet of its own)
     bare = [x for x in bare if x]
     return "".join(f"\n- {x}" for x in bare) if len(bare) > 1 else ""
+
+
+def todo_lines(given):
+    """the list of a native to-do call, however the model sent it (items with a status each, a JSON list typed out
+    as a string, bare strings, or lines of text) -> a line an item, its state as a mark in front: "[x] Create a.py" """
+    if isinstance(given, str) and given.strip().startswith("["):
+        try:
+            given = json.loads(given)
+        except ValueError:
+            pass  # "[x] One\n[ ] Two" starts with a bracket too: lines, then
+    if isinstance(given, str):
+        return given
+    out = []
+    for item in given if isinstance(given, (list, tuple)) else []:
+        if isinstance(item, dict):
+            said = next((str(item[k]) for k in ("content", "task", "title", "text", "description", "name") if item.get(k)), "")
+            state = str(item.get("status") or "").lower().replace("-", "_")
+            state = SAID.get(state.replace("_", " "), state)
+        else:
+            said, state = str(item), ""
+        out.append(f"{MARKS.get(state, MARKS['pending'])} {' '.join(said.split())}" if said.strip() else "")
+    return "\n".join(x for x in out if x)
+
+
+def todo_items(body):
+    """a to-do call's lines -> [(what, state), ...]. A line starts with its mark; one without (a bullet, a number,
+    nothing) is still to do"""
+    marks = {"x": "completed", "X": "completed", "✓": "completed", ">": "in_progress", "•": "in_progress", "~": "in_progress",
+             "*": "in_progress", "-": "cancelled", " ": "pending"}
+    items = []
+    for line in body.splitlines():
+        m = MARKED.match(line)
+        said = (m[2] if m else (OPTION.match(line) or [0, line])[1]).strip()
+        if said:
+            items.append((said, marks[m[1]] if m else "pending"))
+    return items
+
+
+def todo_summary(todos):
+    """what the model is told after a to-do call, as opencode tells it: how the list stands, and what is in hand"""
+    if not todos:
+        return "Todos cleared"
+    count = lambda state: sum(1 for _, s in todos if s == state)
+    counts = [f"{count('completed')}/{len(todos)} completed"] + \
+        [f"{count(s)} {s.replace('_', ' ')}" for s in ("in_progress", "pending", "cancelled") if count(s)]
+    active = [json.dumps(what, ensure_ascii=False) for what, s in todos if s == "in_progress"]
+    return "Todos updated: " + ", ".join(counts) + (". In progress: " + ", ".join(active) if active else "")
 
 
 def question_parts(body):
@@ -651,54 +728,18 @@ def fit(msgs, budget, cpt=3.5):
 # ---------- agent ----------
 
 EFFORT = {"low": (16, 8), "medium": (8, 16), "high": (4, 32)}  # reply budget as window/N tokens, steps per message
+PLANNING = True  # is the to-do list on offer unless /plan says otherwise?
 SPIN = "You are repeating yourself. If the task is done, say so in plain words. Otherwise do something different."
 
 
-PLAN = """You split a request into steps for a coding agent. Anything to build, make, write, fix or change gets a \
-numbered list of steps, one small concrete action each: as many as the job needs and no more. A big job has more steps \
-than a small one. Only when the message is just chat or a question, reply with the one word NONE."""
-# What no plan, a long plan and a short plan look like, as (the request, the reply): they go before the real message as
-# turns of a conversation. A small model takes the size of a plan from examples far more readily than from being told:
-# asked for "at most 5" steps it wrote five for everything, a greeting included
-PLAN_SHOWN = [
-    ("hello", "NONE"),
-    ("make me a website for my restaurant",  # (a model this small borrows from the nearest example, so this one is a
-     "1. Create index.html with the header, the navigation and a welcome section\n"  # site that would do for most)
-     "2. Create style.css with the layout, colours and type\n"
-     "3. Create about.html with the story of the place\n"
-     "4. Create menu.html with what is on offer and the prices\n"
-     "5. Create contact.html with the address, the opening hours and a contact form\n"
-     "6. Create script.js that opens the navigation on a phone and checks the form\n"
-     "7. Link the pages to each other in the navigation\n"
-     "8. Open each page and check the links and the form"),
-    ("how does the parser work?", "NONE"),
-    ("add a --dry-run flag to backup.py and document it",
-     "1. Add the --dry-run flag to the argument parser in backup.py\n2. Describe the flag in the README"),
-    ("make a page for a yoga class with its timetable",
-     "1. Create index.html with the heading, a short welcome and the timetable\n"
-     "2. Create style.css with the layout, colours and type\n"
-     "3. Open index.html and check how it looks"),
-    ("write a script that renames photos by the date they were taken",
-     "1. Create rename_photos.py that lists the photos in a folder\n"
-     "2. Read the date each photo was taken from its EXIF data\n"
-     "3. Rename each file to its date, keeping the extension\n"
-     "4. Run it on a test folder and check the names")]
-PLAN_MOST = 12  # a list longer than this is a model that cannot stop, not a plan
-STEPWISE = "We will do this one step at a time."
-
-
-def steps_in(text):
-    """the steps of a numbered or bulleted list, in order, each of them once"""
-    steps = []
-    for m in re.finditer(r"^\s*(?:\d+[.)]|[-*•])\s+(.+)$", text, re.M):
-        if m.group(1).strip().lower() not in [s.lower() for s in steps]:
-            steps.append(m.group(1).strip())
-    return steps
+# Said to a model that calls tools, while the to-do list is on offer. A small model heeds a line here far more than a
+# tool's own description: with the description alone, magi 1.2 2B never once reached for the list
+LISTS = "\nBefore a big job with several files or parts, call todowrite first to list the steps. Small jobs and questions need no list."
 
 
 class Agent:
-    bare = False  # True while asking for a plan: that call offers no tools
     sampling = {}  # extra Ollama options, e.g. {"temperature": 0.7}; empty keeps the model's own defaults
+    guest = False  # True for a model raced against yours: what it uses is counted, but it is no session of yours
 
     def __init__(self, model=None, url="http://localhost:11434", ctx=8192, steps=16,
                  mode="ask", key="", chat=None, ask=None, out=None, think=False, effort="medium"):
@@ -708,6 +749,7 @@ class Agent:
         self.ask_timeout = 20                    # seconds a question waits for you before the call is set aside (0: for ever)
         self.parked, self.passes = [], []        # calls set aside unanswered; (tool, target) you have since allowed, once
         self.questions, self.question_timeout = True, 60  # may the model ask you things? seconds its question waits (0: for ever)
+        self.planning = PLANNING                 # may it keep a to-do list for a big job? (/plan)
         self.allow = []                          # calls that never ask: "shell git status*", "write notes/*", ...
         self.rate, self.took = 0.0, 0.0          # tokens a second in the last reply, and how long it took
         self.tally, self.unsaved, self.started = blank(), blank(), time.time()  # this session's use; the part not yet on disk
@@ -739,6 +781,8 @@ class Agent:
     def reset(self):
         self.msgs = [{"role": "system", "content": self.system()}]
         self.touched, self.cancel = [], False  # files changed so far; set cancel to stop the current turn
+        self.todos, self.worked = [], False  # the model's to-do list: [(what, state), ...]; has another call run since it was sent?
+        self.saves = 0  # files saved since the list was last sent
         self.forgotten = 0  # older turns dropped to stay inside the window
 
     def compact(self, everything=False):
@@ -769,6 +813,7 @@ class Agent:
                 c = from_args(raw.get("name"), raw.get("arguments"), 0, 0) if raw else parse(x["content"], final=True)
                 doing = f"{c.tool} {self.target(c).split(chr(10))[0][:60]}" if c else ""
                 doing = f"asked you: {question_parts(c.body)[0].split(chr(10))[0][:80]}" if c and c.tool == "ask" else doing
+                doing = "" if c and c.tool == "todo" else doing  # its list is given whole below, as it stands now
                 lines += [] if c or not x["content"].strip() else [f"- answered: {x['content'].strip().split(chr(10))[0][:100]}"]
             elif doing:  # what that call gave back
                 got = re.sub(r"^\[\w+ result\]\n", "", x["content"]).strip().split("\n")[0]
@@ -784,13 +829,20 @@ class Agent:
             rest = [i for i in range(len(lines)) if i not in vital][-(room - len(vital)):]
             lines = [lines[i] for i in sorted(vital + rest)]
         text = "Summary of the conversation so far (older steps, shortened):\n" + "\n".join(lines)
+        text += "\n\nYour to-do list:\n" + "\n".join(f"{MARKS[state]} {what}" for what, state in self.todos) if self.todos else ""
         text += f"\n\nThe current request: {request}" if request else ""
         self.msgs = [m[0], {"role": "user", "content": text, "human": True, "summary": True}] + tail
         self.forgotten += len(old) // 2
         return len(old) if whole else len(old) - 1
 
     def count(self, **more):
-        """add to this session's tally, and to what the next save writes into the lifetime file"""
+        """add to this session's tally, and to what the next save writes into the lifetime file. A message of yours
+        is also counted under its hour of the day, and the first of them makes this a session; how long the session
+        has run so far goes with everything counted"""
+        if more.get("messages") and not self.guest:
+            more = {**more, "hours": {str(time.localtime().tm_hour): more["messages"]}, "sessions": int(not self.tally["sessions"])}
+        if self.tally["sessions"] or more.get("sessions"):
+            more = {**more, "longest": round(time.time() - self.started)}
         add(self.tally, more)
         add(self.unsaved, more)
 
@@ -815,6 +867,8 @@ class Agent:
         if self.custom:  # your own prompt; a model without tool calls still needs the block format spelled out
             base = self.custom if self.tools else self.custom + "\n" + SYSTEM.split("\n", 1)[1]
         base = base if self.questions else base.replace(ASK_BLOCK, "")
+        base = base if self.planning else base.replace(TODO_BLOCK, "")
+        base += LISTS if self.planning and self.tools else ""
         shell_note = f"\nThis is Windows: shell commands run in {'Git Bash' if bash_path() else 'PowerShell'}." if WINDOWS else ""
         return base + shell_note + "\n" + here()
 
@@ -823,7 +877,7 @@ class Agent:
 
     def extra(self):
         """prompt chars the server adds on top of the messages: the tool schemas"""
-        return len(json.dumps(tools(self.questions))) if self.tools else 0
+        return len(json.dumps(tools(self.questions, self.planning))) if self.tools else 0
 
     def say(self, s, style=""):
         if s:
@@ -895,6 +949,18 @@ class Agent:
             return "The user leaves this to you. Decide yourself, say what you chose, and carry on."
         return ANSWERED + str(answer).strip()
 
+    def listed(self, c):
+        """the to-do tool: the list the model sent is the list now, whole -> how it stands, for the model. It is the
+        model's own notes and changes nothing, so there is nothing to approve.
+        A small model sends only what is left and drops what it finished, where it should send everything: an item
+        that was done, or was in hand while other calls ran, and is missing from a new list is kept, as done"""
+        new = todo_items(c.body)
+        named = {what.lower() for what, _ in new}
+        kept = [(what, "completed") for what, state in self.todos
+                if what.lower() not in named and (state == "completed" or state == "in_progress" and self.worked)]
+        self.todos, self.worked = (kept + new if new else []), False
+        return todo_summary(self.todos)
+
     def show_call(self, c):
         self.say("" if self.col0 else "\n")
         self.say("● ", "36")
@@ -905,6 +971,8 @@ class Agent:
         if c.tool == "ask":
             text, options = question_parts(c.body)
             rows = [("1", x) for x in text.splitlines()] + [("", f"{n}. {o}") for n, o in enumerate(options, 1)]
+        elif c.tool == "todo":  # the list, each item with its mark: the one in hand stands out, what is over is dim
+            rows = [({"in_progress": "1", "pending": ""}.get(state, "2"), f"{MARKS[state]} {what}") for what, state in todo_items(c.body)]
         elif c.tool == "shell":
             rows = [("", ("$ " if i == 0 else "  ") + x) for i, x in enumerate(c.body.splitlines())]
         elif c.tool == "edit":
@@ -929,8 +997,8 @@ class Agent:
         if native:  # thinking off: it eats a tiny model's reply budget and made tool use worse in testing
             body.update(options={"num_ctx": self.ctx, "num_predict": self.limit or self.max_out, **self.sampling},
                         think=self.effort if self.think else False, keep_alive="30m")
-            if self.tools and not self.bare:
-                body["tools"] = tools(self.questions)
+            if self.tools:
+                body["tools"] = tools(self.questions, self.planning)
         else:  # (of the sampling settings, such a server is sent the ones every one of them knows)
             body.update(max_tokens=self.limit or self.max_out, stream_options={"include_usage": True},
                         **{k: v for k, v in self.sampling.items() if k in OPENAI})
@@ -1078,7 +1146,7 @@ class Agent:
             pass
 
     def target(self, c):
-        if c.tool in ("shell", "ask"):
+        if c.tool in ("shell", "ask", "todo"):
             return c.body.strip()
         return c.arg if c.tool != "fetch" or "://" in c.arg else "https://" + c.arg
 
@@ -1121,6 +1189,9 @@ class Agent:
     def do(self, c):
         if c.tool == "ask":  # a question for you is nothing to approve, whatever the mode
             return self.consult(c)
+        if c.tool == "todo":  # nor is its own list
+            return self.listed(c)
+        self.worked = True
         key, risky = (c.tool, self.target(c)), guarded(c)  # deleting this folder or beyond it, or changing sprint's own files
         edits = self.mode == "edits" and c.tool in ("write", "edit") and inside(c.arg)  # edits mode frees this folder's files, no others
         free = c.tool == "read" or self.mode == "auto" or edits or self.allowed(c)
@@ -1176,69 +1247,6 @@ class Agent:
         else:
             self.msgs.append({"role": "user", "content": user, "human": human})
 
-    def plan(self, task):
-        """ask the model, without tools, for a short numbered plan -> its steps, or [] when there is nothing to split.
-        It is a reply like any other: it says what it is doing and it can be stopped (it used to be a blind spot that
-        nothing reached, and with it running there was no leaving sprint). A list of steps needs no long reasoning,
-        so it is asked for without any and with a small budget: seconds, where full effort took a minute or more.
-        How many steps is the model's to say: it is shown plans of several sizes, and what was last said in this
-        conversation, so that "now add tests for it" is about the right thing. A word or two ("hi", "continue") is
-        never a job to split, and is not asked about at all. The request is made at a low temperature, whatever
-        yours is: the same message should not get eight steps one time and none the next"""
-        if len(task.split()) < 3:
-            return []
-        was, kept, own = self.think, self.limit, self.sampling
-        self.bare, self.cancel, self.think, self.limit = True, False, False, min(self.max_out, 400)
-        self.sampling = {**own, "temperature": min(own.get("temperature", 0.3), 0.3)}
-        self.thread, text = threading.get_ident(), ""  # so stop() can hang up on it
-        self.status("planning")
-        shown = [{"role": role, "content": said} for pair in PLAN_SHOWN for role, said in zip(("user", "assistant"), pair)]
-        stream = self.chat([{"role": "system", "content": PLAN}] + shown + self.before() + [{"role": "user", "content": task}])
-        try:
-            for c in stream:
-                if self.cancel:
-                    raise KeyboardInterrupt
-                text += c if isinstance(c, str) else ""
-                if len(re.findall(r"^\s*(?:\d+[.)]|[-*•])\s+.+\n", text, re.M)) > PLAN_MOST:
-                    break  # it has gone round in circles, or cannot stop: enough has been heard
-        finally:
-            getattr(stream, "close", lambda: None)()
-            SOCKETS.pop(self.thread, None)
-            self.bare, self.think, self.limit, self.sampling = False, was, kept, own
-            self.status("")
-        steps = steps_in(unthink(text))[:PLAN_MOST]
-        return steps if len(steps) > 1 else []
-
-    def before(self, most=400):
-        """the last thing you asked and what the model said to it, in brief -> two messages, or none on a first one"""
-        at = next((n for n in range(len(self.msgs) - 1, 0, -1) if self.msgs[n]["role"] == "user" and self.msgs[n].get("human")), 0)
-        said = next((m for m in reversed(self.msgs[at + 1:]) if m["role"] == "assistant" and unthink(m["content"]).strip()), None)
-        if not (at and said):
-            return []
-        asked = self.msgs[at]["content"].split("\n\n" + STEPWISE)[0]
-        return [{"role": "user", "content": asked.strip()[:most]}, {"role": "assistant", "content": unthink(said["content"]).strip()[:most]}]
-
-    def show_plan(self, steps, at):
-        self.say("" if self.col0 else "\n")
-        for n, step in enumerate(steps):
-            self.say(f"  {'✓' if n < at else '▸' if n == at else '·'} {step}\n", "1" if n == at else "2")
-
-    def run_plan(self, task, chips=None):
-        """plan mode: get a list of steps first, then do them one message at a time"""
-        steps = self.plan(task)
-        if not steps:
-            return self.run(task, chips)
-        answer = ""
-        for n, step in enumerate(steps):
-            self.show_plan(steps, n)
-            ask = f"Now do only step {n + 1} of {len(steps)}: {step}"
-            answer = self.run(f"{task}\n\n{STEPWISE} {ask}", chips) if n == 0 else \
-                self.run(ask, human=False)
-            if answer.startswith("stopped:"):
-                return answer
-        self.show_plan(steps, len(steps))
-        return answer
-
     def run(self, task, chips=None, human=True):
         """answer one message; whatever it used is added to the lifetime tally when it ends, however it ends"""
         self.count(messages=int(human))
@@ -1256,9 +1264,14 @@ class Agent:
         self.reply(None, text, human=True)
         if images:
             self.msgs[-1].setdefault("images", []).extend(images)
-        last, seen, spins, empties, nudged, cuts, said, wrote, failed = None, set(), 0, 0, False, 0, [], None, None
-        for _ in range(self.steps):
+        if not any(state in OPEN for _, state in self.todos):
+            self.todos = []  # a list with nothing left on it was the last job's: it is put away
+        last, seen, spins, empties, nudged, cuts, said, wrote, failed, reminded = None, set(), 0, 0, False, 0, [], None, None, False
+        left = spare = self.steps  # bringing its list up to date costs a message none of its steps, up to as many again
+        while left > 0:
             text, call, cut, raw = self.turn()
+            free = bool(call and call.tool == "todo" and spare > 0)
+            left, spare = left - (not free), spare - free
             if call is None and cut:
                 log("cut", limit=self.limit)
                 cuts += 1
@@ -1285,6 +1298,11 @@ class Agent:
                 nudged = True
                 self.reply(text, "You do have access: your tools work on the files in this folder. "
                                  "Use them now instead of asking.")
+            elif call is None and self.planning and not reminded and any(state in OPEN for _, state in self.todos):
+                reminded = True  # it says it is finished, and its list says otherwise: once, it is asked which is true
+                waiting = "; ".join(what for what, state in self.todos if state in OPEN)
+                self.reply(text, f"Your to-do list still has these open: {waiting}. If they are done, mark them completed "
+                                 "with todowrite. If not, carry on with them.")
             elif call is None:
                 self.msgs.append({"role": "assistant", "content": text})
                 return "".join(part + ("" if text[:1] in ".,;:!?)]" else " ") for part in said) + text
@@ -1316,6 +1334,9 @@ class Agent:
                     log("stopped", why="repeating", tool=call.tool, target=self.target(call)[:120])
                     return "stopped: the model keeps repeating itself"
                 saved = call.tool in ("write", "edit") and result.startswith(("wrote", "edited"))
+                self.saves = 0 if call.tool == "todo" else self.saves + saved
+                if saved and self.saves > 1 and self.planning and any(state in OPEN for _, state in self.todos):
+                    result += f"\nYour to-do list is behind ({todo_summary(self.todos)[15:]}): bring it up to date with todowrite."
                 extra = "\n\n" + SPIN if spins else ". Now do the next step of the task." if saved and raw else ""
                 if raw:  # keep the model's own tool-call format in the history
                     self.msgs += [{"role": "assistant", "content": text, "tool_calls": [{"function": raw}]},
@@ -1557,17 +1578,19 @@ def context_cells(agent, n=200):
 
 
 def blank():
-    """an empty tally of use: what /usage adds up for a session, a day, or a lifetime"""
-    return {"messages": 0, "replies": 0, "sent": 0, "written": 0, "reasoning": 0, "secs": 0.0, "tools": {}, "failed": 0, "models": {}}
+    """an empty tally of use: what /usage adds up for a session, a day, or a lifetime. sessions: how many times sprint
+    was opened and used; longest: the longest of them, in seconds; hours: your messages by the hour of the day"""
+    return {"messages": 0, "replies": 0, "sent": 0, "written": 0, "reasoning": 0, "secs": 0.0, "tools": {}, "failed": 0, "models": {},
+            "sessions": 0, "longest": 0, "hours": {}}
 
 
 def add(total, more):
-    """add one tally into another, tool by tool and model by model"""
+    """add one tally into another, tool by tool and model by model (the longest session is the longer of the two)"""
     for k, v in more.items():
         if isinstance(v, dict):
             add(total.setdefault(k, {}), v)
         else:
-            total[k] = total.get(k, 0) + v
+            total[k] = max(total.get(k, 0), v) if k == "longest" else total.get(k, 0) + v
     return total
 
 
@@ -1626,75 +1649,204 @@ def tilde(path):
     return str(path).replace(str(Path.home()), "~", 1)
 
 
-def usage_pages(agent):
-    """/usage, a page to a subject: this session with its tokens taken apart, the last fourteen days as a chart with
-    the lifetime under it, and every model ranked -> [(title, rows), ...]"""
-    s, days = agent.tally, load_usage()
-    add(days.setdefault(time.strftime("%Y-%m-%d"), blank()), agent.unsaved)  # the turn in progress is not on disk yet
-    life = blank()
-    for t in days.values():
-        add(life, t)
+SPANS = {"all": ("All time", 0), "7d": ("Last 7 days", 7), "30d": ("Last 30 days", 30)}  # the ranges /usage can be kept to
+HUES = ("magenta", "cyan", "yellow", "green", "blue", "red")  # a colour to a model, in the order they rank
+PAGE, NOVEL = 400, 120_000  # tokens to a page of a paperback (some 300 words), and to a novel of 300 such pages
+
+
+def plot(series, tall):
+    """line charts of several series over the same days, drawn with box strokes -> a row for each level from the top
+    down and a column for each day, every cell (the stroke, which series it belongs to). A column shows the move from
+    the day before to that day. The first series is drawn over the others, but a line lying on nought gives way to
+    one that is not"""
+    top = max([v for s in series for v in s] + [1])
+    level = lambda v: round(v / top * (tall - 1))
+    grid = [[(" ", None)] * len(series[0]) for _ in range(tall)]
+    for resting in (True, False):
+        for who in range(len(series) - 1, -1, -1):
+            for x, now in enumerate(series[who]):
+                was = series[who][max(0, x - 1)]
+                if (was == 0 and now == 0) != resting:
+                    continue
+                a, b = level(was), level(now)
+                grid[tall - 1 - a][x] = ("─" if a == b else "╯" if b > a else "╮", who)
+                if a != b:
+                    grid[tall - 1 - b][x] = ("╭" if b > a else "╰", who)
+                    for y in range(min(a, b) + 1, max(a, b)):
+                        grid[tall - 1 - y][x] = ("│", who)
+    return grid
+
+
+def streaks(active, today):
+    """days in a row with use -> (the run that reaches today, or yesterday while today is still unused; the longest)"""
+    longest = run = 0
+    for d in sorted(active):
+        run = run + 1 if d - datetime.timedelta(days=1) in active else 1
+        longest = max(longest, run)
+    now, d = 0, today if today in active else today - datetime.timedelta(days=1)
+    while d in active:
+        now, d = now + 1, d - datetime.timedelta(days=1)
+    return now, longest
+
+
+def heat_rows(used, span, width, today):
+    """the days as a heat map, the way GitHub draws them: a column to a week with Sunday at the top, the months along
+    the top, a cell the darker the busier its day was among the days on show; under it the legend, and which range
+    the stats below are kept to"""
+    weeks, week = max(4, min(52, width - 6)), datetime.timedelta(days=7)
+    first = today - datetime.timedelta(days=(today.weekday() + 1) % 7) - (weeks - 1) * week  # the Sunday the map starts on
+    day = lambda c, r: first + datetime.timedelta(days=c * 7 + r)
+    busy = [t["replies"] or 1 for d, t in used.items() if first <= d <= today]
+
+    def cell(d):
+        if d > today or d not in used:
+            return " " if d > today else "·"
+        return "░▒▓█"[-(-4 * sum(1 for b in busy if b <= (used[d]["replies"] or 1)) // len(busy)) - 1]  # its quarter of them
+
+    months = [" "] * (width - 6)
+    for c in range(weeks):
+        starts = next((day(c, r) for r in range(7) if day(c, r).day == 1), None)  # a month begins in this week
+        if starts:
+            at = max(0, min(c, len(months) - 3))
+            months[at:at + 3] = starts.strftime("%b")[:3]
+    rows = [[("      " + "".join(months).rstrip(), "dim")]]
+    for r in range(7):
+        cells = "".join(cell(day(c, r)) for c in range(weeks))
+        rows.append([(f"  {('', 'Mon', '', 'Wed', '', 'Fri', '')[r]:<3} ", "dim")] +
+                    [(run, "magenta" if run[0] in "░▒▓█" else "dim") for run in re.findall("[░▒▓█]+|[· ]+", cells)])
+    legend = [("      Less ", "dim"), ("░ ▒ ▓ █", "magenta"), (" More", "dim")]
+    roomy = width >= 64
+    names = [(name if roomy else name.replace("Last ", ""), "bold" if key == span else "dim") for key, (name, _) in SPANS.items()]
+    ranges = [x for n, name in enumerate(names) for x in [(" · ", "dim")] * bool(n) + [name]]
+    gap = width - sum(len(t) for t, _ in legend + ranges)
+    return rows + ([legend + [(" " * gap, "")] + ranges] if roomy else [legend, [("  ", "")] + ranges])
+
+
+def usage_pages(agent, span="all", width=70):
+    """/usage, laid out after Claude Code's stats -> [(title, rows), ...], drawn for this width and kept to this range
+    of days: an overview (the days as a heat map, then the stats in pairs and what the tokens amount to), the models
+    (tokens per day as a chart, then each model with its share), and the session in hand, which only sprint knows"""
+    today, s = datetime.date.today(), agent.tally
+    on_file = load_usage()
+    add(on_file.setdefault(today.isoformat(), blank()), agent.unsaved)  # the turn in progress is not on disk yet
+    used = {}  # every day with use, by its date (a line of the file that is no date, or one still to come, is passed over)
+    for name, t in on_file.items():
+        try:
+            d = datetime.date.fromisoformat(name)
+        except ValueError:
+            continue
+        if (t["replies"] or t["messages"]) and d <= today:
+            used[d] = t
+    within = SPANS[span][1]
+    kept = {d: t for d, t in used.items() if not within or (today - d).days < within}
     head = lambda title, more="": [(title, "bold"), (more, "dim")]
     line = lambda *spans: [("  ", "")] + list(spans)
+    named = lambda model: re.sub(r":latest$", "", short(model))  # ":latest" is what a model is called when nothing else was said
+    wide, half = width >= 60, (width - 2) // 2
 
-    def about(t):  # counts, the three kinds of token as bars, time, tools
-        calls, top = sum(t["tools"].values()), max(t["sent"], t["written"], 1)
-        kinds = (("sent", "cyan", "  the conversation, every reply"), ("written", "magenta", ""), ("reasoning", "yellow", "  part of written"))
-        return [line((f"messages {t['messages']} · replies {t['replies']} · tool calls {calls}"
-                      + (f" ({t['failed']} failed)" if t["failed"] else ""), ""))] + \
-            [line((f"{kind:<10}", ""), (f"{human(t[kind]):>7} ", "bold"), (bar(t[kind], top), colour), (note, "dim"))
-             for kind, colour, note in kinds] + \
-            [line((f"generating {clock(t['secs'])}" + (f" at {t['written'] / t['secs']:.0f} tok/s" if t["secs"] else ""), "dim")),
-             line((" · ".join(f"{k} {v}" for k, v in sorted(t["tools"].items(), key=lambda kv: -kv[1])) or "no tool calls", "dim"))]
+    def pairs(stats, two=wide):  # label: value, two to a row where there is room, the second column always in one place
+        cells = [[(label + ": ", ""), (str(value)[:max(1, (half if two else width - 2) - len(label) - 3)], "bold")] for label, value in stats]
+        if not two:
+            return [line(*c) for c in cells]
+        return [line(*cells[i], (" " * (half - sum(len(t) for t, _ in cells[i])), ""), *cells[i + 1]) if i + 1 < len(cells) else line(*cells[i])
+                for i in range(0, len(cells), 2)]
+
+    # --- the overview: the heat map, the stats of the range, and what its tokens amount to
+    days = lambda n: f"{n} day{'s' * (n != 1)}"
+    by_model = {}
+    for t in kept.values():
+        add(by_model, t["models"])
+    tokens = {m: v.get("sent", 0) + v.get("written", 0) for m, v in by_model.items()}
+    ranked = sorted(tokens, key=lambda m: -tokens[m])
+    hours, tools = {}, {}
+    for t in kept.values():
+        add(hours, t["hours"]), add(tools, t["tools"])
+    peak = max(hours, key=lambda h: (hours[h], -int(h))) if hours else None
+    busiest = max(kept, key=lambda d: (kept[d]["replies"], d)) if kept else None
+    longest, failed = max([t["longest"] for t in kept.values()] + [0]), sum(t["failed"] for t in kept.values())
+    now, best = streaks(set(kept), today)
+    whole = within or ((today - min(kept)).days + 1 if kept else 0)
+    wrote = sum(t["written"] for t in kept.values())
+    amount = f"{wrote / NOVEL:.1f} novels" if wrote >= NOVEL else f"{max(1, round(wrote / PAGE))} page{'s' * (wrote >= PAGE * 1.5)}"
+    amount = f"{human(wrote)} written: ~{amount}" if not wide else \
+        f"↓ {human(wrote)} tokens written for you: about {amount} of {'300 pages' if wrote >= NOVEL else 'a paperback'}"
+    overview = [line(("No stats yet. Send a message.", "dim"))] if not used else heat_rows(used, span, width, today) + [[]] + pairs([
+        ("Favourite model", named(ranked[0]) if ranked else "-"), ("Total tokens", human(sum(tokens.values()))),
+        ("Sessions", sum(t["sessions"] or 1 for t in kept.values())),  # (a day from before sessions were counted had one at least)
+        ("Longest session", clock(longest) if longest else "-"),
+        ("Active days", f"{len(kept)}/{whole}"), ("Longest streak", days(best)),
+        ("Most active day", f"{busiest:%b} {busiest.day}" if busiest else "-"), ("Current streak", days(min(now, whole))),
+        ("Peak hour", f"{int(peak):02d}:00-{(int(peak) + 1) % 24:02d}:00" if peak else "-"),
+        ("Tool calls", f"{sum(tools.values())}" + f" ({failed} failed)" * bool(failed))]) + [[], line((amount[:width - 2], "dim"))]
+
+    # --- the models: what each used day by day, as lines on one chart, then every one of them with its share
+    models = [line(("No model usage yet.", "dim"))]
+    if ranked:
+        room = max(8, width - 12)  # the chart's columns, after the scale down its left
+        span_days = within or max(14, (today - min(kept)).days + 1)
+        shown = [today - datetime.timedelta(days=n) for n in range(min(span_days, room) - 1, -1, -1)]
+        per = max(1, min(8, room // len(shown)))  # columns a day is given
+        series = [[kept.get(d, {}).get("models", {}).get(m, {}).get("sent", 0) + kept.get(d, {}).get("models", {}).get(m, {}).get("written", 0)
+                   for d in shown for _ in range(per)] for m in ranked[:3]]
+        tall, most = 7, max(v for one in series for v in one)
+        marks = {0: human(most), tall // 2: human(most / 2), tall - 1: "0"}
+        models = [head("  Tokens per Day")]
+        for y, cells in enumerate(plot(series, tall)):
+            runs, at = [], 0
+            while at < len(cells):  # strokes side by side that are one model's go out as one piece, in its colour
+                end = next((n for n in range(at, len(cells)) if cells[n][1] != cells[at][1]), len(cells))
+                runs.append(("".join(ch for ch, _ in cells[at:end]), "" if cells[at][1] is None else HUES[cells[at][1]]))
+                at = end
+            models.append([(f"  {marks.get(y, ''):>7} ┤", "dim")] + runs)
+        ticks = [" "] * (len(shown) * per)
+        for n in (len(shown) - 1, 0, len(shown) // 2):  # today under the last column, always; then the first day, then the middle one
+            name = f"{shown[n]:%b} {shown[n].day}"
+            at = max(0, min(n * per, len(ticks) - len(name)))
+            if not "".join(ticks[max(0, at - 2):at + len(name) + 2]).strip():  # only where it does not run into another
+                ticks[at:at + len(name)] = name
+        models.append([(" " * 11 + "".join(ticks).rstrip(), "dim")])
+        key, row = [], [("  ", "")]
+        for n, m in enumerate(ranked[:3]):  # the legend: on as many lines as it takes
+            item = [(" · ", "dim")] * (len(row) > 1) + [("● ", HUES[n]), (named(m)[:22], "")]
+            if len(row) > 1 and sum(len(t) for t, _ in row + item) > width:
+                key, row, item = key + [row], [("  ", "")], item[1:]
+            row = row + item
+        models += key + [row, []]
+        share = lambda m: [("● ", HUES[ranked.index(m)] if ranked.index(m) < len(HUES) else "dim"),
+                           (f"{named(m)[:max(4, (half if wide else width - 2) - 13)]} ", "bold"), (f"({tokens[m] * 100 / max(1, sum(tokens.values())):.1f}%)", "dim")]
+        in_out = lambda m: [(f"  In: {human(by_model[m].get('sent', 0))} · Out: {human(by_model[m].get('written', 0))}", "dim")]
+        pad = lambda cell: [(" " * (half - sum(len(t) for t, _ in cell)), "")]
+        for i in range(0, len(ranked[:10]), 2 if wide else 1):
+            a, b = ranked[i], ranked[i + 1] if wide and i + 1 < len(ranked[:10]) else None
+            models += [line(*share(a), *(pad(share(a)) + share(b) if b else [])), line(*in_out(a), *(pad(in_out(a)) + in_out(b) if b else [])), []]
+        models.pop()
 
     # --- the session: what it used, the tokens taken apart, and what is in the window now
-    session = [head("Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
-                               f"{clock(time.time() - agent.started)} ago · {short(agent.model)[:30]}")]
-    session += about(s) if s["messages"] or s["replies"] else [line(("nothing yet this session", "dim"))]
-    if s["replies"]:
-        n, calls = s["replies"], sum(s["tools"].values())
-        session += [[], head("Token analysis"),
-                    line(("per reply   ", ""), (f"↑ {human(s['sent'] / n)} sent · ↓ {human(s['written'] / n)} written · {s['secs'] / n:.1f}s", "bold")),
-                    line(("reasoning   ", ""), (f"{s['reasoning'] * 100 // max(1, s['written'])}%", "bold"), (" of what was written", "dim")),
-                    line(("going up    ", ""), (f"{s['sent'] / max(1, s['written']):.0f}", "bold"),
-                         (" sent for every token written", "dim")),
-                    line(("tool calls  ", ""), (f"{calls / max(1, s['messages']):.1f}", "bold"), (" a message", "dim"),
-                         (f" · {s['failed'] * 100 // calls}% failed" if calls and s["failed"] else "", "dim"))]
+    session = [head("  Session", (f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, {clock(time.time() - agent.started)} ago"
+                                  + f" · {named(agent.model)[:width - 42]}" * wide)[:width - 9])]
+    if s["messages"] or s["replies"]:
+        calls, top, n = sum(s["tools"].values()), max(s["sent"], s["written"], 1), max(1, s["replies"])
+        kinds = (("sent", "cyan", "  the conversation, every reply"), ("written", "magenta", ""), ("reasoning", "yellow", "  part of written"))
+        session += pairs([("Messages", s["messages"]), ("Replies", s["replies"]),
+                          ("Tool calls", f"{calls}" + f" ({s['failed']} failed)" * bool(s["failed"])),
+                          ("Generating", clock(s["secs"]) + (f" at {s['written'] / s['secs']:.0f} tok/s" if s["secs"] else ""))])
+        session += [line((" · ".join(f"{k} {v}" for k, v in sorted(s["tools"].items(), key=lambda kv: -kv[1]))[:width - 2], "dim"))] * bool(calls)
+        session += [[], head("  Tokens")] + [
+            line((f"{kind:<10}", ""), (f"{human(s[kind]):>7} ", "bold"), (bar(s[kind], top, max(3, min(20, width - (53 if wide else 22)))), colour),
+                 (note * wide, "dim")) for kind, colour, note in kinds]
+        session += [[], head("  Token analysis")] + pairs([
+            ("Per reply", f"↑ {human(s['sent'] / n)} sent · ↓ {human(s['written'] / n)} written · {s['secs'] / n:.1f}s"),
+            ("Reasoning", f"{s['reasoning'] * 100 // max(1, s['written'])}% of what was written"),
+            ("Going up", f"{s['sent'] / max(1, s['written']):.0f} sent for every token written"),
+            ("Tools", f"{calls / max(1, s['messages']):.1f} calls a message" + (f" · {s['failed'] * 100 // calls}% failed" if calls and s["failed"] else ""))],
+            two=False)
+    else:
+        session += [line(("nothing yet this session", "dim"))]
     parts = agent.breakdown()
     top = max(n for _, n in parts) or 1
-    session += [[], head("In the window now", f"  {human(agent.used())} of {human(agent.ctx)} tokens")]
-    session += [line((f"{what:<24}", ""), (f"{human(n):>6} ", "bold"), (bar(n, top, 24), SHADE.get(what, "dim"))) for what, n in parts]
-
-    # --- the days: a column for each of the last fourteen, the busy ones listed, then everything so far
-    last = [time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400 * back)) for back in range(13, -1, -1)]
-    wrote = [days[d]["written"] if d in days else 0 for d in last]
-    peak, tall = max(wrote), 6
-    spark = "".join("▁▂▃▄▅▆▇█"[min(7, n * 8 // (peak + 1))] if n else " " for n in wrote)
-    eighths = [max(1, round(n * tall * 8 / peak)) if n else 0 for n in wrote] if peak else [0] * 14
-    activity = [head("Last 14 days", "  tokens written each day"),
-                line((spark, "magenta"), (f"  most: {human(peak)} on {last[wrote.index(peak)][5:]}" if peak else "  nothing written", "dim")), []]
-    for level in range(tall - 1, -1, -1):  # from the top row down; a column's last cell is filled by eighths
-        cells = "".join(" ▁▂▃▄▅▆▇█"[max(0, min(8, e - level * 8))] * 2 + " " for e in eighths)
-        activity.append(line((f"{human(peak) if level == tall - 1 and peak else '':>6} ", "dim"), (cells, "magenta")))
-    activity.append(line((" " * 7 + "".join(d[8:] + " " for d in last), "dim")))
-    used = [d for d in last if d in days and days[d]["replies"]]
-    activity += [[]] + [line((d[5:] + "  ", "dim"), (f"↑ {human(days[d]['sent']):>6}  ↓ {human(days[d]['written']):>6}  ", ""),
-                             (f"{days[d]['replies']:>4} replies  ", "dim"), (bar(days[d]["written"], peak, 16), "magenta")) for d in used[-7:]]
-    activity += [line((f"busiest {last[wrote.index(peak)][5:]} with {human(peak)} written · {len(used)} of these 14 days with use", "dim"))] if peak else []
-    activity += [[], head("Lifetime", f"  since {min(days)}, {len(days)} day{'s' * (len(days) != 1)} with use")] + about(life)
-
-    # --- the models: every one ever used, by what it wrote
-    models = [head("Models", "  every session, by tokens written")]
-    ranked = sorted(life["models"].items(), key=lambda kv: -kv[1].get("written", 0))[:10]
-    most, whole = max([m.get("written", 0) for _, m in ranked] + [1]), max(1, sum(m.get("written", 0) for _, m in life["models"].items()))
-    for model, m in ranked:
-        speed = f" · {m['written'] / m['secs']:.0f} tok/s" if m.get("secs") else ""
-        models += [line((f"{short(model)[:22]:<22} ", ""), (f"{bar(m.get('written', 0), most, 12):<12} ", "magenta"),
-                        (f"{m.get('written', 0) * 100 // whole:>3}%", "bold"), (f"  ↓ {human(m.get('written', 0)):>6}  ↑ {human(m.get('sent', 0)):>6}", "")),
-                   line((f"  {m.get('replies', 0)} replies{speed}" + (" · this session" if model == agent.model else ""), "dim"))]
-    if not life["models"]:
-        models.append(line(("none yet", "dim")))
-    return [("Session", session), ("Activity", activity), ("Models", models)]
+    session += [[], head("  In the window now", f"  {human(agent.used())} of {human(agent.ctx)}" + " tokens" * wide)]
+    session += [line((f"{what:<24}", ""), (f"{human(n):>6} ", "bold"), (bar(n, top, max(3, min(24, width - 34))), SHADE.get(what, "dim"))) for what, n in parts]
+    return [("Overview", overview), ("Models", models), ("Session", session)]
 
 
 def usage_rows(agent):
@@ -1857,10 +2009,10 @@ def cmd_directory(agent, arg):
 
 
 def cmd_plan(agent, arg):
-    """/plan: split each message into steps first, on or off"""
-    on = not load_config().get("plan", False)
-    save_config(plan=on)
-    return notes("plan mode on: each message is split into steps first" if on else "plan mode off")
+    """/plan: may the model keep a to-do list for a big job? on or off"""
+    agent.planning = not agent.planning
+    save_config(plan=agent.planning)
+    return notes("plan on: the model keeps a to-do list for a big job" if agent.planning else "plan off: no to-do list")
 
 
 def cmd_race(agent, arg):
@@ -1922,6 +2074,8 @@ def set_config(agent, key, value):
         agent.set_effort(new)
     elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout", "questions", "question_timeout"):
         setattr(agent, key, new)
+    elif key == "plan":
+        agent.planning = new
     if key in ("url", "model"):  # native tool calls on Ollama again, until this model refuses them
         agent.tools = not v1(agent.url)
     save_config(**{key: new})
@@ -1941,7 +2095,7 @@ def cmd_config(agent, arg):
            "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
            "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
            "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout,
-           "questions": agent.questions, "question_timeout": agent.question_timeout, "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
+           "questions": agent.questions, "question_timeout": agent.question_timeout, "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": agent.planning}
     return [[(f"  {k:<17}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
         [[(f"  {k:<17}", "dim"), (f"{agent.sampling[k]}" if k in agent.sampling else "default", "" if k in agent.sampling else "dim")]
          for k in SAMPLING] + \
@@ -1989,8 +2143,9 @@ def race(agent, rival, task, tell=lambda model: None):
     for model in (agent.model, rival):
         r = Agent(model, agent.url, agent.ctx, agent.steps, "ask", agent.key, vars(agent).get("chat"), lambda call: False,
                   io.StringIO(), agent.think, agent.effort)
-        r.custom = agent.custom
+        r.custom, r.guest = agent.custom, True
         r.questions, r.question = False, lambda text, options=(): None  # a race does not stop to ask, and is not told it could
+        r.planning = False  # nor does it keep a list: one message, one answer
         tell(model)
         began = time.time()
         try:
@@ -2009,10 +2164,10 @@ ABOUT = {"ask": "asks before every action", "edits": "file edits run without ask
 HELP = [("@file", "attach a file"), ("!command", "run the command yourself, without the model"),
         ("/model [NAME]", "switch model"), ("/mode", "ask, edits or auto"), ("/permissions", "what runs without asking"),
         ("/think", "let the model reason first, on or off"), ("/effort [LEVEL]", "low, medium or high"),
-        ("/context", "what is filling the context window"), ("/usage", "tokens, time and tool calls"),
+        ("/context", "what is filling the context window"), ("/usage", "your days as a heat map, each model's share, and this session"),
         ("/compact", "fold the older conversation into a short summary"), ("/copy [code|all]", "copy the last answer"),
         ("/export [FILE]", "save the conversation as markdown"), ("/log", "what happened recently"),
-        ("/directory [PATH]", "change the folder sprint works in"), ("/plan", "split each message into steps first, on or off"),
+        ("/directory [PATH]", "change the folder sprint works in"), ("/plan", "let the model keep a to-do list for a big job, on or off"),
         ("/race MODEL MESSAGE", "one message, two models, side by side"),
         ("/systemprompt", "edit what the model is told at the start"), ("/config", "see or change saved settings"),
         ("/update", "get the newest sprint"), ("/clear", "clear the conversation and start fresh"), ("/bye", "quit")]
@@ -2026,7 +2181,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
-VERSION = "0.4.17"  # the same as in pyproject.toml
+VERSION = "0.4.18"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
@@ -2180,7 +2335,7 @@ def plain_message(agent, text):
     """send a message to the model, then say what it cost and how full the window is"""
     say = agent.say
     before, began = dict(agent.tally), time.time()
-    stop = (agent.run_plan if load_config().get("plan") else agent.run)(text)
+    stop = agent.run(text)
     say(f"  {stop}\n" if stop.startswith("stopped:") else "", "33")
     say(f"  {agent.receipt(before, began)}\n", "2")
     n = round(min(agent.used() / agent.ctx, 1) * 10)
@@ -2315,6 +2470,7 @@ def build_agent(a):
     agent.ask_timeout = saved.get("ask_timeout", 20)
     agent.questions, agent.question_timeout = bool(saved.get("questions", True)), saved.get("question_timeout", 60)
     agent.sampling = {k: saved[k] for k in SAMPLING if k in saved and sampled(k, saved[k])}
+    agent.planning = bool(saved.get("plan", PLANNING))
     return agent
 
 

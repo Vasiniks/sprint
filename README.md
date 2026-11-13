@@ -56,7 +56,7 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 |---|---|
 | Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. The wheel over the list scrolls it, and the heading says which are on show (`4-12 of 31`). |
 | Conversation (middle) | Your messages on a bright band with a bar down the side in the mode's colour, the model's replies, and one window per tool call. Under each answer, what the message cost: tokens up and down, and the time. |
-| Sidebar (right) | At the top, the context window in small with how full it is; on a tall screen also a legend of what fills it, and the session in labelled rows (model, thinking, showthink, effort, plan, speed, tokens, tool calls, time; the mode is by the prompt). Then a log of every tool call and how it ended, which the wheel scrolls like the message list. In plan mode its bottom half is the plan: how far along it is, and each step ticked, in hand, or still to do; drag the line above it to give it more or less room. |
+| Sidebar (right) | At the top, the context window in small with how full it is; on a tall screen also a legend of what fills it, and the session in labelled rows (model, thinking, showthink, effort, plan, speed, tokens, tool calls, time; the mode is by the prompt). Then a log of every tool call and how it ended, which the wheel scrolls like the message list. In plan mode its bottom half is the model's to-do list, while it has one: how far along it is, and each item ticked, in hand, still to do or dropped; drag the line above it to give it more or less room. |
 | Prompt (bottom) | The line you type on, between two rules, with the model and context on the upper one. Under it, the mode with its icon (`▰▱▱` ask, `▰▰▱` edits, `▰▰▰` auto: fuller, the more runs without asking) and a reminder that Tab cycles it. |
 | Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. A glint of colour crosses the words every couple of seconds. When a model goes quiet to write a tool call (the server holds a call back until it is whole), the line says `preparing the next step`. |
 
@@ -146,7 +146,7 @@ The model has a sixth tool, `ask`: a question for you, when only you can answer 
 - `esc` leaves it to the model. `ctrl+c` stops the turn.
 - It waits one minute (`/config question_timeout N`; `0` waits for ever; any key starts the wait again). With no answer, the model is told to decide for itself, say what it chose, and carry on.
 - What you were typing when the question came is put by and given back afterwards.
-- It works with thinking on or off and in plan mode, where later steps know what you answered. A folded conversation keeps your answers.
+- It works with thinking on or off, and with a to-do list going. A folded conversation keeps your answers.
 - `/config questions off` takes the tool away, and with it the line about it in the prompt. Models set against each other with `/race` are never offered it.
 - In plain mode the question is printed and the next line you type is the answer; a number picks a choice.
 
@@ -162,9 +162,9 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/think` | Let the model reason before answering. Its reasoning shows as it is written: a line that counts the words and shows the newest ones. |
 | `/showthink` | Show that reasoning in full, growing as it arrives, in a dashed frame of its own so it never looks like an action. Otherwise it is one line; click one to open it. |
 | `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
-| `/plan` | Split each message into steps first: as many as the job needs, which the model decides. A greeting or a question gets none and is just answered, a small change two or three, a whole website about eight; twelve is the most. A message of one or two words ("hi", "continue") is never split and is not even asked about. A follow-up ("now add tests for it") is planned knowing your last message and the reply to it. Off by default. The steps show in the bottom half of the sidebar (in the conversation when the sidebar is hidden); switching plan mode off puts them away. The plan itself is asked for without reasoning and with a small budget, so it comes in seconds, and it can be stopped like any reply. |
+| `/plan` | Whether the model may keep a to-do list, the way [opencode](https://github.com/anomalyco/opencode)'s agents do. On unless you switch it off. Nothing is planned up front and most messages get no list at all: the model has one more tool, `todowrite`, and reaches for it when a job is big (several files or parts). It sends the list with a state for each item (to do, in hand, done, dropped) and sends it again as it gets on. The list shows in the bottom half of the sidebar, and each update is one line in the conversation (click it for the list as it stood then; with the sidebar hidden the newest stands whole). Bringing the list up to date costs a message none of its steps. A finished list is put away when you send the next message; one with work left stays. `/plan` off takes the tool away. |
 | `/context` | What is filling the context window, as a coloured grid. |
-| `/usage` | Three pages; left and right (or Tab, a page's number, or a click on its name) turn them. **Session**: tokens sent, written and spent on reasoning, time, speed, tool calls, the tokens taken apart (per reply, the share that was reasoning, how much goes up for each token written), and what is in the window now. **Activity**: the last two weeks as a column chart, the busy days listed, and everything so far. **Models**: every model you have used, ranked by what it wrote, with its share and speed. |
+| `/usage` | Laid out after Claude Code's stats, in three pages; left and right (or Tab, a page's number, or a click on its name) turn them. **Overview**: the days as a heat map, a column to a week, darker the busier; under it the favourite model, total tokens, sessions, the longest session, active days, the current and longest streak, the most active day, the peak hour and tool calls, then what the tokens written amount to in pages of a book. **Models**: tokens per day as a line to a model on one chart, then every model with its share and its tokens in and out. **Session**: what only sprint knows about the one in hand: its counts, the tokens taken apart (per reply, the share that was reasoning, how much goes up for each token written), and what is in the window now. `r` goes round the date ranges (all time, the last 7 days, the last 30), `ctrl+s` copies the page on show, and up, down and the wheel scroll a page that does not fit. Sessions, their length and the hour of each message are counted from 0.4.18 on: a day from before counts as one session, and what was never recorded shows as a dash. |
 | `/compact` | Fold the conversation into a short summary, at any time: everything before the latest exchange, or that exchange too when there is nothing older. sprint also does this by itself when room runs out. |
 | `/copy [code\|all]` | Copy the last answer, the last code block, or everything. |
 | `/paste` | Attach the picture on the clipboard. |
@@ -189,7 +189,7 @@ Everything sprint keeps lives in `~/.config/sprint/` (`%APPDATA%\sprint` on Wind
 | `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, how long an approval and a question of the model's wait, whether it may ask, panel sizes, allow list, recent folders, and any of the advanced ones you set (temperature and the rest) |
 | `system.md` | your own system prompt, if you wrote one |
 | `sprint.log` | messages, tool calls and errors, so there is something to read when a run goes wrong |
-| `usage.json` | one tally per day of tokens, replies, time and tool calls; what `/usage` adds up |
+| `usage.json` | one tally per day of tokens, replies, time, tool calls, sessions (how many, and the longest) and messages by the hour; what `/usage` adds up |
 | `update.json` | the newest version seen and when sprint last looked |
 
 Command-line options override the environment, which overrides saved settings.
@@ -205,7 +205,7 @@ Command-line options override the environment, which overrides saved settings.
 
 ## How it copes with small models
 
-**Tool calls.** On Ollama the six tools (`shell`, `read`, `write`, `edit`, `fetch`, `ask`) are offered as native tool schemas. Models without tool support fall back automatically to fenced blocks (` ```shell `, ` ```write path `), which need no JSON escaping.
+**Tool calls.** On Ollama the seven tools (`shell`, `read`, `write`, `edit`, `fetch`, `ask`, `todowrite`) are offered as native tool schemas. Models without tool support fall back automatically to fenced blocks (` ```shell `, ` ```write path `), which need no JSON escaping.
 
 **A short prompt that names the files.** The system prompt lists the folder's contents. Without that, a 0.8B model often claims it cannot see a file instead of reading it.
 
@@ -221,6 +221,14 @@ Command-line options override the environment, which overrides saved settings.
 - A reply cut off by the token limit is never run.
 - Going in circles gets one warning and then a stop: the same call again, the same call and result as before, the same file rewritten twice running, or the same failure twice running.
 - A model that gives up with "I can't access that file", or shows code without saving it, gets one push to use its tools.
+
+**The to-do list.** opencode's `todowrite`, with three allowances for a small model:
+- The tool's own description was not enough: with it alone, magi 1.2 2B never used the list. One line in the system prompt says when to (a big job with several files or parts), and when not to.
+- opencode's rule is the whole list on every call. A small model sends what is left and drops what it finished. An item that was done, or was in hand while other calls ran, and is missing from the next list is kept, as done, so the list shows progress instead of shrinking away.
+- A model that saves a second file without touching its list is told how the list stands. Left alone, it loses its place and writes the same files again.
+- A model that says it is finished while its list has open items is asked once: mark them done, or carry on.
+
+The list is also carried into the summary when the conversation is folded, so the model still has it afterwards.
 
 **Speed.** sprint asks Ollama to load the model as soon as it opens and to keep it loaded for 30 minutes. The screen is redrawn only when something changes.
 
@@ -238,7 +246,7 @@ Results swing with small changes in wording and in what else is in the folder, s
 Known limits:
 - **Long-running commands.** A command is killed after 60 seconds (`/config timeout`), so a server started by the model does not stay up.
 - **Long files.** One reply can hold a file of a few hundred lines at 8K. Beyond that, ask for parts or raise the window with `/config ctx 16384`.
-- **Plan mode** did not help the 0.8B model in testing, which is why it is off by default. How long a plan is depends on the model. With magi 1.2 2B, three tries a message: greetings and questions got no plan every time; a one-flag change 2 steps; a landing page 3; a snake game 6; a website 7 or 8; a three-file refactor 5 to 8. It misses sometimes: "why is this test failing? fix it" got no plan and was simply done, and a vague "make me a website for my bakery" got eight sensible but generic steps, close to the example the model is shown.
+- **The to-do list** is the model's to use, so how often it appears depends on the model. With magi 1.2 2B, greetings, questions and one-file changes never got one; of eleven bigger jobs run from scratch (landing pages, whole websites, a command-line tool with tests), every one did, and one asked for in the middle of a conversation did not. The list is only as true as the model: once it ticked off a menu page and a contact page it had never written, and after its last item it tends to ask whether there is anything else rather than stop.
 - **PDFs** are read roughly unless `pdftotext` is installed. Pictures need a model that can see.
 - **cmux, Ghostty, kitty and other terminals with their own description, on a Mac.** The curses library macOS ships garbles runs of one character (a box's bottom line, the dots of the context bar, the animation's track) when the terminal's description offers a "repeat" code. sprint therefore starts curses with the plain xterm description there; nothing else changes, and commands sprint runs still see the terminal's own.
 - **Windows.** Install Git for Windows: models write bash, and sprint uses Git Bash when it finds it. Without it, commands run in PowerShell, where common ones (`ls`, `cat`) work but bash syntax often does not. The terminal there does not mark pastes, so sprint treats keys that arrive together as one paste. Dragging with the mouse is untested there; a picture or PDF path dropped into the prompt still becomes a chip when you send.

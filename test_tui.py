@@ -961,19 +961,22 @@ def test_race_shows_both_answers_side_by_side_and_can_switch_model(monkeypatch):
     assert s.agent.model == "smollm2:135m" and s.popup is None
 
 
-def test_plan_mode_is_a_toggle_and_shows_its_steps_as_a_checklist(tmp_path, monkeypatch):
+def test_plan_is_a_toggle_and_the_models_list_shows_as_a_checklist(tmp_path, monkeypatch):
     import sprint
     monkeypatch.chdir(tmp_path)
-    s = screen("1. Make the file\n2. Show it", "```write a.txt\nhi\n```", "Made.", "```shell\ncat a.txt\n```", "Shown.")
-    assert s.plan is False
+    s = screen("```todo\n[>] Make the file\n[ ] Show it\n```", "```write a.txt\nhi\n```",
+               "```todo\n[x] Make the file\n[x] Show it\n```", "Shown.")
+    assert s.plan is True  # on unless switched off
     s.submit("/plan")
-    assert s.plan is True and sprint.load_config()["plan"] is True and "plan" in s.note_text()
+    assert s.plan is False and sprint.load_config()["plan"] is False and "plan off" in s.note_text()
+    s.submit("/plan")
+    assert s.plan is True and sprint.load_config()["plan"] is True and "plan on" in s.note_text()
     s.submit("make a.txt and show it")
     finish(s)
-    plans = [i for i in s.items if i["t"] == "plan"]
-    assert len(plans) == 1 and plans[0]["steps"] == ["Make the file", "Show it"] and plans[0]["at"] == 2
-    text = "\n".join(flat(spans) for _, spans, _ in s.lines(60))
+    assert s.agent.todos == [("Make the file", "completed"), ("Show it", "completed")]
+    text = "\n".join(flat(spans) for _, spans, _ in s.lines(60))  # (no side panel drawn here: the newest list stands whole)
     assert "✓ Make the file" in text and "✓ Show it" in text and s.items[-1]["text"].strip() == "Shown."
+    assert text.count("Make the file") == 2 and "☰ todo  0/2 · Make the file" in text  # the older one is folded to a line
 
 
 # ---------- /directory ----------

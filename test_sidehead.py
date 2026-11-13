@@ -43,12 +43,12 @@ def test_then_the_session_as_labelled_rows(tmp_path, monkeypatch):
     assert tui.short(s.agent.model)[:10] in told["model"]
     assert not any(tui.MODE_ICON[m] in r for r in rows for m in tui.MODES)  # the mode is by the prompt already: not here too
     assert told["thinking"].split()[1] == "off" and told["effort"].split()[1] == s.agent.effort
-    assert told["showthink"].split()[1] == "off" and told["plan"].split()[1] == "off"
-    s.showthink = s.plan = True
+    assert told["showthink"].split()[1] == "off" and told["plan"].split()[1] == "on"  # (the to-do list is on unless switched off)
+    s.showthink, s.plan = True, False
     again = {r.split()[0]: r for r in head(s)[at + 1:]}
-    assert again["showthink"].split()[1] == "on" and again["plan"].split()[1] == "on"
+    assert again["showthink"].split()[1] == "on" and again["plan"].split()[1] == "off"
     assert dict(s.side_head(28, 50)[at + 3])["on"] == "ok"  # on is green, off is quiet
-    s.showthink = s.plan = False
+    s.showthink, s.plan = False, True
     assert "61 tok/s" in told["speed"] and "5.5s" in told["speed"]
     assert "↑" in told["tokens"] and "↓" in told["tokens"]
     assert "2 calls" in told["tools"] and "1 failed" in told["tools"]
@@ -97,9 +97,8 @@ def test_the_activity_and_the_plan_start_under_it_wherever_that_is(tmp_path, mon
     act = col.index("Activity")
     assert act == rows + 2 and col[act + 1].startswith("✓ shell") and col[act + 2].startswith("✗ shell")
     assert ("side", act + 1) in s.hits  # and a click still finds the call
-    s.plan = True
-    s.items.append({"t": "plan", "steps": ["one", "two"], "at": 0})
+    s.agent.todos = [("one", "in_progress"), ("two", "pending")]
     s.plan_h = 49  # dragged as far up as it will go
     s.draw(big)
     col = [big.text(y)[w - side + 1:].rstrip() for y in range(big.h)]
-    assert next(y for y, r in enumerate(col) if r.startswith("Plan")) == act + 3  # one line of activity is always left
+    assert next(y for y, r in enumerate(col) if r.startswith("Todo")) == act + 3  # one line of activity is always left
