@@ -176,14 +176,13 @@ def test_the_older_mouse_report_scrolls_the_list_under_it_too(monkeypatch):
     assert listed(s, "side") == before
 
 
-def test_with_a_plan_under_it_the_activity_list_scrolls_in_the_room_it_has():
+def test_with_a_to_do_list_under_it_the_activity_list_scrolls_in_the_room_it_has():
     s, scr = long()
     s.plan = True
-    s.items.append({"t": "user", "text": "last"})
-    s.items.append({"t": "plan", "steps": ["one", "two", "three"], "at": 1})
+    s.agent.todos = [("one", "completed"), ("two", "in_progress"), ("three", "pending")]
     redraw(s, scr)
     fits = len(listed(s, "side"))
     assert 0 < fits < 20
     s.sgr_mouse(UP, over(s, "side"), 12, True)
     text = redraw(s, scr)
-    assert len(listed(s, "side")) == fits and listed(s, "side")[-1] == "file19_3.py" and "Plan" in text
+    assert len(listed(s, "side")) == fits and listed(s, "side")[-1] == "file19_3.py" and "Todo" in text

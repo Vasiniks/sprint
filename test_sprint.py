@@ -499,7 +499,10 @@ def test_agent_reset_forgets_everything_but_the_system_prompt():
 
 
 def test_system_prompt_stays_tiny():
-    assert len(agent(scripted()).msgs[0]["content"]) < 700
+    a = agent(scripted())
+    with_list = len(a.system())
+    a.planning = False
+    assert len(a.system()) < 700 and with_list - len(a.system()) < 140  # the line about the to-do list is one line
 
 
 # ---------- model backends (HTTP faked at the socket boundary) ----------
@@ -662,7 +665,7 @@ def test_ollama_backend_offers_tools_turns_thinking_off_and_reports_calls(monkey
     ]))
     a = Agent(model="tiny", url="http://localhost:11434", out=io.StringIO())
     chunks = list(a.chat([{"role": "user", "content": "hi"}]))
-    assert [t["function"]["name"] for t in sent["body"]["tools"]] == ["shell", "read", "write", "edit", "fetch", "ask"]
+    assert [t["function"]["name"] for t in sent["body"]["tools"]] == ["shell", "read", "write", "edit", "fetch", "ask", "todowrite"]
     assert sent["body"]["think"] is False
     assert {"call": fn} in chunks
 
@@ -1119,27 +1122,11 @@ def test_images_travel_on_the_message_to_a_vision_model(tmp_path, monkeypatch):
     assert user["images"] == ["cG5n"] and "[Image #1]" in user["content"]
 
 
-def test_plan_mode_asks_for_steps_then_does_them_one_at_a_time(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    chat = scripted("Sure:\n1. Create hello.py\n2. Run it with python", "```write hello.py\nprint('hi')\n```", "Created.",
-                    "```shell\necho ran\n```", "It ran.")
+def test_a_message_is_one_request_with_no_planning_round_before_it():
+    chat = scripted("Four.")
     a = agent(chat)
-    shown = []
-    a.show_plan = lambda steps, at: shown.append((list(steps), at))
-    assert a.run_plan("make hello.py and run it") == "It ran."
-    assert (tmp_path / "hello.py").exists()
-    assert chat.seen[0][0]["role"] == "system" and "list" in chat.seen[0][0]["content"]
-    assert chat.seen[0][-1] == {"role": "user", "content": "make hello.py and run it"}  # asked apart from the conversation
-    asks = [m["content"] for m in a.msgs if m.get("human")]
-    assert "step 1 of 2" in asks[0] and "Create hello.py" in asks[0] and "step 2 of 2" in asks[1] and "Run it" in asks[1]
-    assert shown[0] == (["Create hello.py", "Run it with python"], 0) and shown[-1][1] == 2
-
-
-def test_plan_mode_just_runs_when_there_is_nothing_to_split():
-    chat = scripted("It is one thing.", "Four.")
-    a = agent(chat)
-    assert a.run_plan("what is 2+2?") == "Four."
-    assert [m["content"] for m in a.msgs if m.get("human")] == ["what is 2+2?"]
+    assert a.run("what is 2+2?") == "Four." and len(chat.seen) == 1 and a.todos == []
+    assert [m["content"] for m in a.msgs if m.get("human")] == ["what is 2+2?"]  # (the to-do list has tests of its own: test_todo.py)
 
 
 def test_race_runs_both_models_read_only_and_reports_each(tmp_path, monkeypatch):

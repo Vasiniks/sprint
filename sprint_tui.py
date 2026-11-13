@@ -27,7 +27,7 @@ COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the 
             ("/effort", "low · medium · high"),
             ("/context", "what is filling the context window"), ("/usage", "tokens, time and tool calls: this session and all time"), ("/permissions", "what runs without asking"),
             ("/config", "see or change saved settings"), ("/systemprompt", "edit what the model is told at the start"),
-            ("/theme", "colours"), ("/plan", "split each message into steps first, on or off"),
+            ("/theme", "colours"), ("/plan", "let the model keep a to-do list for a big job, on or off"),
             ("/race", "one message, two models, side by side"),
             ("/directory", "change the folder sprint works in"),
             ("/copy", "copy the last answer; /copy code, /copy all"), ("/paste", "attach the picture on the clipboard"), ("/export", "save the conversation as markdown"),
@@ -548,6 +548,13 @@ def row(spans, value=None, keep=False):
     return {"s": spans if isinstance(spans, list) else [(spans, "")], "v": value, "keep": keep}
 
 
+def todo_brief(todos):
+    """a to-do list in a few words: how many of its items are done, and the one in hand (else the next to do)"""
+    done = sum(1 for _, state in todos if state == "completed")
+    now = next((what for what, state in todos if state == "in_progress"), next((what for what, state in todos if state == "pending"), ""))
+    return f"{done}/{len(todos)}" + (f" · {now}" if now else "") if todos else "cleared"
+
+
 def edit_size(body):
     """what an edit changes, as it is said beside one: +lines put in, -lines taken out"""
     old, new = split_edit(body) or ("", body)
@@ -659,7 +666,7 @@ class Screen:
         self.backdrop_now, self.repaint = None, False  # the colour that window has taken from us; paint again, it has changed
         self.jump_to = None  # where the "jump to bottom" button is, while you are scrolled up: (row, first column, past the last)
         self.select, self.screen, self.rich = None, {}, False  # a drag over text; what each screen row shows; 256 colours?
-        self.aside = False  # is the plan on show in the right-hand panel (and so not in the conversation)?
+        self.aside = False  # is the right-hand panel on show, and so the model's to-do list in it (not whole in the conversation)?
         self.plan_h, self.plan_edge, self.rows = None, None, 0  # rows you gave the plan; its top edge; the screen's
         self.act = 8  # the row of the right-hand panel that "Activity" stands on
         self.shift = {"left": 0, "side": 0}  # how far each side panel's list is scrolled back from its newest entry
@@ -675,13 +682,13 @@ class Screen:
         self.load_ui()
         agent.emit, agent.status, agent.ask, agent.question = self.emit, self.status, self.ask, self.question
         agent.show_call, agent.show_result, agent.show_thought = self.show_call, self.show_result, self.show_thought
-        agent.show_plan, agent.show_thinking = self.show_plan, self.show_thinking
+        agent.show_thinking = self.show_thinking
 
     def load_ui(self):
         kept = sprint.load_config()
         self.sidebar, self.history = kept.get("sidebar", True), kept.get("history", True)
         self.side_w, self.left_w = kept.get("sidebar_w", SIDE), kept.get("history_w", 26)
-        self.motion, self.plan = kept.get("motion", True), bool(kept.get("plan", False))
+        self.motion = kept.get("motion", True)
         saved = kept.get("theme")  # names that are gone: the terminal's own colours were "default", and Sapphire came in two
         saved = {"default": "terminal", "sapphire-dim": "sapphire"}.get(saved, saved)
         self.theme = saved if saved in THEMES else "sprint"
@@ -901,12 +908,14 @@ class Screen:
         self.gate.set()
         self.asked()
 
-    def show_plan(self, steps, at):
-        plan = self.plan_now()
-        if plan:
-            plan["at"] = at
-        else:
-            self.items.append({"t": "plan", "steps": list(steps), "at": at})
+    @property
+    def plan(self):
+        """may the model keep a to-do list (/plan)? The agent knows; the screen only shows it"""
+        return self.agent.planning
+
+    @plan.setter
+    def plan(self, on):
+        self.agent.planning = bool(on)
 
     def side_head(self, inner, h):
         """the top of the right-hand panel, as rows inner wide: the context window, then the session. A tall screen gets
@@ -952,7 +961,7 @@ class Screen:
     def work(self, task, chips=None):
         before, began = dict(self.agent.tally), time.time()
         try:
-            stop = (self.agent.run_plan if self.plan else self.agent.run)(task, chips)
+            stop = self.agent.run(task, chips)
             if stop.startswith("stopped:"):
                 self.say(stop, "warn")
         except KeyboardInterrupt:
@@ -1635,7 +1644,9 @@ class Screen:
             elif c.tool == "write":
                 extra = f" +{len(c.body.splitlines())}"
             what = c.body.split("\n")[0] if c.tool in ("shell", "ask") else c.arg
-            out.append((it, [(mark[0] + " ", mark[1]), (c.tool + " ", "bold"), (what, "" if c.tool in ("shell", "ask") else "path"), (extra, "dim")]))
+            if c.tool == "todo":  # how far along the list was then, and what was in hand
+                what = todo_brief(sprint.todo_items(c.body))
+            out.append((it, [(mark[0] + " ", mark[1]), (c.tool + " ", "bold"), (what, "" if c.tool in ("shell", "ask", "todo") else "path"), (extra, "dim")]))
         return out
 
     # --- popups: one window for everything a command brings up
@@ -2314,6 +2325,17 @@ class Screen:
                    [("", [("┆ ", "frame")] + clip(r, inner) + [(" ┆", "frame")], it) for r in rows] + \
                    [("", [("└" + "┄" * (w - 2) + "┘", "frame")], it)]
         body, asks = [], c.tool == "ask"
+        if c.tool == "todo":  # the model's list: whole in the newest one while no panel shows it, else one line (click for all)
+            todos = sprint.todo_items(c.body)
+            newest = it is next((i for i in reversed(self.items) if i["t"] == "tool" and i["call"].tool == "todo"), None)
+            if not (it["open"] or (newest and not (self.aside and self.plan))):
+                return [("", clip([("  ☰ ", "frame"), ("todo  ", "dim"), (todo_brief(todos), "dim")], w), it)]
+            rows = [r for n, (what, state) in enumerate(todos)
+                    for k, r in enumerate(wrap([(what, "bold" if state == "in_progress" else "" if state == "pending" else "dim")], inner - 2))
+                    for r in [[self.todo_mark(state) if k == 0 else ("  ", "")] + r]]
+            top = [("╭─ ", "frame"), ("todo", "bold"), (f"  {todo_brief(todos).split(' · ')[0]} ", "dim")]
+            return [("", top + [("─" * (w - len(flat(top)) - 1) + "╮", "frame")], it)] + \
+                   [("", boxed(r, w), it) for r in rows] + [("", box_foot("", w), it)]
         if asks:  # a question is shown whole, always: what was asked, and then what you said
             if it["state"] in ("running", "asking") and not (self.asking or {}).get("cut"):
                 return []  # still waiting for you: it stands in the bar, choices and all, and once is enough
@@ -2357,36 +2379,33 @@ class Screen:
         hint = f" … +{hidden} lines · ctrl+o " if hidden else " ctrl+o to collapse " if full and len(body) > self.peek and not asks else ""
         return [("", top, it)] + [("", boxed(r, w), it) for r in rows] + [("", box_foot(hint, w), it)]
 
-    def plan_now(self):
-        """the checklist of the message in hand, if plan mode made one for it"""
-        last = next((i for i in reversed(self.items) if i["t"] in ("plan", "user")), None)
-        return last if last and last["t"] == "plan" else None
+    def todo_mark(self, state):
+        """how an item of the model's to-do list is marked: done, in hand, still to do, dropped"""
+        return {"completed": ("✓ ", "green"), "in_progress": ("▸ ", self.agent.mode), "cancelled": ("– ", "dim")}.get(state, ("· ", "dim"))
 
-    def step_mark(self, n, at):
-        """how step n of a plan is marked when step at is the one in hand: done, doing now, still to do"""
-        return ("✓ ", "green") if n < at else ("▸ ", self.agent.mode) if n == at else ("· ", "dim")
-
-    def plan_rows(self, plan, w, room):
-        """the plan for the right-hand panel: every step wrapped to its width, done / in hand / still to do, and as many
-        rows as there is room for, kept around the step in hand"""
-        at, rows, first = plan["at"], [], 0
-        for n, step in enumerate(plan["steps"]):
+    def plan_rows(self, todos, w, room):
+        """the to-do list for the right-hand panel: every item wrapped to its width, done / in hand / still to do, and
+        as many rows as there is room for, kept around the item in hand (or, with none in hand, the next to do)"""
+        states = [state for _, state in todos]
+        at = states.index("in_progress") if "in_progress" in states else states.index("pending") if "pending" in states else len(todos)
+        rows, first = [], 0
+        for n, (what, state) in enumerate(todos):
             first = len(rows) if n == at else first
-            mark, role = self.step_mark(n, at)
-            for k, r in enumerate(wrap([(step, "bold" if n == at else "dim")], max(8, w - 2))):
-                rows.append([(mark if k == 0 else "  ", role)] + r)
+            mark = self.todo_mark(state)
+            for k, r in enumerate(wrap([(what, "bold" if state == "in_progress" else "dim")], max(8, w - 2))):
+                rows.append([mark if k == 0 else ("  ", mark[1])] + r)
         start = max(0, min(first - 1, len(rows) - room))
         return rows[start:start + room]
 
     def lines(self, w):
         out = []
+        newest = next((i for i in reversed(self.items) if i["t"] == "tool" and i["call"].tool == "todo"), None)
         for it in self.items:
-            if it["t"] == "plan" and self.aside:
-                continue  # it is on show in the right-hand panel instead
-            key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek, it.get("at"),
+            key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek,
                    self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""),  # a thought grows,
                    it.get("state") == "running" and self.quiet(),  # and is over once the model has gone quiet to write its call
-                   bool((self.asking or {}).get("cut")))  # a question too long for the bar stands here as well
+                   bool((self.asking or {}).get("cut")),  # a question too long for the bar stands here as well
+                   (it is newest, self.aside and self.plan))  # a to-do list folds once a newer one is there, or the panel shows it
             if self.cache.get(id(it), (None,))[0] != key:
                 if it["t"] == "tool":
                     rows = self.window(it, w)
@@ -2396,10 +2415,6 @@ class Screen:
                     rows = [r for line in it["text"][mine:].split("\n") for r in wrap([(line.lstrip() if mine else line, "bold")], w - 4)]
                     rows = [("user", [("▌", tone), (" ", "")] + ([("!" if mine else MARK, tone), (" ", "")] if n == 0 else [("  ", "")]) + r, it)
                             for n, r in enumerate(rows)]
-                elif it["t"] == "plan":  # plan mode's checklist: done, doing now, still to do
-                    at = it["at"]
-                    rows = [("", [("  ", ""), self.step_mark(n, at), (step[:max(8, w - 6)], "bold" if n == at else "dim")], None)
-                            for n, step in enumerate(it["steps"])]
                 elif it["t"] == "note":
                     rows = [("", [("  ", "")] + r, None) for line in it["text"].split("\n")
                             for r in wrap([(line, it["role"])], w - 2)]
@@ -2614,14 +2629,14 @@ class Screen:
         for i, spans in enumerate(top_rows):
             self.put(scr, 1 + i, x, spans, width=inner)
         act = self.act = len(top_rows) + 2  # the row "Activity" stands on: under the head, wherever that ends
-        plan = self.plan_now() if self.plan else None  # /plan off puts the plan away too
+        plan = list(a.todos) if self.plan else []  # the model's to-do list, while it has one; /plan off puts it away too
         half = max(act + 3, min(h - 4, h - self.plan_h if self.plan_h else max(h // 2, act + 6)))  # the bottom half, unless you dragged its edge
         self.plan_edge = half - 1 if plan else None
-        if plan:  # a line to drag, how far along, then the steps
+        if plan:  # a line to drag, how far along, then the items
             held = self.drag == "plan"
             self.put(scr, half - 1, x, [(("━" if held else "─") * inner, a.mode if held else "frame")])
-            done = f"{min(plan['at'], len(plan['steps']))}/{len(plan['steps'])}"
-            self.put(scr, half, x, [("Plan", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
+            done = f"{sum(1 for _, state in plan if state == 'completed')}/{len(plan)}"
+            self.put(scr, half, x, [("Todo", "dim"), (done.rjust(inner - 4), "dim")], width=inner)
             for i, spans in enumerate(self.plan_rows(plan, inner, max(1, h - 3 - half))):
                 self.put(scr, half + 1 + i, x, spans, width=inner)
         log, which = self.window_of("side", self.activity(), max(1, (half - 1 if plan else h - 3) - (act + 1)))

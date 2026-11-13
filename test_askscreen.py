@@ -638,16 +638,15 @@ def test_it_works_while_the_model_reasons_first():
     assert "Blue it is." in s.items[-1]["text"]
 
 
-def test_it_works_in_plan_mode_and_the_plan_stays_on_show():
-    s = screen("1. Pick a colour\n2. Say it\n", ASK, "Picked.", "Blue it is.")
-    s.plan = True
+def test_it_works_with_a_to_do_list_going_and_the_list_stays_on_show():
+    s = screen("```todo\n[>] Pick a colour\n[ ] Say it\n```", ASK, "```todo\n[x] Pick a colour\n[x] Say it\n```", "Blue it is.")
     s.submit("style the button")
     until(lambda: s.asking)
-    assert s.plan_now() and s.plan_now()["at"] == 0  # the question does not hide the plan
+    assert s.agent.todos == [("Pick a colour", "in_progress"), ("Say it", "pending")]  # the question does not put the list away
     typed(s, "blue")
     s.key("\r")
     finish(s)
-    assert s.plan_now()["at"] == 2 and "Blue it is." in s.items[-1]["text"]
+    assert s.agent.todos[0] == ("Pick a colour", "completed") and "Blue it is." in s.items[-1]["text"]
     assert "The user answered: blue" in "\n".join(str(m["content"]) for m in s.agent.chat.seen[-1])
 
 

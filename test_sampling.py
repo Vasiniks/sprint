@@ -98,14 +98,6 @@ def test_a_server_that_speaks_the_openai_way_gets_the_ones_it_knows(monkeypatch)
     assert "top_k" not in body and "repeat_penalty" not in body and "options" not in body  # those are Ollama's own
 
 
-def test_the_plan_is_asked_for_with_your_settings_too(monkeypatch):
-    a = local()
-    sprint.command(a, "/config seed 11")
-    sent = fake_urlopen(monkeypatch, DONE)
-    a.plan("tidy the parser and its tests")
-    assert sent["body"]["options"]["seed"] == 11
-
-
 # ---------- their page in the settings popup ----------
 
 def pages(s):

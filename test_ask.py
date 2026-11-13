@@ -144,30 +144,13 @@ def test_a_native_ask_call_is_kept_in_the_models_own_format():
     assert a.msgs[-2] == {"role": "tool", "tool_name": "ask", "content": "The user answered: red"}
 
 
-def test_in_plan_mode_a_step_can_ask_and_later_steps_know_the_answer():
-    a = asker("1. Pick a colour\n2. Write the file\n", ASK, "Blue chosen.", "```write b.css\nbutton { color: blue }\n```", "Written.")
-    steps = []
-    a.show_plan = lambda plan, at: steps.append(at)
-    assert a.run_plan("style the button") == "Written."
-    assert len(a.put) == 1 and steps == [0, 1, 2]
-    assert "The user answered: blue" in told(a) and "step 2 of 2" in told(a)  # still there when the second step is asked for
-    assert "```ask" not in told(a, 0) and "blue" not in told(a, 0)  # the planning request itself asks nothing
-
-
-def test_the_planning_request_offers_no_question_tool(monkeypatch):
-    sent = []
-
-    class Reply(io.BytesIO):
-        def __enter__(self):
-            return self
-
-    def urlopen(req, timeout=0):
-        sent.append(sprint.json.loads(req.data))
-        return Reply(b'{"message": {"content": "1. a\\n2. b"}, "done": true}\n')
-
-    monkeypatch.setattr(sprint.urllib.request, "urlopen", urlopen)
-    a = Agent(out=io.StringIO())
-    assert a.plan("do it all now") == ["a", "b"] and "tools" not in sent[0]
+def test_with_a_to_do_list_going_it_can_still_ask_and_the_answer_stays_in_front_of_it():
+    a = asker("```todo\n[>] Pick a colour\n[ ] Write the file\n```", ASK,
+              "```todo\n[x] Pick a colour\n[>] Write the file\n```", "```write b.css\nbutton { color: blue }\n```",
+              "```todo\n[x] Pick a colour\n[x] Write the file\n```", "Written.")
+    assert a.run("style the button") == "Written."
+    assert len(a.put) == 1 and a.todos == [("Pick a colour", "completed"), ("Write the file", "completed")]
+    assert "The user answered: blue" in told(a)  # still there when the file is written
 
 
 # ---------- the summary keeps what you said ----------

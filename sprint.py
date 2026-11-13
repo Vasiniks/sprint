@@ -27,6 +27,7 @@ import zlib
 from pathlib import Path
 
 ASK_BLOCK = "```ask\na question, when only the user can answer it\n```\n"  # left out of the prompt with /config questions off
+TODO_BLOCK = "```todo\n[x] a step that is done\n[>] the step in hand\n[ ] a step to do (a list only for a big job)\n```\n"  # and with /plan off
 SYSTEM = """You are a coding agent in the user's project folder. Use relative paths.
 To act, reply with ONE tool block, then stop and wait for the result:
 
@@ -45,7 +46,7 @@ new lines
 ```
 ```fetch https://example.com
 ```
-""" + ASK_BLOCK + """
+""" + ASK_BLOCK + TODO_BLOCK + """
 Any other code block is NOT saved or run.
 When the task is done, reply with a short answer and no tool block."""
 
@@ -80,14 +81,33 @@ def bash_path():
     return guess if os.path.isfile(guess) else None
 
 
-def tools(questions=True):
-    """what a model that calls tools natively is offered; without the ask tool where questions are switched off"""
+# The to-do list, after opencode's todowrite: its wording, its four states, and the whole list sent every time
+STATES = ("pending", "in_progress", "completed", "cancelled")
+OPEN = ("pending", "in_progress")  # the states of an item that still has work in it
+TODO_TOOL = {"type": "function", "function": {
+    "name": "todowrite",
+    "description": "Create and update a todo list for the current session. The user sees it as your working plan. Use it "
+                   "when a task has 3 or more distinct steps, or when the user gives several tasks or asks for a todo list. "
+                   "Skip it for a single simple task or a purely conversational request. Send the full list on every call; "
+                   "it replaces the previous one. Mark items in_progress when you start them and completed as soon as "
+                   "they're actually done. Only call it when the list changes.",
+    "parameters": {"type": "object", "required": ["todos"], "properties": {"todos": {
+        "type": "array", "description": "The updated todo list", "items": {
+            "type": "object", "required": ["content", "status"], "properties": {
+                "content": {"type": "string", "description": "Brief description of the task"},
+                "status": {"type": "string", "enum": list(STATES)}}}}}}}}
+
+
+def tools(questions=True, planning=True):
+    """what a model that calls tools natively is offered; without the ask tool where questions are switched off, and
+    without the to-do list where that is"""
     return [_tool("shell", f"Run a {'bash' if bash_path() else 'PowerShell'} command", "command"),
             _tool("read", "Read a file (from_line starts part-way into a long one), or list a folder", "path", "from_line?"),
             _tool("write", "Create or overwrite a file", "path", "content"),
             _tool("edit", "Replace exact text in a file", "path", "old", "new"),
             _tool("fetch", "Get a web page as text", "url")] + \
-        [_tool("ask", "Ask the user a question, when only they can answer it (options: choices to offer)", "question", "options?")] * questions
+        [_tool("ask", "Ask the user a question, when only they can answer it (options: choices to offer)", "question", "options?")] * questions + \
+        [TODO_TOOL] * planning
 
 
 TOOLS = tools()
@@ -96,12 +116,17 @@ REFUSAL = re.compile(r"(do not|don't|cannot|can't|can not|unable to)( directly)?
                      r"(provide|share|paste|copy)[^.]{0,40}(content|file|path|location)", re.I)
 ALIAS = {"shell": "shell", "bash": "shell", "sh": "shell", "zsh": "shell", "tool": "shell", "read": "read",
          "write": "write", "edit": "edit", "fetch": "fetch", "webfetch": "fetch",
-         "ask": "ask", "question": "ask", "ask_user": "ask", "askuser": "ask"}
+         "ask": "ask", "question": "ask", "ask_user": "ask", "askuser": "ask",
+         "todo": "todo", "todos": "todo", "todowrite": "todo", "todo_write": "todo", "todolist": "todo"}
 Call = collections.namedtuple("Call", "tool arg body end start")
 MODES = ("ask", "edits", "auto")
 FENCE = re.compile(r"^\s*(`{3,})[ \t]*([A-Za-z_]+)[ \t]*(.*)$")
 OPTION = re.compile(r"\s*(?:[-*•]|\d{1,2}[.)]|[A-Za-z][.)])\s+(.+)$")  # a line that is one of a question's choices
 ANSWERED = "The user answered: "  # how the result of an ask call begins when you answered it
+MARKS = {"completed": "[x]", "in_progress": "[>]", "pending": "[ ]", "cancelled": "[-]"}  # a to-do item's state, as written
+MARKED = re.compile(r"\s*\[([ xX✓>•~*-])\]\s*(.*)$")
+SAID = {"done": "completed", "complete": "completed", "finished": "completed", "doing": "in_progress", "active": "in_progress",
+        "in progress": "in_progress", "inprogress": "in_progress", "started": "in_progress", "canceled": "cancelled"}
 
 
 # Every web request notes its socket under its thread, so that another thread can hang up on it. Ollama sends
@@ -126,7 +151,7 @@ urllib.request.install_opener(urllib.request.build_opener(_Handler))
 # ---------- reply -> tool call ----------
 
 def _call(tool, arg, body, end, start):
-    if tool in ("shell", "ask"):
+    if tool in ("shell", "ask", "todo"):
         arg, body = "", "\n".join(x for x in (arg, body.strip()) if x)
     elif tool in ("read", "fetch"):
         arg, body = (arg or body).strip().split("\n")[0].strip(), ""
@@ -148,7 +173,9 @@ def from_args(name, a, end, start):
     body = get("old") + "\n====\n" + get("new") if tool == "edit" else get("content", "command", "cmd")
     if tool == "ask":
         body = get("question", "text", "prompt", "message", "query") + choice_lines(a.get("options") or a.get("choices"))
-    where = get("from_line", "start", "line", "offset") if tool == "read" else ""
+    if tool == "todo":
+        body = todo_lines(next((a[k] for k in ("todos", "items", "tasks", "list", "todo") if a.get(k)), []))
+    where =get("from_line", "start", "line", "offset") if tool == "read" else ""
     return _call(tool, get("path", "file", "url") + (" " + where if where.isdecimal() else ""), body, end, start)
 
 
@@ -170,6 +197,53 @@ def choice_lines(given):
     bare = [(OPTION.match(str(x)) or [0, str(x)])[1].strip() for x in given]  # (without a bullet of its own)
     bare = [x for x in bare if x]
     return "".join(f"\n- {x}" for x in bare) if len(bare) > 1 else ""
+
+
+def todo_lines(given):
+    """the list of a native to-do call, however the model sent it (items with a status each, a JSON list typed out
+    as a string, bare strings, or lines of text) -> a line an item, its state as a mark in front: "[x] Create a.py" """
+    if isinstance(given, str) and given.strip().startswith("["):
+        try:
+            given = json.loads(given)
+        except ValueError:
+            pass  # "[x] One\n[ ] Two" starts with a bracket too: lines, then
+    if isinstance(given, str):
+        return given
+    out = []
+    for item in given if isinstance(given, (list, tuple)) else []:
+        if isinstance(item, dict):
+            said = next((str(item[k]) for k in ("content", "task", "title", "text", "description", "name") if item.get(k)), "")
+            state = str(item.get("status") or "").lower().replace("-", "_")
+            state = SAID.get(state.replace("_", " "), state)
+        else:
+            said, state = str(item), ""
+        out.append(f"{MARKS.get(state, MARKS['pending'])} {' '.join(said.split())}" if said.strip() else "")
+    return "\n".join(x for x in out if x)
+
+
+def todo_items(body):
+    """a to-do call's lines -> [(what, state), ...]. A line starts with its mark; one without (a bullet, a number,
+    nothing) is still to do"""
+    marks = {"x": "completed", "X": "completed", "✓": "completed", ">": "in_progress", "•": "in_progress", "~": "in_progress",
+             "*": "in_progress", "-": "cancelled", " ": "pending"}
+    items = []
+    for line in body.splitlines():
+        m = MARKED.match(line)
+        said = (m[2] if m else (OPTION.match(line) or [0, line])[1]).strip()
+        if said:
+            items.append((said, marks[m[1]] if m else "pending"))
+    return items
+
+
+def todo_summary(todos):
+    """what the model is told after a to-do call, as opencode tells it: how the list stands, and what is in hand"""
+    if not todos:
+        return "Todos cleared"
+    count = lambda state: sum(1 for _, s in todos if s == state)
+    counts = [f"{count('completed')}/{len(todos)} completed"] + \
+        [f"{count(s)} {s.replace('_', ' ')}" for s in ("in_progress", "pending", "cancelled") if count(s)]
+    active = [json.dumps(what, ensure_ascii=False) for what, s in todos if s == "in_progress"]
+    return "Todos updated: " + ", ".join(counts) + (". In progress: " + ", ".join(active) if active else "")
 
 
 def question_parts(body):
@@ -651,53 +725,16 @@ def fit(msgs, budget, cpt=3.5):
 # ---------- agent ----------
 
 EFFORT = {"low": (16, 8), "medium": (8, 16), "high": (4, 32)}  # reply budget as window/N tokens, steps per message
+PLANNING = True  # is the to-do list on offer unless /plan says otherwise?
 SPIN = "You are repeating yourself. If the task is done, say so in plain words. Otherwise do something different."
 
 
-PLAN = """You split a request into steps for a coding agent. Anything to build, make, write, fix or change gets a \
-numbered list of steps, one small concrete action each: as many as the job needs and no more. A big job has more steps \
-than a small one. Only when the message is just chat or a question, reply with the one word NONE."""
-# What no plan, a long plan and a short plan look like, as (the request, the reply): they go before the real message as
-# turns of a conversation. A small model takes the size of a plan from examples far more readily than from being told:
-# asked for "at most 5" steps it wrote five for everything, a greeting included
-PLAN_SHOWN = [
-    ("hello", "NONE"),
-    ("make me a website for my restaurant",  # (a model this small borrows from the nearest example, so this one is a
-     "1. Create index.html with the header, the navigation and a welcome section\n"  # site that would do for most)
-     "2. Create style.css with the layout, colours and type\n"
-     "3. Create about.html with the story of the place\n"
-     "4. Create menu.html with what is on offer and the prices\n"
-     "5. Create contact.html with the address, the opening hours and a contact form\n"
-     "6. Create script.js that opens the navigation on a phone and checks the form\n"
-     "7. Link the pages to each other in the navigation\n"
-     "8. Open each page and check the links and the form"),
-    ("how does the parser work?", "NONE"),
-    ("add a --dry-run flag to backup.py and document it",
-     "1. Add the --dry-run flag to the argument parser in backup.py\n2. Describe the flag in the README"),
-    ("make a page for a yoga class with its timetable",
-     "1. Create index.html with the heading, a short welcome and the timetable\n"
-     "2. Create style.css with the layout, colours and type\n"
-     "3. Open index.html and check how it looks"),
-    ("write a script that renames photos by the date they were taken",
-     "1. Create rename_photos.py that lists the photos in a folder\n"
-     "2. Read the date each photo was taken from its EXIF data\n"
-     "3. Rename each file to its date, keeping the extension\n"
-     "4. Run it on a test folder and check the names")]
-PLAN_MOST = 12  # a list longer than this is a model that cannot stop, not a plan
-STEPWISE = "We will do this one step at a time."
-
-
-def steps_in(text):
-    """the steps of a numbered or bulleted list, in order, each of them once"""
-    steps = []
-    for m in re.finditer(r"^\s*(?:\d+[.)]|[-*•])\s+(.+)$", text, re.M):
-        if m.group(1).strip().lower() not in [s.lower() for s in steps]:
-            steps.append(m.group(1).strip())
-    return steps
+# Said to a model that calls tools, while the to-do list is on offer. A small model heeds a line here far more than a
+# tool's own description: with the description alone, magi 1.2 2B never once reached for the list
+LISTS = "\nBefore a big job with several files or parts, call todowrite first to list the steps. Small jobs and questions need no list."
 
 
 class Agent:
-    bare = False  # True while asking for a plan: that call offers no tools
     sampling = {}  # extra Ollama options, e.g. {"temperature": 0.7}; empty keeps the model's own defaults
 
     def __init__(self, model=None, url="http://localhost:11434", ctx=8192, steps=16,
@@ -708,6 +745,7 @@ class Agent:
         self.ask_timeout = 20                    # seconds a question waits for you before the call is set aside (0: for ever)
         self.parked, self.passes = [], []        # calls set aside unanswered; (tool, target) you have since allowed, once
         self.questions, self.question_timeout = True, 60  # may the model ask you things? seconds its question waits (0: for ever)
+        self.planning = PLANNING                 # may it keep a to-do list for a big job? (/plan)
         self.allow = []                          # calls that never ask: "shell git status*", "write notes/*", ...
         self.rate, self.took = 0.0, 0.0          # tokens a second in the last reply, and how long it took
         self.tally, self.unsaved, self.started = blank(), blank(), time.time()  # this session's use; the part not yet on disk
@@ -739,6 +777,7 @@ class Agent:
     def reset(self):
         self.msgs = [{"role": "system", "content": self.system()}]
         self.touched, self.cancel = [], False  # files changed so far; set cancel to stop the current turn
+        self.todos, self.worked = [], False  # the model's to-do list: [(what, state), ...]; has another call run since it was sent?
         self.forgotten = 0  # older turns dropped to stay inside the window
 
     def compact(self, everything=False):
@@ -769,6 +808,7 @@ class Agent:
                 c = from_args(raw.get("name"), raw.get("arguments"), 0, 0) if raw else parse(x["content"], final=True)
                 doing = f"{c.tool} {self.target(c).split(chr(10))[0][:60]}" if c else ""
                 doing = f"asked you: {question_parts(c.body)[0].split(chr(10))[0][:80]}" if c and c.tool == "ask" else doing
+                doing = "" if c and c.tool == "todo" else doing  # its list is given whole below, as it stands now
                 lines += [] if c or not x["content"].strip() else [f"- answered: {x['content'].strip().split(chr(10))[0][:100]}"]
             elif doing:  # what that call gave back
                 got = re.sub(r"^\[\w+ result\]\n", "", x["content"]).strip().split("\n")[0]
@@ -784,6 +824,7 @@ class Agent:
             rest = [i for i in range(len(lines)) if i not in vital][-(room - len(vital)):]
             lines = [lines[i] for i in sorted(vital + rest)]
         text = "Summary of the conversation so far (older steps, shortened):\n" + "\n".join(lines)
+        text += "\n\nYour to-do list:\n" + "\n".join(f"{MARKS[state]} {what}" for what, state in self.todos) if self.todos else ""
         text += f"\n\nThe current request: {request}" if request else ""
         self.msgs = [m[0], {"role": "user", "content": text, "human": True, "summary": True}] + tail
         self.forgotten += len(old) // 2
@@ -815,6 +856,8 @@ class Agent:
         if self.custom:  # your own prompt; a model without tool calls still needs the block format spelled out
             base = self.custom if self.tools else self.custom + "\n" + SYSTEM.split("\n", 1)[1]
         base = base if self.questions else base.replace(ASK_BLOCK, "")
+        base = base if self.planning else base.replace(TODO_BLOCK, "")
+        base += LISTS if self.planning and self.tools else ""
         shell_note = f"\nThis is Windows: shell commands run in {'Git Bash' if bash_path() else 'PowerShell'}." if WINDOWS else ""
         return base + shell_note + "\n" + here()
 
@@ -823,7 +866,7 @@ class Agent:
 
     def extra(self):
         """prompt chars the server adds on top of the messages: the tool schemas"""
-        return len(json.dumps(tools(self.questions))) if self.tools else 0
+        return len(json.dumps(tools(self.questions, self.planning))) if self.tools else 0
 
     def say(self, s, style=""):
         if s:
@@ -895,6 +938,18 @@ class Agent:
             return "The user leaves this to you. Decide yourself, say what you chose, and carry on."
         return ANSWERED + str(answer).strip()
 
+    def listed(self, c):
+        """the to-do tool: the list the model sent is the list now, whole -> how it stands, for the model. It is the
+        model's own notes and changes nothing, so there is nothing to approve.
+        A small model sends only what is left and drops what it finished, where it should send everything: an item
+        that was done, or was in hand while other calls ran, and is missing from a new list is kept, as done"""
+        new = todo_items(c.body)
+        named = {what.lower() for what, _ in new}
+        kept = [(what, "completed") for what, state in self.todos
+                if what.lower() not in named and (state == "completed" or state == "in_progress" and self.worked)]
+        self.todos, self.worked = (kept + new if new else []), False
+        return todo_summary(self.todos)
+
     def show_call(self, c):
         self.say("" if self.col0 else "\n")
         self.say("● ", "36")
@@ -905,6 +960,8 @@ class Agent:
         if c.tool == "ask":
             text, options = question_parts(c.body)
             rows = [("1", x) for x in text.splitlines()] + [("", f"{n}. {o}") for n, o in enumerate(options, 1)]
+        elif c.tool == "todo":  # the list, each item with its mark: the one in hand stands out, what is over is dim
+            rows = [({"in_progress": "1", "pending": ""}.get(state, "2"), f"{MARKS[state]} {what}") for what, state in todo_items(c.body)]
         elif c.tool == "shell":
             rows = [("", ("$ " if i == 0 else "  ") + x) for i, x in enumerate(c.body.splitlines())]
         elif c.tool == "edit":
@@ -929,8 +986,8 @@ class Agent:
         if native:  # thinking off: it eats a tiny model's reply budget and made tool use worse in testing
             body.update(options={"num_ctx": self.ctx, "num_predict": self.limit or self.max_out, **self.sampling},
                         think=self.effort if self.think else False, keep_alive="30m")
-            if self.tools and not self.bare:
-                body["tools"] = tools(self.questions)
+            if self.tools:
+                body["tools"] = tools(self.questions, self.planning)
         else:  # (of the sampling settings, such a server is sent the ones every one of them knows)
             body.update(max_tokens=self.limit or self.max_out, stream_options={"include_usage": True},
                         **{k: v for k, v in self.sampling.items() if k in OPENAI})
@@ -1078,7 +1135,7 @@ class Agent:
             pass
 
     def target(self, c):
-        if c.tool in ("shell", "ask"):
+        if c.tool in ("shell", "ask", "todo"):
             return c.body.strip()
         return c.arg if c.tool != "fetch" or "://" in c.arg else "https://" + c.arg
 
@@ -1121,6 +1178,9 @@ class Agent:
     def do(self, c):
         if c.tool == "ask":  # a question for you is nothing to approve, whatever the mode
             return self.consult(c)
+        if c.tool == "todo":  # nor is its own list
+            return self.listed(c)
+        self.worked = True
         key, risky = (c.tool, self.target(c)), guarded(c)  # deleting this folder or beyond it, or changing sprint's own files
         edits = self.mode == "edits" and c.tool in ("write", "edit") and inside(c.arg)  # edits mode frees this folder's files, no others
         free = c.tool == "read" or self.mode == "auto" or edits or self.allowed(c)
@@ -1176,69 +1236,6 @@ class Agent:
         else:
             self.msgs.append({"role": "user", "content": user, "human": human})
 
-    def plan(self, task):
-        """ask the model, without tools, for a short numbered plan -> its steps, or [] when there is nothing to split.
-        It is a reply like any other: it says what it is doing and it can be stopped (it used to be a blind spot that
-        nothing reached, and with it running there was no leaving sprint). A list of steps needs no long reasoning,
-        so it is asked for without any and with a small budget: seconds, where full effort took a minute or more.
-        How many steps is the model's to say: it is shown plans of several sizes, and what was last said in this
-        conversation, so that "now add tests for it" is about the right thing. A word or two ("hi", "continue") is
-        never a job to split, and is not asked about at all. The request is made at a low temperature, whatever
-        yours is: the same message should not get eight steps one time and none the next"""
-        if len(task.split()) < 3:
-            return []
-        was, kept, own = self.think, self.limit, self.sampling
-        self.bare, self.cancel, self.think, self.limit = True, False, False, min(self.max_out, 400)
-        self.sampling = {**own, "temperature": min(own.get("temperature", 0.3), 0.3)}
-        self.thread, text = threading.get_ident(), ""  # so stop() can hang up on it
-        self.status("planning")
-        shown = [{"role": role, "content": said} for pair in PLAN_SHOWN for role, said in zip(("user", "assistant"), pair)]
-        stream = self.chat([{"role": "system", "content": PLAN}] + shown + self.before() + [{"role": "user", "content": task}])
-        try:
-            for c in stream:
-                if self.cancel:
-                    raise KeyboardInterrupt
-                text += c if isinstance(c, str) else ""
-                if len(re.findall(r"^\s*(?:\d+[.)]|[-*•])\s+.+\n", text, re.M)) > PLAN_MOST:
-                    break  # it has gone round in circles, or cannot stop: enough has been heard
-        finally:
-            getattr(stream, "close", lambda: None)()
-            SOCKETS.pop(self.thread, None)
-            self.bare, self.think, self.limit, self.sampling = False, was, kept, own
-            self.status("")
-        steps = steps_in(unthink(text))[:PLAN_MOST]
-        return steps if len(steps) > 1 else []
-
-    def before(self, most=400):
-        """the last thing you asked and what the model said to it, in brief -> two messages, or none on a first one"""
-        at = next((n for n in range(len(self.msgs) - 1, 0, -1) if self.msgs[n]["role"] == "user" and self.msgs[n].get("human")), 0)
-        said = next((m for m in reversed(self.msgs[at + 1:]) if m["role"] == "assistant" and unthink(m["content"]).strip()), None)
-        if not (at and said):
-            return []
-        asked = self.msgs[at]["content"].split("\n\n" + STEPWISE)[0]
-        return [{"role": "user", "content": asked.strip()[:most]}, {"role": "assistant", "content": unthink(said["content"]).strip()[:most]}]
-
-    def show_plan(self, steps, at):
-        self.say("" if self.col0 else "\n")
-        for n, step in enumerate(steps):
-            self.say(f"  {'✓' if n < at else '▸' if n == at else '·'} {step}\n", "1" if n == at else "2")
-
-    def run_plan(self, task, chips=None):
-        """plan mode: get a list of steps first, then do them one message at a time"""
-        steps = self.plan(task)
-        if not steps:
-            return self.run(task, chips)
-        answer = ""
-        for n, step in enumerate(steps):
-            self.show_plan(steps, n)
-            ask = f"Now do only step {n + 1} of {len(steps)}: {step}"
-            answer = self.run(f"{task}\n\n{STEPWISE} {ask}", chips) if n == 0 else \
-                self.run(ask, human=False)
-            if answer.startswith("stopped:"):
-                return answer
-        self.show_plan(steps, len(steps))
-        return answer
-
     def run(self, task, chips=None, human=True):
         """answer one message; whatever it used is added to the lifetime tally when it ends, however it ends"""
         self.count(messages=int(human))
@@ -1256,9 +1253,14 @@ class Agent:
         self.reply(None, text, human=True)
         if images:
             self.msgs[-1].setdefault("images", []).extend(images)
-        last, seen, spins, empties, nudged, cuts, said, wrote, failed = None, set(), 0, 0, False, 0, [], None, None
-        for _ in range(self.steps):
+        if not any(state in OPEN for _, state in self.todos):
+            self.todos = []  # a list with nothing left on it was the last job's: it is put away
+        last, seen, spins, empties, nudged, cuts, said, wrote, failed, reminded = None, set(), 0, 0, False, 0, [], None, None, False
+        left = spare = self.steps  # bringing its list up to date costs a message none of its steps, up to as many again
+        while left > 0:
             text, call, cut, raw = self.turn()
+            free = bool(call and call.tool == "todo" and spare > 0)
+            left, spare = left - (not free), spare - free
             if call is None and cut:
                 log("cut", limit=self.limit)
                 cuts += 1
@@ -1285,6 +1287,11 @@ class Agent:
                 nudged = True
                 self.reply(text, "You do have access: your tools work on the files in this folder. "
                                  "Use them now instead of asking.")
+            elif call is None and self.planning and not reminded and any(state in OPEN for _, state in self.todos):
+                reminded = True  # it says it is finished, and its list says otherwise: once, it is asked which is true
+                waiting = "; ".join(what for what, state in self.todos if state in OPEN)
+                self.reply(text, f"Your to-do list still has these open: {waiting}. If they are done, mark them completed "
+                                 "with todowrite. If not, carry on with them.")
             elif call is None:
                 self.msgs.append({"role": "assistant", "content": text})
                 return "".join(part + ("" if text[:1] in ".,;:!?)]" else " ") for part in said) + text
@@ -1857,10 +1864,10 @@ def cmd_directory(agent, arg):
 
 
 def cmd_plan(agent, arg):
-    """/plan: split each message into steps first, on or off"""
-    on = not load_config().get("plan", False)
-    save_config(plan=on)
-    return notes("plan mode on: each message is split into steps first" if on else "plan mode off")
+    """/plan: may the model keep a to-do list for a big job? on or off"""
+    agent.planning = not agent.planning
+    save_config(plan=agent.planning)
+    return notes("plan on: the model keeps a to-do list for a big job" if agent.planning else "plan off: no to-do list")
 
 
 def cmd_race(agent, arg):
@@ -1922,6 +1929,8 @@ def set_config(agent, key, value):
         agent.set_effort(new)
     elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout", "questions", "question_timeout"):
         setattr(agent, key, new)
+    elif key == "plan":
+        agent.planning = new
     if key in ("url", "model"):  # native tool calls on Ollama again, until this model refuses them
         agent.tools = not v1(agent.url)
     save_config(**{key: new})
@@ -1941,7 +1950,7 @@ def cmd_config(agent, arg):
            "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
            "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
            "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout,
-           "questions": agent.questions, "question_timeout": agent.question_timeout, "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
+           "questions": agent.questions, "question_timeout": agent.question_timeout, "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": agent.planning}
     return [[(f"  {k:<17}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
         [[(f"  {k:<17}", "dim"), (f"{agent.sampling[k]}" if k in agent.sampling else "default", "" if k in agent.sampling else "dim")]
          for k in SAMPLING] + \
@@ -1991,6 +2000,7 @@ def race(agent, rival, task, tell=lambda model: None):
                   io.StringIO(), agent.think, agent.effort)
         r.custom = agent.custom
         r.questions, r.question = False, lambda text, options=(): None  # a race does not stop to ask, and is not told it could
+        r.planning = False  # nor does it keep a list: one message, one answer
         tell(model)
         began = time.time()
         try:
@@ -2012,7 +2022,7 @@ HELP = [("@file", "attach a file"), ("!command", "run the command yourself, with
         ("/context", "what is filling the context window"), ("/usage", "tokens, time and tool calls"),
         ("/compact", "fold the older conversation into a short summary"), ("/copy [code|all]", "copy the last answer"),
         ("/export [FILE]", "save the conversation as markdown"), ("/log", "what happened recently"),
-        ("/directory [PATH]", "change the folder sprint works in"), ("/plan", "split each message into steps first, on or off"),
+        ("/directory [PATH]", "change the folder sprint works in"), ("/plan", "let the model keep a to-do list for a big job, on or off"),
         ("/race MODEL MESSAGE", "one message, two models, side by side"),
         ("/systemprompt", "edit what the model is told at the start"), ("/config", "see or change saved settings"),
         ("/update", "get the newest sprint"), ("/clear", "clear the conversation and start fresh"), ("/bye", "quit")]
@@ -2180,7 +2190,7 @@ def plain_message(agent, text):
     """send a message to the model, then say what it cost and how full the window is"""
     say = agent.say
     before, began = dict(agent.tally), time.time()
-    stop = (agent.run_plan if load_config().get("plan") else agent.run)(text)
+    stop = agent.run(text)
     say(f"  {stop}\n" if stop.startswith("stopped:") else "", "33")
     say(f"  {agent.receipt(before, began)}\n", "2")
     n = round(min(agent.used() / agent.ctx, 1) * 10)
@@ -2315,6 +2325,7 @@ def build_agent(a):
     agent.ask_timeout = saved.get("ask_timeout", 20)
     agent.questions, agent.question_timeout = bool(saved.get("questions", True)), saved.get("question_timeout", 60)
     agent.sampling = {k: saved[k] for k in SAMPLING if k in saved and sampled(k, saved[k])}
+    agent.planning = bool(saved.get("plan", PLANNING))
     return agent
 
 
