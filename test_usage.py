@@ -221,6 +221,20 @@ def test_usage_comes_in_three_pages():
     assert len(sprint.usage_rows(seeded())) == len(joined)  # plain mode: one after another
 
 
+def test_every_colour_on_the_pages_is_one_the_plain_session_can_print_too():
+    for width in (36, 70, 88):
+        for span in sprint.SPANS:
+            roles = {role for _, rows in sprint.usage_pages(seeded(), span, width) for r in rows for _, role in r}
+            assert roles <= set(sprint.ANSI), roles - set(sprint.ANSI)
+
+
+def test_the_pages_fit_whatever_width_they_are_drawn_for():
+    for width in (36, 44, 59, 60, 70, 88):
+        for span in sprint.SPANS:
+            for name, rows in sprint.usage_pages(seeded(), span, width):
+                assert all(len(text([r])) <= width for r in rows), (width, span, name, [text([r]) for r in rows if len(text([r])) > width])
+
+
 def test_usage_with_nothing_yet_says_so_and_does_not_fail():
     out = text(sprint.command(agent(), "/usage"))
     assert "No stats yet" in out and "nothing yet this session" in out
@@ -449,6 +463,13 @@ def test_the_foot_of_the_popup_says_what_the_keys_do():
     s, p = opened()
     foot = body(s)[-1]
     assert "esc to cancel · r to cycle dates · ctrl+s to copy" in foot and "tabs" in foot
+
+
+def test_a_page_too_tall_for_the_popup_says_that_it_scrolls():
+    s, p = opened()
+    assert "scroll" not in body(s, 80, 30)[-1]
+    assert "↑↓ scroll · " in body(s, 80, 12)[-1] and "esc" in body(s, 80, 12)[-1]
+    assert "↑↓ scroll · r dates · esc" in body(s, 44, 12)[-1] and all(len(line) == 44 for line in body(s, 44, 12))
 
 
 def test_r_goes_round_the_date_ranges_and_stays_on_the_page():

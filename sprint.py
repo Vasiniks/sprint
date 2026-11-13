@@ -1809,8 +1809,8 @@ def usage_pages(agent, span="all", width=70):
         models.pop()
 
     # --- the session: what it used, the tokens taken apart, and what is in the window now
-    session = [head("  Session", f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, "
-                                 f"{clock(time.time() - agent.started)} ago · {short(agent.model)[:max(4, width - 42)]}")]
+    session = [head("  Session", (f"  started {time.strftime('%H:%M', time.localtime(agent.started))}, {clock(time.time() - agent.started)} ago"
+                                  + f" · {named(agent.model)[:width - 42]}" * wide)[:width - 9])]
     if s["messages"] or s["replies"]:
         calls, top, n = sum(s["tools"].values()), max(s["sent"], s["written"], 1), max(1, s["replies"])
         kinds = (("sent", "cyan", "  the conversation, every reply"), ("written", "magenta", ""), ("reasoning", "yellow", "  part of written"))
@@ -1831,7 +1831,7 @@ def usage_pages(agent, span="all", width=70):
         session += [line(("nothing yet this session", "dim"))]
     parts = agent.breakdown()
     top = max(n for _, n in parts) or 1
-    session += [[], head("  In the window now", f"  {human(agent.used())} of {human(agent.ctx)} tokens")]
+    session += [[], head("  In the window now", f"  {human(agent.used())} of {human(agent.ctx)}" + " tokens" * wide)]
     session += [line((f"{what:<24}", ""), (f"{human(n):>6} ", "bold"), (bar(n, top, max(3, min(24, width - 34))), SHADE.get(what, "dim"))) for what, n in parts]
     return [("Overview", overview), ("Models", models), ("Session", session)]
 

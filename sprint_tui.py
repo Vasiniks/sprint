@@ -1712,8 +1712,8 @@ class Screen:
                                            "enter choose" if can and p["pick"] else "enter confirm" if field.get("submit") else "",
                                            "esc back" if p["back"] else "esc close") if x) + " "
         if p.get("hints"):  # the popup's own words for its keys: the fullest of them the foot has room for
-            said = p.get("said", ("", 0))
-            hint = next((f" {h} " for h in p["hints"] if len(h) <= w - 8), " esc ")
+            said, more = p.get("said", ("", 0)), "↑↓ scroll · " * (len(rows) > room)  # (said only of a page that does not all fit)
+            hint = next((f" {more}{h} " for h in p["hints"] if len(more + h) <= w - 8), " esc ")
             hint = hint.replace("ctrl+s to copy", said[0]) if time.time() < said[1] else hint
         return lines + [box_foot(hint, w)], sel_at, field_at
 
@@ -1888,7 +1888,7 @@ class Screen:
         fit = lambda inner: [(name, [row(list(r)) for r in rows]) for name, rows in sprint.usage_pages(self.agent, p["span"], inner)]
         p.update(fit=fit, tab=0, span="all", scroll=True, keys={"r": self.usage_range, "\x13": self.usage_copy},
                  hints=["←→ tabs · esc to cancel · r to cycle dates · ctrl+s to copy", "esc to cancel · r to cycle dates · ctrl+s to copy",
-                        "r dates · ctrl+s to copy · esc", "esc to cancel"])
+                        "r dates · ctrl+s to copy · esc", "r dates · esc", "esc to cancel"])
         self.popup_refit(74)
 
     def usage_range(self):
