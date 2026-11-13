@@ -54,6 +54,14 @@ When the task is done, reply with a short answer and no tool block."""
 
 SYSTEM_TOOLS = """You are a coding agent in the user's project folder. Use relative paths.
 Use the tools to do the task, one step at a time. When it is done, reply with a short answer."""
+# What is said instead for a message that asks for nothing to be made or changed (see JOB). It is there to make a small
+# model less eager: told to "use the tools to do the task", magi 1.2 2B wrote the answer to "what is the capital of
+# Australia?" into a file, and the 4B asked "What do you want to do with this information?". It is kept away from jobs:
+# with it the 2B wrote its to-do list for a website and then did nothing more. "Only a question" matters too: told
+# that "a question gets an answer in words", the 4B, asked for a README that explains a script, explained it in words
+SYSTEM_QUIET = """You are a coding agent in the user's project folder. Use relative paths.
+To work on files, use the tools, one step at a time. When it is done, reply with a short answer.
+If the message is only a question, answer it in words: no tools, no files written, no questions back. Do only what was asked."""
 
 
 WINDOWS = os.name == "nt"  # there: PowerShell instead of bash, taskkill instead of process groups, %APPDATA%
@@ -877,7 +885,7 @@ class Agent:
         return parts + [("free", max(0, self.ctx - sum(n for _, n in parts)))]
 
     def system(self):
-        base = SYSTEM_TOOLS if self.tools else SYSTEM
+        base = (SYSTEM_TOOLS if self.job else SYSTEM_QUIET) if self.tools else SYSTEM
         if self.custom:  # your own prompt; a model without tool calls still needs the block format spelled out
             base = self.custom if self.tools else self.custom + "\n" + SYSTEM.split("\n", 1)[1]
         base = base if self.questions else base.replace(ASK_BLOCK, "")
@@ -2206,7 +2214,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
-VERSION = "0.4.19"  # the same as in pyproject.toml
+VERSION = "0.4.20"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),

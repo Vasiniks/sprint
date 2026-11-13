@@ -515,11 +515,39 @@ def test_agent_reset_forgets_everything_but_the_system_prompt():
     assert len(a.msgs) == 1 and a.msgs[0]["role"] == "system"
 
 
+def test_for_a_message_that_is_no_job_a_model_that_calls_tools_is_told_to_keep_to_what_was_asked():
+    """small models are eager: asked the capital of Australia, magi 1.2 2B wrote the answer into a file, and the 4B
+    asked "What do you want to do with this information?". With these lines the 2B answered 21 of 28 plain questions
+    with no tool at all, where it had answered 11 so, and the 4B 27 where it had answered 22"""
+    for said in ("what is the capital of Australia?", "hi there", "why is the sky blue?", "the heading should be blue"):
+        chat = scripted("Canberra.")
+        agent(chat).run(said)
+        told = chat.seen[0][0]["content"]
+        assert "To work on files, use the tools, one step at a time" in told, said
+        assert "If the message is only a question, answer it in words: no tools, no files written, no questions back" in told
+        assert "Do only what was asked" in told and "Use the tools to do the task" not in told
+
+
+def test_a_job_is_asked_for_in_the_words_it_always_was():
+    """the calmer lines are kept away from jobs: with them the 2B wrote its to-do list for a website and then did
+    nothing more, three times out of four"""
+    for said in ("make me a website for my bakery", "fix the bug in stats.py", "add a --verbose flag to cli.py"):
+        chat = scripted("Done.")
+        agent(chat).run(said)
+        told = chat.seen[0][0]["content"]
+        assert "Use the tools to do the task, one step at a time" in told and "only a question" not in told, said
+    chat = scripted("```todo\n[>] Write a.txt\n[ ] Write b.txt\n```", "Stopping.", "Stopping.", "Carrying on.", "Carrying on.")
+    a = agent(chat)
+    a.run("write a.txt and b.txt")
+    a.run("why did you stop?")  # with work left on the list, whatever you say is about the job
+    assert "Use the tools to do the task" in chat.seen[-1][0]["content"]
+
+
 def test_system_prompt_stays_tiny():
     a = agent(scripted())
     with_list = len(a.system())
     a.planning = False
-    assert len(a.system()) < 700 and with_list - len(a.system()) < 140  # the line about the to-do list is one line
+    assert len(a.system()) < 720 and with_list - len(a.system()) < 140  # the line about the to-do list is one line
 
 
 # ---------- model backends (HTTP faked at the socket boundary) ----------

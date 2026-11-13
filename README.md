@@ -209,6 +209,8 @@ Command-line options override the environment, which overrides saved settings.
 
 **A short prompt that names the files.** The system prompt lists the folder's contents. Without that, a 0.8B model often claims it cannot see a file instead of reading it.
 
+**A prompt that asks for less.** Small models are eager: asked the capital of Australia, magi 1.2 2B wrote the answer into a file, and the 4B asked what you wanted done with the information. For a message that asks for nothing to be made or changed, the prompt says that one that is only a question is answered in words (no tools, no files written, no questions back) and to do only what was asked. On 28 plain questions the 2B then answered 21 with no tool at all where it had answered 11 so, and the 4B 27 where it had answered 22. A job keeps the prompt it always had: given the calmer one, the 2B wrote its to-do list for a website and then did nothing more.
+
 **Context.**
 - An eighth of the window is always kept free for the reply; a reply may use the free room up to half the window.
 - Tool results are capped: head and tail are kept, `read` pages through long files, `fetch` strips pages to text.
