@@ -2,8 +2,9 @@ name: ci
 on: [push, pull_request]
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # not ubuntu-latest: that became 26.04, for which there is no Python 3.9 to set up
     strategy:
+      fail-fast: false  # one version that cannot be set up should not stop the other from being tested
       matrix:
         python-version: ['3.9', '3.13']
     steps:
