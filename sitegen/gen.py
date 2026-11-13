@@ -3,7 +3,8 @@
 usage: gen.py <site dir> <page.html> [<logo.svg>]
 The wordmark is the terminal app's own logo, each pixel two character cells wide, white, shaded light to solid across the
 word (░ ░ ▒ ▓ ▓ █). That shading is one moment of a slow wave that keeps travelling through it; and every few seconds a
-glint of colour crosses it fast: yellow, then cyan, then magenta. Under prefers-reduced-motion it holds still.
+glint of colour crosses it fast: yellow, then cyan, then magenta. On the site it moves for every visitor (the owner's
+choice); in the README's card it holds still under prefers-reduced-motion.
 The mark is three speed lines: yellow on top and longest, cyan, then magenta, their right ends on one slanted edge.
 """
 import sys
@@ -27,9 +28,9 @@ DEFS = (
 # solid, a slow fall through dense and checked to sparse, a rest, a quick rise. The solid, dense and checked copies lie on
 # top of one another (each covers the one before); the sparse one, which the checks do not cover, fades out under them.
 # The glints: a colour copy of a letter flashes once every three glints; staggered, so about three letters are lit at a time.
-MOVE = ("@media (prefers-reduced-motion: no-preference){"
-        f".sh{{animation:{ROUND}s ease-in-out infinite}}.sh1{{animation-name:sh1}}.sh2{{animation-name:sh2}}.sh3{{animation-name:sh3}}.sh4{{animation-name:sh4}}"
-        f".w{{animation:glint {3 * EVERY}s linear infinite}}}}"
+MOVING = (f".sh{{animation:{ROUND}s ease-in-out infinite}}.sh1{{animation-name:sh1}}.sh2{{animation-name:sh2}}.sh3{{animation-name:sh3}}.sh4{{animation-name:sh4}}"
+          f".w{{animation:glint {3 * EVERY}s linear infinite}}")
+MOVE = ("@media (prefers-reduced-motion: no-preference){" + MOVING + "}"
         "@keyframes sh1{0%,42%{opacity:0}58%,82%{opacity:1}88%,100%{opacity:0}}"
         "@keyframes sh2{0%,42%{opacity:1}58%,82%{opacity:0}88%,100%{opacity:1}}"
         "@keyframes sh3{0%,31%{opacity:1}41.5%,88%{opacity:0}94%,100%{opacity:1}}"
@@ -77,8 +78,11 @@ def letters():
     return f'<g shape-rendering="crispEdges">{"".join(out)}</g>'
 
 
-def wordmark():
-    return f"<defs>{DEFS}{glyphs()}</defs><style>{MOVE}</style>"
+def wordmark(always=False):
+    """the letters' shapes and how they move. always: whatever the visitor's reduced-motion setting says (the site's
+    owner wants the site to move for everyone; the README's card still holds still for those who asked for that)"""
+    move = MOVE.replace("@media (prefers-reduced-motion: no-preference){" + MOVING + "}", MOVING) if always else MOVE
+    return f"<defs>{DEFS}{glyphs()}</defs><style>{move}</style>"
 
 
 def lines(k=1.0):
@@ -143,10 +147,12 @@ open(sys.argv[3] if len(sys.argv) > 3 else f"{OUT}/logo.svg", "w").write(card)
 HK, HY = 1.25, 22.5
 HX = 31 - HY * LEAN - MARK_W * HK
 tails = "".join(f'<rect class="s" x="{HX + a - n - 4000:g}" y="{HY + t:g}" width="4000" height="{h:g}" fill="{col}"/>' for col, t, h, n, a, b in lines(HK))
-HERO = (f'<svg class="mark" viewBox="{HX:g} 0 {580 - HX:g} 100" role="img" aria-label="sprint">{wordmark()}'
+HERO = (f'<svg class="mark" viewBox="{HX:g} 0 {580 - HX:g} 100" role="img" aria-label="sprint">{wordmark(always=True)}'
         f'<g class="run">{tails}{streak(HX, HY, HK)}{letters()}</g></svg>')
+# the word again, for the demo: sprint's opening screen. Its letters are the hero's (the shapes and the motion are defined there)
+WORDMARK = f'<svg class="word" viewBox="0 0 580 100" aria-hidden="true">{letters()}</svg>'
 
 page = open(TEMPLATE).read()
-open(f"{OUT}/index.html", "w").write(page.replace("<!--HERO-->", HERO).replace(
+open(f"{OUT}/index.html", "w").write(page.replace("<!--HERO-->", HERO).replace("<!--WORD-->", WORDMARK).replace(
     "<!--MARK-->", f'<svg viewBox="0 0 {MARK_W:g} {MARK_H:g}" aria-hidden="true">{streak()}</svg>'))
 print("wrote", OUT)

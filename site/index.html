@@ -32,8 +32,15 @@ h2 { font-size: clamp(1.6rem, 3.8vw, 3.25rem); line-height: 1.05; }
 h3 { font-size: 1.3rem; line-height: 1.2; }
 code { font: inherit; }
 
+/* the pace: three runners across the top of the window, each as far along its lane as you are down the page.
+   Yellow leads, magenta trails, and they finish level */
+.pace { position: fixed; inset: 0 0 auto 0; z-index: 20; display: grid; gap: 2px; padding: 3px 0; background: var(--ink); pointer-events: none; }
+.pace i { display: block; height: 3px; background: #1f1f1f; position: relative; overflow: hidden; }
+.pace i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 14vw; background: var(--tint); transform: translateX(calc(var(--p, 0) * 86vw)); }
+.pace i:nth-child(1) { --tint: var(--y); } .pace i:nth-child(2) { --tint: var(--c); } .pace i:nth-child(3) { --tint: var(--m); }
+
 /* hero: a black band the full width of the window */
-.hero { background: var(--ink); color: #fff; padding: 0 var(--gutter); overflow: hidden; }
+.hero { background: var(--ink); color: #fff; padding: 19px var(--gutter) 0; overflow: hidden; }
 .top { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
 .top svg { width: 40px; height: auto; display: block; }
 .top nav { display: flex; gap: 24px; }
@@ -57,9 +64,22 @@ code { font: inherit; }
 main { padding: 0 var(--gutter); }
 section { padding-top: clamp(72px, 13vh, 144px); }
 section > h2 + p { margin-top: 14px; }
+/* a heading arrives the way the logo does: at a run from the left, three lines of colour trailing, drawn in as it stops */
+h2 { position: relative; }
+h2::before { content: ""; position: absolute; right: calc(100% + 14px); top: .22em; width: 100vw; height: .6em; transform: scaleX(0); transform-origin: 100% 50%;
+  background: linear-gradient(var(--y) 0 26%, transparent 26% 37%, var(--c) 37% 63%, transparent 63% 74%, var(--m) 74%); }
 
 /* the screen: three panels, like the app */
-.tui { margin-top: 28px; background: var(--ink); color: #e6e6e6; font-size: 14px; line-height: 1.55; display: grid; grid-template-columns: minmax(180px, 2fr) minmax(0, 7fr) minmax(200px, 2.4fr); }
+.tui { position: relative; margin-top: 28px; background: var(--ink); color: #e6e6e6; font-size: 14px; line-height: 1.55; display: grid; grid-template-columns: minmax(180px, 2fr) minmax(0, 7fr) minmax(200px, 2.4fr); }
+/* before the app: the terminal it is installed and started from, then its opening screen while the model loads */
+.boot { position: absolute; inset: 0; z-index: 2; background: var(--ink); padding: 18px clamp(14px, 2.4vw, 26px); display: none; overflow: hidden; }
+.booting .boot { display: block; }
+.shell { white-space: pre-wrap; overflow-wrap: anywhere; }  /* (not .sh: that is the logo's letters) */
+.shell .ps { color: var(--c); } .shell .out { color: var(--dim); } .shell .ok { color: #fff; }
+.splash { display: none; height: 100%; flex-direction: column; align-items: center; justify-content: center; gap: clamp(18px, 4vh, 34px); }
+.loaded .shell { display: none; } .loaded .splash { display: flex; }
+.word { width: min(74%, 560px); height: auto; display: block; }
+.load { display: flex; align-items: center; gap: .9em; color: var(--dim); white-space: nowrap; }
 .tui aside { padding: 16px 16px 14px; color: var(--dim); min-width: 0; }
 .tui .hist { border-right: 1px solid var(--line); }
 .tui .side { border-left: 1px solid var(--line); }
@@ -149,6 +169,21 @@ section > h2 + p { margin-top: 14px; }
 .askline { background: var(--ink); color: #fff; padding: 14px; display: flex; flex-wrap: wrap; gap: 4px 18px; }
 .askline span { color: var(--y); } .askline b { font-weight: 400; color: #fff; }
 .askline b:first-of-type { padding: 0 6px; margin: 0 -6px; }
+/* on a wide window the three points are a run: the heading holds still and they pass under it from right to left, a
+   pixel across for every pixel you scroll. (.wide is set by the script when the window is wide and tall enough) */
+.wide { height: calc(100vh + var(--travel, 0px)); }
+.wide .pin { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; justify-content: center; overflow: hidden;
+  margin: 0 calc(var(--gutter) * -1); padding: 19px var(--gutter) 0; }
+.wide .points { display: flex; gap: clamp(56px, 7vw, 130px); width: max-content; margin-top: clamp(40px, 9vh, 96px); transform: translateX(calc(var(--x, 0) * -1px)); will-change: transform; }
+/* a point is a little over half the window wide, so the next one always shows at the right edge: there is more that way */
+.wide .point { width: min(56vw, 860px); display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: clamp(28px, 3.4vw, 64px); align-items: center; }
+.wide .fig { min-height: 0; margin: 0; font-size: 16px; }
+.wide .bar { height: 38px; } .wide .askline { padding: 22px; font-size: 17px; }
+.wide .point h3 { font-size: clamp(1.7rem, 2.7vw, 2.6rem); line-height: 1.1; }
+.wide .point p { font-size: 17px; margin-top: 16px; }
+.js .wide .point:not(.go) { opacity: .28; }  /* a point still on its way in is there to be seen, faintly */
+.wide .point { transition: opacity .35s; }
+.js .wide .point:not(.go) .calls > * { opacity: 1; }
 
 /* what each mode runs: a row to a kind of action, a column to a mode */
 .rules { margin-top: 32px; max-width: 880px; border-top: 4px solid var(--ink); }
@@ -194,27 +229,32 @@ footer span { color: var(--grey); margin-left: auto; }
   footer span { margin-left: 0; width: 100%; }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .mark .run { animation: dash .95s cubic-bezier(.1, .8, .14, 1) both; }
-  .mark .s { animation: tail .7s .8s cubic-bezier(.65, 0, .2, 1) both; }
-  .hero h1, .pitch > * { animation: rise .45s .3s cubic-bezier(.2, .7, .2, 1) both; }
-  .pitch > * { animation-delay: .4s; } .pitch > * + * { animation-delay: .5s; }
-  .track i::after { animation: zip var(--t) cubic-bezier(.5, 0, .8, .4) infinite; }
-  .busy .lap { animation: tint 3.3s steps(1) infinite; }
-  .busy .lap b { animation: lap 1.1s steps(18) infinite; }
-  @media (max-width: 760px) { .busy .lap b { animation-timing-function: steps(14); } }
-  .caret { animation: blink 1s steps(1) infinite; }
-  .js .cells i { opacity: .1; }
-  .js .go .cells i { animation: land 90ms both; animation-delay: calc(var(--n) * var(--step)); }
-  .js .bar.fold i { transition: width .8s cubic-bezier(.6, 0, .2, 1) .5s; }
-  .js .points:not(.go) .bar.fold .c { width: 79%; } .js .points:not(.go) .bar.fold .m { width: 0; }
-  .js .calls > * { opacity: 0; }
-  .js .go .calls > * { animation: land .25s both; animation-delay: calc(var(--n) * .55s + .3s); }
-  .go .askline b:first-of-type { animation: press 3.2s steps(1) 1.2s infinite; }
-}
+/* everything below moves for every visitor, whatever their system says about reduced motion: the owner's choice */
+.mark .run { animation: dash .95s cubic-bezier(.1, .8, .14, 1) both; }
+.mark .s { animation: tail .7s .8s cubic-bezier(.65, 0, .2, 1) both; }
+.hero h1, .pitch > * { animation: rise .45s .3s cubic-bezier(.2, .7, .2, 1) both; }
+.pitch > * { animation-delay: .4s; } .pitch > * + * { animation-delay: .5s; }
+.track i::after { animation: zip var(--t) cubic-bezier(.5, 0, .8, .4) infinite; }
+.busy .lap, .load .lap { animation: tint 3.3s steps(1) infinite; }
+.busy .lap b, .load .lap b { animation: lap 1.1s steps(18) infinite; }
+@media (max-width: 760px) { .busy .lap b, .load .lap b { animation-timing-function: steps(14); } }
+.caret { animation: blink 1s steps(1) infinite; }
+.js .cells i { opacity: .1; }
+.js .go .cells i { animation: land 90ms both; animation-delay: calc(var(--n) * var(--step)); }
+.js .bar.fold i { transition: width .8s cubic-bezier(.6, 0, .2, 1) .5s; }
+.js .point:not(.go) .bar.fold .c { width: 79%; } .js .point:not(.go) .bar.fold .m { width: 0; }
+.js .calls > * { opacity: 0; }
+.js .go .calls > * { animation: land .25s both; animation-delay: calc(var(--n) * .55s + .3s); }
+.go .askline b:first-of-type { animation: press 3.2s steps(1) 1.2s infinite; }
+.js main h2 { opacity: 0; }
+.js .seen h2 { animation: sprint .5s cubic-bezier(.16, .8, .2, 1) both; }
+.js .seen h2::before { animation: tail .45s .28s cubic-bezier(.65, 0, .2, 1) both; }
+.js .seen > h2 + p, .js .seen .tui, .js .seen .lanes, .js .seen .rules, .js .seen .cmds, .js .seen .steps { animation: rise .45s .22s cubic-bezier(.2, .7, .2, 1) both; }
+.splash .word { animation: rise .4s cubic-bezier(.2, .7, .2, 1) both; }
 @keyframes dash { from { transform: translateX(-1500px); } to { transform: none; } }
 @keyframes tail { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 @keyframes rise { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: none; } }
+@keyframes sprint { from { opacity: 0; transform: translateX(-22vw); } 35% { opacity: 1; } to { opacity: 1; transform: none; } }
 @keyframes zip { 0% { transform: translateX(-20vw); } 70%, 100% { transform: translateX(104vw); } }
 @keyframes ripple { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 @keyframes lap { from { transform: translateX(-2.4em); } to { transform: translateX(calc(var(--cells) * .6em)); } }
@@ -225,6 +265,7 @@ footer span { color: var(--grey); margin-left: auto; }
 </style>
 </head>
 <body>
+<div class="pace" id="pace" aria-hidden="true"><i></i><i></i><i></i></div>
 
 <header class="hero" id="top">
   <div class="top">
@@ -234,7 +275,7 @@ footer span { color: var(--grey); margin-left: auto; }
       <a href="https://github.com/Vasiniks/sprint/releases">Releases</a>
     </nav>
   </div>
-  <svg class="mark" viewBox="-45.25 0 625.25 100" role="img" aria-label="sprint"><defs><pattern id="d1" width="5" height="5" patternUnits="userSpaceOnUse"><rect width="3" height="3" fill="#ffffff"/></pattern><pattern id="d2" width="5" height="5" patternUnits="userSpaceOnUse"><rect width="2.5" height="2.5" fill="#ffffff"/><rect x="2.5" y="2.5" width="2.5" height="2.5" fill="#ffffff"/></pattern><pattern id="d3" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M0 0h5v5h-5zM2.5 0h2.5v2.5h-2.5z" fill-rule="evenodd" fill="#ffffff"/></pattern><g id="g-i"><rect x="40" y="0" width="20" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="20" y="40" width="20" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/></g><g id="g-n"><rect x="40" y="0" width="20" height="20"/><rect x="100" y="0" width="20" height="20"/><rect x="30" y="20" width="40" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="20" height="20"/><rect x="60" y="40" width="40" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="70" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/><rect x="60" y="80" width="20" height="20"/></g><g id="g-p"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="80" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/></g><g id="g-r"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="60" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="50" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/><rect x="60" y="80" width="20" height="20"/></g><g id="g-s"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="20" y="40" width="80" height="20"/><rect x="70" y="60" width="20" height="20"/><rect x="0" y="80" width="80" height="20"/></g><g id="g-t"><rect x="40" y="0" width="100" height="20"/><rect x="70" y="20" width="20" height="20"/><rect x="60" y="40" width="20" height="20"/><rect x="50" y="60" width="20" height="20"/><rect x="40" y="80" width="20" height="20"/></g></defs><style>@media (prefers-reduced-motion: no-preference){.sh{animation:11s ease-in-out infinite}.sh1{animation-name:sh1}.sh2{animation-name:sh2}.sh3{animation-name:sh3}.sh4{animation-name:sh4}.w{animation:glint 12s linear infinite}}@keyframes sh1{0%,42%{opacity:0}58%,82%{opacity:1}88%,100%{opacity:0}}@keyframes sh2{0%,42%{opacity:1}58%,82%{opacity:0}88%,100%{opacity:1}}@keyframes sh3{0%,31%{opacity:1}41.5%,88%{opacity:0}94%,100%{opacity:1}}@keyframes sh4{0%{opacity:1}18%,94%{opacity:0}100%{opacity:1}}@keyframes glint{0%,3.2%,100%{opacity:0}1%,1.4%{opacity:1}}</style><g class="run"><rect class="s" x="-4037.75" y="22.5" width="4000" height="15" fill="#ffe100"/><rect class="s" x="-4027.75" y="42.5" width="4000" height="15" fill="#00a8e8"/><rect class="s" x="-4017.75" y="62.5" width="4000" height="15" fill="#e6007a"/><polygon points="-37.75,22.5 19.75,22.5 12.25,37.5 -45.25,37.5" fill="#ffe100"/><polygon points="-27.75,42.5 9.75,42.5 2.25,57.5 -35.25,57.5" fill="#00a8e8"/><polygon points="-17.75,62.5 -0.25,62.5 -7.75,77.5 -25.25,77.5" fill="#e6007a"/><g shape-rendering="crispEdges"><g transform="translate(0,0)"><use href="#g-s" class="sh sh1" fill="url(#d1)" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh2" fill="url(#d2)" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.20s"/><use href="#g-s" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.20s"/><use href="#g-s" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.20s"/></g><g transform="translate(100,0)"><use href="#g-p" class="sh sh1" fill="url(#d1)" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh2" fill="url(#d2)" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.33s"/><use href="#g-p" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.33s"/><use href="#g-p" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.33s"/></g><g transform="translate(200,0)"><use href="#g-r" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh2" fill="url(#d2)" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.47s"/><use href="#g-r" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.47s"/><use href="#g-r" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.47s"/></g><g transform="translate(300,0)"><use href="#g-i" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh2" fill="url(#d2)" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh3" fill="url(#d3)" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-3.30s"/><use href="#g-i" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.56s"/><use href="#g-i" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.56s"/><use href="#g-i" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.56s"/></g><g transform="translate(340,0)"><use href="#g-n" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh2" fill="url(#d2)" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh3" fill="url(#d3)" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-2.02s"/><use href="#g-n" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.65s"/><use href="#g-n" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.65s"/><use href="#g-n" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.65s"/></g><g transform="translate(440,0)"><use href="#g-t" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh2" fill="url(#d2)" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh3" fill="url(#d3)" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh4" fill="#ffffff" style="animation-delay:0.00s"/><use href="#g-t" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.80s"/><use href="#g-t" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.80s"/><use href="#g-t" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.80s"/></g></g></g></svg>
+  <svg class="mark" viewBox="-45.25 0 625.25 100" role="img" aria-label="sprint"><defs><pattern id="d1" width="5" height="5" patternUnits="userSpaceOnUse"><rect width="3" height="3" fill="#ffffff"/></pattern><pattern id="d2" width="5" height="5" patternUnits="userSpaceOnUse"><rect width="2.5" height="2.5" fill="#ffffff"/><rect x="2.5" y="2.5" width="2.5" height="2.5" fill="#ffffff"/></pattern><pattern id="d3" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M0 0h5v5h-5zM2.5 0h2.5v2.5h-2.5z" fill-rule="evenodd" fill="#ffffff"/></pattern><g id="g-i"><rect x="40" y="0" width="20" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="20" y="40" width="20" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/></g><g id="g-n"><rect x="40" y="0" width="20" height="20"/><rect x="100" y="0" width="20" height="20"/><rect x="30" y="20" width="40" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="20" height="20"/><rect x="60" y="40" width="40" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="70" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/><rect x="60" y="80" width="20" height="20"/></g><g id="g-p"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="80" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/></g><g id="g-r"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="90" y="20" width="20" height="20"/><rect x="20" y="40" width="60" height="20"/><rect x="10" y="60" width="20" height="20"/><rect x="50" y="60" width="20" height="20"/><rect x="0" y="80" width="20" height="20"/><rect x="60" y="80" width="20" height="20"/></g><g id="g-s"><rect x="40" y="0" width="80" height="20"/><rect x="30" y="20" width="20" height="20"/><rect x="20" y="40" width="80" height="20"/><rect x="70" y="60" width="20" height="20"/><rect x="0" y="80" width="80" height="20"/></g><g id="g-t"><rect x="40" y="0" width="100" height="20"/><rect x="70" y="20" width="20" height="20"/><rect x="60" y="40" width="20" height="20"/><rect x="50" y="60" width="20" height="20"/><rect x="40" y="80" width="20" height="20"/></g></defs><style>.sh{animation:11s ease-in-out infinite}.sh1{animation-name:sh1}.sh2{animation-name:sh2}.sh3{animation-name:sh3}.sh4{animation-name:sh4}.w{animation:glint 12s linear infinite}@keyframes sh1{0%,42%{opacity:0}58%,82%{opacity:1}88%,100%{opacity:0}}@keyframes sh2{0%,42%{opacity:1}58%,82%{opacity:0}88%,100%{opacity:1}}@keyframes sh3{0%,31%{opacity:1}41.5%,88%{opacity:0}94%,100%{opacity:1}}@keyframes sh4{0%{opacity:1}18%,94%{opacity:0}100%{opacity:1}}@keyframes glint{0%,3.2%,100%{opacity:0}1%,1.4%{opacity:1}}</style><g class="run"><rect class="s" x="-4037.75" y="22.5" width="4000" height="15" fill="#ffe100"/><rect class="s" x="-4027.75" y="42.5" width="4000" height="15" fill="#00a8e8"/><rect class="s" x="-4017.75" y="62.5" width="4000" height="15" fill="#e6007a"/><polygon points="-37.75,22.5 19.75,22.5 12.25,37.5 -45.25,37.5" fill="#ffe100"/><polygon points="-27.75,42.5 9.75,42.5 2.25,57.5 -35.25,57.5" fill="#00a8e8"/><polygon points="-17.75,62.5 -0.25,62.5 -7.75,77.5 -25.25,77.5" fill="#e6007a"/><g shape-rendering="crispEdges"><g transform="translate(0,0)"><use href="#g-s" class="sh sh1" fill="url(#d1)" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh2" fill="url(#d2)" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.20s"/><use href="#g-s" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.20s"/><use href="#g-s" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.20s"/></g><g transform="translate(100,0)"><use href="#g-p" class="sh sh1" fill="url(#d1)" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh2" fill="url(#d2)" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.33s"/><use href="#g-p" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.33s"/><use href="#g-p" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.33s"/></g><g transform="translate(200,0)"><use href="#g-r" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh2" fill="url(#d2)" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.47s"/><use href="#g-r" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.47s"/><use href="#g-r" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.47s"/></g><g transform="translate(300,0)"><use href="#g-i" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh2" fill="url(#d2)" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh3" fill="url(#d3)" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-3.30s"/><use href="#g-i" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.56s"/><use href="#g-i" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.56s"/><use href="#g-i" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.56s"/></g><g transform="translate(340,0)"><use href="#g-n" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh2" fill="url(#d2)" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh3" fill="url(#d3)" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-2.02s"/><use href="#g-n" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.65s"/><use href="#g-n" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.65s"/><use href="#g-n" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.65s"/></g><g transform="translate(440,0)"><use href="#g-t" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh2" fill="url(#d2)" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh3" fill="url(#d3)" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh4" fill="#ffffff" style="animation-delay:0.00s"/><use href="#g-t" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.80s"/><use href="#g-t" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.80s"/><use href="#g-t" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.80s"/></g></g></g></svg>
   <h1><span>For small agents.</span> <span>It works.</span></h1>
   <div class="pitch">
     <div>
@@ -253,9 +294,16 @@ footer span { color: var(--grey); margin-left: auto; }
 
 <main>
 <section id="demo">
-  <h2>Two messages, start to finish</h2>
-  <p>Your messages on the left, the work in the middle, what it cost on the right.</p>
-  <div class="tui" id="term" role="img" aria-label="The sprint screen. It is asked to write hello.py and run it, then to change what it prints. It asks before writing the file, before running it and before editing it, and reports back each time.">
+  <h2>From install to a working file</h2>
+  <p>Install it, type <code>sprint</code>, ask. Your messages on the left, the work in the middle, what it cost on the right.</p>
+  <div class="tui" id="term" role="img" aria-label="A terminal. sprint is installed with pip and started by typing sprint; its opening screen shows while the model loads. Then it is asked to write hello.py and run it, and to change what it prints. It asks before writing the file, before running it and before editing it, and reports back each time.">
+    <div class="boot" id="boot">
+      <div class="shell" id="sh"></div>
+      <div class="splash">
+        <svg class="word" viewBox="0 0 580 100" aria-hidden="true"><g shape-rendering="crispEdges"><g transform="translate(0,0)"><use href="#g-s" class="sh sh1" fill="url(#d1)" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh2" fill="url(#d2)" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-8.25s"/><use href="#g-s" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.20s"/><use href="#g-s" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.20s"/><use href="#g-s" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.20s"/></g><g transform="translate(100,0)"><use href="#g-p" class="sh sh1" fill="url(#d1)" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh2" fill="url(#d2)" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-6.42s"/><use href="#g-p" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.33s"/><use href="#g-p" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.33s"/><use href="#g-p" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.33s"/></g><g transform="translate(200,0)"><use href="#g-r" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh2" fill="url(#d2)" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh3" fill="url(#d3)" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-4.58s"/><use href="#g-r" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.47s"/><use href="#g-r" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.47s"/><use href="#g-r" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.47s"/></g><g transform="translate(300,0)"><use href="#g-i" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh2" fill="url(#d2)" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh3" fill="url(#d3)" style="animation-delay:-3.30s"/><use href="#g-i" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-3.30s"/><use href="#g-i" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.56s"/><use href="#g-i" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.56s"/><use href="#g-i" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.56s"/></g><g transform="translate(340,0)"><use href="#g-n" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh2" fill="url(#d2)" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh3" fill="url(#d3)" style="animation-delay:-2.02s"/><use href="#g-n" class="sh sh4" fill="#ffffff" opacity="0" style="animation-delay:-2.02s"/><use href="#g-n" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.65s"/><use href="#g-n" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.65s"/><use href="#g-n" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.65s"/></g><g transform="translate(440,0)"><use href="#g-t" class="sh sh1" fill="url(#d1)" opacity="0" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh2" fill="url(#d2)" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh3" fill="url(#d3)" style="animation-delay:0.00s"/><use href="#g-t" class="sh sh4" fill="#ffffff" style="animation-delay:0.00s"/><use href="#g-t" class="w" fill="#ffe100" opacity="0" style="animation-delay:2.80s"/><use href="#g-t" class="w" fill="#00a8e8" opacity="0" style="animation-delay:6.80s"/><use href="#g-t" class="w" fill="#e6007a" opacity="0" style="animation-delay:10.80s"/></g></g></svg>
+        <div class="load"><div class="lap"><b><i></i><i></i><i></i><i></i></b></div><span id="loading">starting the model server</span></div>
+      </div>
+    </div>
     <aside class="hist">
       <h4>Messages</h4>
       <ol id="hist">
@@ -321,6 +369,7 @@ hello world</div></div>
 </section>
 
 <section id="how">
+  <div class="run" id="run"><div class="pin">
   <h2>Built around what small models get wrong</h2>
   <div class="points" id="points">
     <div class="point">
@@ -331,8 +380,10 @@ hello world</div></div>
         <div class="bar fold"><i class="k"></i><i class="m"></i><i class="c"></i><i class="y"></i></div>
         <div class="key"><span><i style="background:var(--ink)"></i>prompt</span><span><i style="background:var(--m)"></i>summary</span><span><i style="background:var(--c)"></i>conversation</span><span><i style="background:var(--y)"></i>kept for the reply</span></div>
       </div>
-      <h3>They lose track of long conversations</h3>
-      <p>sprint keeps room free for the reply and folds older steps into a short summary of what you asked and what was done.</p>
+      <div>
+        <h3>They lose track of long conversations</h3>
+        <p>sprint keeps room free for the reply and folds older steps into a short summary of what you asked and what was done.</p>
+      </div>
     </div>
     <div class="point">
       <div class="fig" aria-hidden="true">
@@ -342,17 +393,22 @@ hello world</div></div>
           <dt style="--n:2">read notes.txt</dt><dd style="--n:2"><span class="tag stop">stopped</span></dd>
         </dl>
       </div>
-      <h3>They go in circles</h3>
-      <p>The same call again, the same file rewritten, the same failure twice running: sprint warns the model once, then stops the turn and tells you why.</p>
+      <div>
+        <h3>They go in circles</h3>
+        <p>The same call again, the same file rewritten, the same failure twice running: sprint warns the model once, then stops the turn and tells you why.</p>
+      </div>
     </div>
     <div class="point">
       <div class="fig" aria-hidden="true">
         <div class="askline"><span>rm -rf build?</span><b>y once</b><b>a always</b><b>n no</b></div>
       </div>
-      <h3>They garble commands</h3>
-      <p>Every tool call is checked, and a reply cut off halfway is never run. You approve each command and edit, or allow the ones you trust for good. Esc stops a turn at once, and nothing can keep you from quitting.</p>
+      <div>
+        <h3>They garble commands</h3>
+        <p>Every tool call is checked, and a reply cut off halfway is never run. You approve each command and edit, or allow the ones you trust for good. Esc stops a turn at once, and nothing can keep you from quitting.</p>
+      </div>
     </div>
   </div>
+  </div></div>
 </section>
 
 <section id="asks">
@@ -406,7 +462,6 @@ hello world</div></div>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   $('copy').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText($('cmd').textContent); $('copy').textContent = 'Copied'; }
@@ -484,12 +539,42 @@ hello world</div></div>
     tick(); busy(false);
     add('cost').textContent = '↑ ' + up + ' ↓ ' + $('toks').textContent + ' tokens | ' + $('secs').textContent + 's'; took.textContent = cost + ', ' + $('secs').textContent + 's'; $('spd').textContent = '75 tok/s';
   };
+  // before the app: it is installed and started from a terminal, and shows its opening screen while the model loads
+  const sh = $('sh');
+  const shell = async (cmd, ms, id) => {
+    const row = document.createElement('div');
+    row.innerHTML = '<span class="ps">~/project $ </span><span></span><span class="caret"></span>';
+    sh.append(row);
+    await wait(450, id);
+    await type(row.children[1], cmd, ms, id);
+    await wait(380, id);
+    row.lastChild.remove();
+  };
+  const says = async (lines, id) => {
+    for (const [cls, text, ms] of lines) {
+      const row = document.createElement('div'); row.className = cls; row.textContent = text; sh.append(row);
+      await wait(ms, id);
+    }
+  };
+  const boot = async id => {
+    sh.innerHTML = ''; term.classList.remove('loaded'); term.classList.add('booting');
+    await shell($('cmd').textContent, 16, id);
+    await says([['out', 'Collecting git+https://github.com/Vasiniks/sprint.git', 420], ['out', '  Building wheel for sprint (pyproject.toml) ... done', 520],
+                ['ok', 'Successfully installed sprint', 300]], id);
+    await shell('sprint', 110, id);
+    term.classList.add('loaded'); $('loading').textContent = 'starting the model server';
+    await wait(900, id);
+    $('loading').textContent = 'loading ' + MODEL;
+    await wait(1300, id);
+    term.classList.remove('booting', 'loaded');
+  };
   async function play() {
     const id = ++run;
     talk.innerHTML = hist.innerHTML = acts.innerHTML = typed.textContent = '';
     $('spd').textContent = 'no reply yet'; fill(5); busy(false); term.classList.remove('asking');
     try {
-      await wait(500, id);
+      await boot(id);
+      await wait(700, id);
       let took = await send('write hello.py that prints hello world, then run it', id);
       await tool('write', 'hello.py', '+1', 'write hello.py?', '<span class="plus">+ print("hello world")</span>', 6, id);
       await wait(700, id);
@@ -503,16 +588,51 @@ hello world</div></div>
   }
   $('again').addEventListener('click', play);
 
-  const once = ['models', 'points'];
-  if (still || !('IntersectionObserver' in window)) { once.forEach(id => $(id).classList.add('go')); return; }
-  talk.innerHTML = hist.innerHTML = acts.innerHTML = ''; $('spd').textContent = 'no reply yet'; fill(5);
-  const seen = new IntersectionObserver(entries => {
-    for (const e of entries) if (e.isIntersecting) {
-      seen.unobserve(e.target);
-      e.target === term ? play() : e.target.classList.add('go');
+  // the pace: how far down the page you are, as three runners. Yellow is ahead of you and magenta behind, and they finish level
+  const pace = $('pace').children, runway = $('run'), points = $('points');
+  let travel = 0, queued = false;
+  const stride = () => {
+    queued = false;
+    const p = Math.min(1, Math.max(0, scrollY / Math.max(1, document.documentElement.scrollHeight - innerHeight)));
+    [.72, 1, 1.45].forEach((power, n) => pace[n].style.setProperty('--p', Math.pow(p, power).toFixed(4)));
+    if (travel) {  // the run: a pixel sideways for every pixel scrolled while the heading is held
+      const top = runway.getBoundingClientRect().top;
+      points.style.setProperty('--x', Math.min(travel, Math.max(0, -top)).toFixed(1));
     }
-  }, { threshold: .4 });
-  seen.observe(term); once.forEach(id => seen.observe($(id)));
+  };
+  const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(stride); } };
+  // the three points run sideways only where there is room for it: a wide window, tall enough to hold a heading and a point
+  const measure = () => {
+    const wide = innerWidth >= 1000 && innerHeight >= 600;
+    runway.classList.toggle('wide', wide);
+    travel = 0; points.style.removeProperty('--x');
+    if (wide) {
+      const pin = runway.firstElementChild, gutter = parseFloat(getComputedStyle(pin).paddingLeft);
+      travel = Math.max(0, points.scrollWidth + 2 * gutter - pin.clientWidth);
+      runway.style.setProperty('--travel', travel + 'px');
+    }
+    stride();
+  };
+  addEventListener('scroll', onScroll, { passive: true });
+  addEventListener('resize', measure);
+  measure();
+
+  const sections = [...document.querySelectorAll('main section')], cards = [...document.querySelectorAll('.point')];
+  if (!('IntersectionObserver' in window)) {
+    [...sections, ...cards, $('models')].forEach(el => el.classList.add('seen', 'go'));
+    return;
+  }
+  talk.innerHTML = hist.innerHTML = acts.innerHTML = ''; $('spd').textContent = 'no reply yet'; fill(5);
+  const watch = (els, threshold, then) => {
+    const seen = new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) { seen.unobserve(e.target); then(e.target); }
+    }, { threshold });
+    els.forEach(el => seen.observe(el));
+  };
+  watch(sections, .12, el => el.classList.add('seen'));           // a section's heading runs in as the section arrives
+  watch([$('models')], .55, el => el.classList.add('go'));         // its figures play once they are well in view
+  watch(cards, .8, el => el.classList.add('go'));                 // (a point, once nearly all of it is: it comes in from the side)
+  watch([term], .4, play);
 })();
 </script>
 </body>
