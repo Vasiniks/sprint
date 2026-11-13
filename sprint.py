@@ -87,16 +87,13 @@ STATES = ("pending", "in_progress", "completed", "cancelled")
 OPEN = ("pending", "in_progress")  # the states of an item that still has work in it
 TODO_TOOL = {"type": "function", "function": {
     "name": "todowrite",
-    "description": "Create and update a todo list for the current session. The user sees it as your working plan. Use it "
-                   "when a task has 3 or more distinct steps, or when the user gives several tasks or asks for a todo list. "
-                   "Skip it for a single simple task or a purely conversational request. Send the full list on every call; "
-                   "it replaces the previous one. Mark items in_progress when you start them and completed as soon as "
-                   "they're actually done. Only call it when the list changes.",
+    # (said in fewer words than opencode says it: every tool's description is paid for in each request's window)
+    "description": "Keep a todo list for a big job: one with 3 or more distinct steps, like a whole website. Not for chat, a "
+                   "question or a small change. Send the full list every time: mark the item you are on in_progress and "
+                   "finished ones completed.",
     "parameters": {"type": "object", "required": ["todos"], "properties": {"todos": {
-        "type": "array", "description": "The updated todo list", "items": {
-            "type": "object", "required": ["content", "status"], "properties": {
-                "content": {"type": "string", "description": "Brief description of the task"},
-                "status": {"type": "string", "enum": list(STATES)}}}}}}}}
+        "type": "array", "items": {"type": "object", "required": ["content", "status"], "properties": {
+            "content": {"type": "string"}, "status": {"type": "string", "enum": list(STATES)}}}}}}}}
 
 
 def tools(questions=True, planning=True):
@@ -2158,7 +2155,7 @@ ABOUT = {"ask": "asks before every action", "edits": "file edits run without ask
 HELP = [("@file", "attach a file"), ("!command", "run the command yourself, without the model"),
         ("/model [NAME]", "switch model"), ("/mode", "ask, edits or auto"), ("/permissions", "what runs without asking"),
         ("/think", "let the model reason first, on or off"), ("/effort [LEVEL]", "low, medium or high"),
-        ("/context", "what is filling the context window"), ("/usage", "tokens, time and tool calls"),
+        ("/context", "what is filling the context window"), ("/usage", "your days as a heat map, each model's share, and this session"),
         ("/compact", "fold the older conversation into a short summary"), ("/copy [code|all]", "copy the last answer"),
         ("/export [FILE]", "save the conversation as markdown"), ("/log", "what happened recently"),
         ("/directory [PATH]", "change the folder sprint works in"), ("/plan", "let the model keep a to-do list for a big job, on or off"),
@@ -2175,7 +2172,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
-VERSION = "0.4.17"  # the same as in pyproject.toml
+VERSION = "0.4.18"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),

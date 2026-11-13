@@ -25,7 +25,7 @@ COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the 
             ("/model", "switch model"), ("/mode", "ask · edits · auto"),
             ("/think", "let the model reason first, on or off"), ("/showthink", "show the model's reasoning in full, or just that it thought"),
             ("/effort", "low · medium · high"),
-            ("/context", "what is filling the context window"), ("/usage", "tokens, time and tool calls: this session and all time"), ("/permissions", "what runs without asking"),
+            ("/context", "what is filling the context window"), ("/usage", "your days as a heat map, each model's share, and this session"), ("/permissions", "what runs without asking"),
             ("/config", "see or change saved settings"), ("/systemprompt", "edit what the model is told at the start"),
             ("/theme", "colours"), ("/plan", "let the model keep a to-do list for a big job, on or off"),
             ("/race", "one message, two models, side by side"),
