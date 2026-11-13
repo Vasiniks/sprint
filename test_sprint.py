@@ -1128,7 +1128,8 @@ def test_plan_mode_asks_for_steps_then_does_them_one_at_a_time(tmp_path, monkeyp
     a.show_plan = lambda steps, at: shown.append((list(steps), at))
     assert a.run_plan("make hello.py and run it") == "It ran."
     assert (tmp_path / "hello.py").exists()
-    assert chat.seen[0][0]["role"] == "system" and "list" in chat.seen[0][0]["content"] and len(chat.seen[0]) == 2
+    assert chat.seen[0][0]["role"] == "system" and "list" in chat.seen[0][0]["content"]
+    assert chat.seen[0][-1] == {"role": "user", "content": "make hello.py and run it"}  # asked apart from the conversation
     asks = [m["content"] for m in a.msgs if m.get("human")]
     assert "step 1 of 2" in asks[0] and "Create hello.py" in asks[0] and "step 2 of 2" in asks[1] and "Run it" in asks[1]
     assert shown[0] == (["Create hello.py", "Run it with python"], 0) and shown[-1][1] == 2
@@ -1137,8 +1138,8 @@ def test_plan_mode_asks_for_steps_then_does_them_one_at_a_time(tmp_path, monkeyp
 def test_plan_mode_just_runs_when_there_is_nothing_to_split():
     chat = scripted("It is one thing.", "Four.")
     a = agent(chat)
-    assert a.run_plan("2+2?") == "Four."
-    assert [m["content"] for m in a.msgs if m.get("human")] == ["2+2?"]
+    assert a.run_plan("what is 2+2?") == "Four."
+    assert [m["content"] for m in a.msgs if m.get("human")] == ["what is 2+2?"]
 
 
 def test_race_runs_both_models_read_only_and_reports_each(tmp_path, monkeypatch):
