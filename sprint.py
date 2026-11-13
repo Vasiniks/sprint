@@ -662,9 +662,9 @@ class Agent:
     bare = False  # True while asking for a plan: that call offers no tools
     sampling = {}  # extra Ollama options, e.g. {"temperature": 0.7}; empty keeps the model's own defaults
 
-    def __init__(self, model="hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M", url="http://localhost:11434", ctx=8192, steps=16,
+    def __init__(self, model=None, url="http://localhost:11434", ctx=8192, steps=16,
                  mode="ask", key="", chat=None, ask=None, out=None, think=False, effort="medium"):
-        self.model, self.url, self.ctx, self.steps, self.mode, self.key = model, url, ctx, steps, mode, key
+        self.model, self.url, self.ctx, self.steps, self.mode, self.key = model or DEFAULT_MODEL, url, ctx, steps, mode, key
         self.think, self.effort = think, effort  # ask the model to reason first? how much room and how many steps?
         self.custom, self.timeout = "", 60       # your own system prompt, if any; seconds a shell command may run
         self.ask_timeout = 20                    # seconds a question waits for you before the call is set aside (0: for ever)
@@ -1929,8 +1929,8 @@ def help_rows():
             for what, about in HELP]
 
 
-DEFAULT_MODEL = "hf.co/unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M"
-VERSION = "0.4.15"  # the same as in pyproject.toml
+DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
+VERSION = "0.4.16"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
@@ -2195,7 +2195,7 @@ def arguments(argv=None):
     """the options a session takes, read from the command line"""
     ap = argparse.ArgumentParser(prog="sprint", description=__doc__, epilog="sprint help lists the other commands: config, serve, update")
     ap.add_argument("task", nargs="*", help="optional first message")
-    ap.add_argument("-m", "--model", help="model name (default: the one used last, else Qwen 3.5 0.8B Q4_K_M)")
+    ap.add_argument("-m", "--model", help="model name (default: the one used last, else magi 1.2 2B)")
     ap.add_argument("-u", "--url", help="Ollama URL, or any OpenAI-compatible URL ending in /v1")
     ap.add_argument("-c", "--ctx", type=int, help="context window in tokens (default 8192)")
     ap.add_argument("-s", "--steps", type=int, help="max tool calls per message (default: 8, 16 or 32 by effort)")

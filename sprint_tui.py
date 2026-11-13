@@ -1881,7 +1881,7 @@ class Screen:
                              (f"{params:>8}  {quant:<8} {size(weight) if weight else '':>8}", "dim")], ("use", n)))
         rows += [] if names else [row([("no models installed yet", "dim")])]
         rows += [row([("─" * 40, "frame")]), row("  Pull from Hugging Face…", ("hf", ""), keep=True),
-                 row("  Pull by name from the Ollama library…", ("name", ""), keep=True)]
+                 row("  Pull by name: from the Ollama library, or hf.co/…", ("name", ""), keep=True)]
         self.pop("Model", rows, pick=self.model_pick, field={"label": "›", "text": "", "filter": True},
                  sel=names.index(a.model) if a.model in names else 0)
 
@@ -1890,10 +1890,10 @@ class Screen:
         if kind == "use":
             self.use_model(name)
         elif kind == "name":
-            self.pop("Pull a model", [row([("a name from ollama.com/library, for example qwen3.5:0.8b", "dim")])],
+            self.pop("Pull a model", [row([("a name Ollama can pull, for example " + sprint.DEFAULT_MODEL, "dim")])],
                      field={"label": "name ›", "text": "", "submit": self.pull}, back=self.model_popup)
         else:
-            self.pop("Hugging Face", [row([("search for a GGUF model, for example qwen3.5 0.8b", "dim")])],
+            self.pop("Hugging Face", [row([("search for a GGUF model, for example magi 1.2 2b", "dim")])],
                      field={"label": "search ›", "text": "", "submit": self.hf_search}, back=self.model_popup)
 
     def use_model(self, name):
