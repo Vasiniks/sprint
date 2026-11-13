@@ -87,13 +87,18 @@ STATES = ("pending", "in_progress", "completed", "cancelled")
 OPEN = ("pending", "in_progress")  # the states of an item that still has work in it
 TODO_TOOL = {"type": "function", "function": {
     "name": "todowrite",
-    # (said in fewer words than opencode says it: every tool's description is paid for in each request's window)
-    "description": "Keep a todo list for a big job: one with 3 or more distinct steps, like a whole website. Not for chat, a "
-                   "question or a small change. Send the full list every time: mark the item you are on in_progress and "
-                   "finished ones completed.",
+    # opencode's wording, less its "use it proactively" and "when in doubt, use it". A shorter one was tried (it saves
+    # some ninety tokens a request): the model then wrote its list once and never brought it up to date
+    "description": "Create and update a todo list for the current session. The user sees it as your working plan. Use it "
+                   "when a task has 3 or more distinct steps, or when the user gives several tasks or asks for a todo list. "
+                   "Skip it for a single simple task or a purely conversational request. Send the full list on every call; "
+                   "it replaces the previous one. Mark items in_progress when you start them and completed as soon as "
+                   "they're actually done. Only call it when the list changes.",
     "parameters": {"type": "object", "required": ["todos"], "properties": {"todos": {
-        "type": "array", "items": {"type": "object", "required": ["content", "status"], "properties": {
-            "content": {"type": "string"}, "status": {"type": "string", "enum": list(STATES)}}}}}}}}
+        "type": "array", "description": "The updated todo list", "items": {
+            "type": "object", "required": ["content", "status"], "properties": {
+                "content": {"type": "string", "description": "Brief description of the task"},
+                "status": {"type": "string", "enum": list(STATES)}}}}}}}}
 
 
 def tools(questions=True, planning=True):
@@ -777,6 +782,7 @@ class Agent:
         self.msgs = [{"role": "system", "content": self.system()}]
         self.touched, self.cancel = [], False  # files changed so far; set cancel to stop the current turn
         self.todos, self.worked = [], False  # the model's to-do list: [(what, state), ...]; has another call run since it was sent?
+        self.saves = 0  # files saved since the list was last sent
         self.forgotten = 0  # older turns dropped to stay inside the window
 
     def compact(self, everything=False):
@@ -1328,6 +1334,9 @@ class Agent:
                     log("stopped", why="repeating", tool=call.tool, target=self.target(call)[:120])
                     return "stopped: the model keeps repeating itself"
                 saved = call.tool in ("write", "edit") and result.startswith(("wrote", "edited"))
+                self.saves = 0 if call.tool == "todo" else self.saves + saved
+                if saved and self.saves > 1 and self.planning and any(state in OPEN for _, state in self.todos):
+                    result += f"\nYour to-do list is behind ({todo_summary(self.todos)[15:]}): bring it up to date with todowrite."
                 extra = "\n\n" + SPIN if spins else ". Now do the next step of the task." if saved and raw else ""
                 if raw:  # keep the model's own tool-call format in the history
                     self.msgs += [{"role": "assistant", "content": text, "tool_calls": [{"function": raw}]},

@@ -105,6 +105,28 @@ def test_no_reminder_without_a_list_or_with_a_finished_one_or_with_plan_off():
         assert len(chat.seen) == len(replies)
 
 
+def test_a_second_file_saved_without_a_word_to_the_list_brings_a_word_about_it(tmp_path, monkeypatch):
+    """a small model writes its list, then file after file without looking at it again, and having lost its place
+    starts writing the same files over. After the second save since the list was last sent it is told how the list
+    stands; one save is nothing to remark on"""
+    monkeypatch.chdir(tmp_path)
+    chat = model("```todo\n[>] Write a.txt\n[ ] Write b.txt\n[ ] Write c.txt\n```", "```write a.txt\nhi\n```", "```write b.txt\nhi\n```",
+                 "```todo\n[x] Write a.txt\n[x] Write b.txt\n[>] Write c.txt\n```", "```write c.txt\nhi\n```",
+                 "```todo\n[x] Write a.txt\n[x] Write b.txt\n[x] Write c.txt\n```", "All three written.")
+    a = agent(chat)
+    assert a.run("write a.txt, b.txt and c.txt") == "All three written."
+    after_a, after_b, after_c = chat.seen[2][-1]["content"], chat.seen[3][-1]["content"], chat.seen[5][-1]["content"]
+    assert "todowrite" not in after_a and "todowrite" not in after_c
+    assert "wrote b.txt" in after_b and "0/3 completed" in after_b and "todowrite" in after_b
+
+
+def test_no_word_about_a_list_there_is_not(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    chat = model("```write a.txt\nhi\n```", "```write b.txt\nhi\n```", "Both written.")
+    agent(chat).run("write a.txt and b.txt")
+    assert not any("todowrite" in m["content"] for m in chat.seen[-1][1:])
+
+
 def test_a_native_call_carries_the_list_as_items_with_a_status_each():
     a = agent(model(native([{"content": "Create index.html", "status": "completed"},
                                {"content": "Create style.css", "status": "in_progress"},
