@@ -436,12 +436,13 @@ def test_agent_accepts_a_code_answer_the_second_time():
     assert len(chat.seen) == 2
 
 
-def test_code_that_answers_a_question_is_the_answer_and_gets_no_push():
+def test_code_that_answers_a_question_is_the_answer_and_gets_no_push(tmp_path, monkeypatch):
     """asked the difference between a list and a tuple, the model explained it with an example, was told "that code
     was only shown: it was not saved", and its answer became "I did not create any code file". Asked to show a
     function, it was pushed into writing a file nobody wanted. Only a message that asks for something to be made,
     changed or saved is pushed"""
-    shown = "A list can change, a tuple cannot:\n```python\na = [1]\nb = (1,)\n```"
+    monkeypatch.chdir(tmp_path)
+    shown ="A list can change, a tuple cannot:\n```python\na = [1]\nb = (1,)\n```"
     for said in ("what is the difference between a list and a tuple in python?", "show me a javascript function that reverses a string",
                  "how do I read a file in python?", "give me a shell command that counts lines", "explain what a decorator is"):
         chat = scripted(shown, "never asked")
