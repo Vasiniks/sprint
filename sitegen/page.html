@@ -278,7 +278,7 @@ hello world</div></div>
         <div class="cost">↑ 2.1k ↓ 190 tokens | 3s</div>
       </div>
       <div class="status"><div class="lap"><b><i></i><i></i><i></i><i></i></b></div><span>answering (<span id="secs">0</span>s | ↓ <span id="toks">0</span> tokens<span class="wide"> | medium effort</span>)</span></div>
-      <div class="rule over"><i></i><span id="meta">Qwen3.5-0.8B:Q4_K_M · 9%</span></div>
+      <div class="rule over"><i></i><span id="meta">magi-1.2-2B · 9%</span></div>
       <div class="line"><span class="gt">❯</span><span class="entry"><span id="typed"></span><span class="caret"></span><span class="hint">Ask anything…  / for commands  ! for shell</span></span></div>
       <div class="rule under"><i></i></div>
       <div class="modeline"><span class="icon" aria-hidden="true"><i class="on"></i><i></i><i></i></span><span id="mode">ask</span><span> (tab to cycle)</span></div>
@@ -288,10 +288,10 @@ hello world</div></div>
       <div class="grid" id="grid"></div>
       <h4>Session</h4>
       <dl class="sess">
-        <dt>model</dt><dd>Qwen3.5-0.8B</dd>
+        <dt>model</dt><dd>magi-1.2-2B</dd>
         <dt>thinking</dt><dd>off</dd>
         <dt>plan</dt><dd>off</dd>
-        <dt>speed</dt><dd id="spd">122 tok/s</dd>
+        <dt>speed</dt><dd id="spd">75 tok/s</dd>
       </dl>
       <h4>Activity</h4>
       <ul class="acts" id="acts">
@@ -388,7 +388,7 @@ hello world</div></div>
   <ol class="steps">
     <li>Install <a href="https://ollama.com">Ollama</a>. You don't need to start it; sprint does.</li>
     <li>Install sprint: <code>pip install git+https://github.com/Vasiniks/sprint.git</code></li>
-    <li>Run <code>sprint</code> in a project folder. The first time, it offers to pull Qwen 3.5 0.8B, a 737 MB download.</li>
+    <li>Run <code>sprint</code> in a project folder. The first time, it offers to pull magi 1.2 2B, an 826 MB download.</li>
     <li>Type a request and press Enter. Tab switches between asking first, accepting edits, and running everything.</li>
   </ol>
   <p>Works on macOS and Windows. Linux is tested in CI but not yet tried by hand. The <a href="https://github.com/Vasiniks/sprint#readme">README</a> has every command and setting.</p>
@@ -425,7 +425,7 @@ hello world</div></div>
   // the screen
   const term = $('term'), talk = $('talk'), typed = $('typed'), meta = $('meta');
   const hist = $('hist'), acts = $('acts'), grid = $('grid');
-  const MODEL = 'Qwen3.5-0.8B:Q4_K_M';
+  const MODEL = 'magi-1.2-2B';
   for (let n = 0; n < 60; n++) grid.append(document.createElement('i'));
   const fill = pct => {  // 60 cells: the first three are the system prompt
     [...grid.children].forEach((c, n) => c.className = n < 3 ? 'sys' : n < Math.round(pct * .6) ? 'used' : '');
@@ -437,7 +437,7 @@ hello world</div></div>
   let began = 0, last = 0, toks = 0, talking = false, clock = 0;
   const tick = () => {
     const now = performance.now();
-    if (talking) toks += (now - last) * .122;
+    if (talking) toks += (now - last) * .075;
     last = now;
     $('secs').textContent = Math.floor((now - began) / 1000); $('toks').textContent = Math.round(toks);
   };
@@ -481,7 +481,7 @@ hello world</div></div>
     await wait(600, id);
     await type(add('say'), text, 11, id);
     tick(); busy(false);
-    add('cost').textContent = '↑ ' + up + ' ↓ ' + $('toks').textContent + ' tokens | ' + $('secs').textContent + 's'; took.textContent = cost + ', ' + $('secs').textContent + 's'; $('spd').textContent = '122 tok/s';
+    add('cost').textContent = '↑ ' + up + ' ↓ ' + $('toks').textContent + ' tokens | ' + $('secs').textContent + 's'; took.textContent = cost + ', ' + $('secs').textContent + 's'; $('spd').textContent = '75 tok/s';
   };
   async function play() {
     const id = ++run;
