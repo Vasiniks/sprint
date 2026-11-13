@@ -167,7 +167,7 @@ def test_the_planning_request_offers_no_question_tool(monkeypatch):
 
     monkeypatch.setattr(sprint.urllib.request, "urlopen", urlopen)
     a = Agent(out=io.StringIO())
-    assert a.plan("do it") == ["a", "b"] and "tools" not in sent[0]
+    assert a.plan("do it all now") == ["a", "b"] and "tools" not in sent[0]
 
 
 # ---------- the summary keeps what you said ----------

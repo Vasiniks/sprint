@@ -654,8 +654,46 @@ EFFORT = {"low": (16, 8), "medium": (8, 16), "high": (4, 32)}  # reply budget as
 SPIN = "You are repeating yourself. If the task is done, say so in plain words. Otherwise do something different."
 
 
-PLAN = """Break the user's request into a short numbered list of small steps, at most 5.
-Each step is one concrete action. Reply with only the list."""
+PLAN = """You split a request into steps for a coding agent. Anything to build, make, write, fix or change gets a \
+numbered list of steps, one small concrete action each: as many as the job needs and no more. A big job has more steps \
+than a small one. Only when the message is just chat or a question, reply with the one word NONE."""
+# What no plan, a long plan and a short plan look like, as (the request, the reply): they go before the real message as
+# turns of a conversation. A small model takes the size of a plan from examples far more readily than from being told:
+# asked for "at most 5" steps it wrote five for everything, a greeting included
+PLAN_SHOWN = [
+    ("hello", "NONE"),
+    ("make me a website for my restaurant",  # (a model this small borrows from the nearest example, so this one is a
+     "1. Create index.html with the header, the navigation and a welcome section\n"  # site that would do for most)
+     "2. Create style.css with the layout, colours and type\n"
+     "3. Create about.html with the story of the place\n"
+     "4. Create menu.html with what is on offer and the prices\n"
+     "5. Create contact.html with the address, the opening hours and a contact form\n"
+     "6. Create script.js that opens the navigation on a phone and checks the form\n"
+     "7. Link the pages to each other in the navigation\n"
+     "8. Open each page and check the links and the form"),
+    ("how does the parser work?", "NONE"),
+    ("add a --dry-run flag to backup.py and document it",
+     "1. Add the --dry-run flag to the argument parser in backup.py\n2. Describe the flag in the README"),
+    ("make a page for a yoga class with its timetable",
+     "1. Create index.html with the heading, a short welcome and the timetable\n"
+     "2. Create style.css with the layout, colours and type\n"
+     "3. Open index.html and check how it looks"),
+    ("write a script that renames photos by the date they were taken",
+     "1. Create rename_photos.py that lists the photos in a folder\n"
+     "2. Read the date each photo was taken from its EXIF data\n"
+     "3. Rename each file to its date, keeping the extension\n"
+     "4. Run it on a test folder and check the names")]
+PLAN_MOST = 12  # a list longer than this is a model that cannot stop, not a plan
+STEPWISE = "We will do this one step at a time."
+
+
+def steps_in(text):
+    """the steps of a numbered or bulleted list, in order, each of them once"""
+    steps = []
+    for m in re.finditer(r"^\s*(?:\d+[.)]|[-*•])\s+(.+)$", text, re.M):
+        if m.group(1).strip().lower() not in [s.lower() for s in steps]:
+            steps.append(m.group(1).strip())
+    return steps
 
 
 class Agent:
@@ -893,8 +931,9 @@ class Agent:
                         think=self.effort if self.think else False, keep_alive="30m")
             if self.tools and not self.bare:
                 body["tools"] = tools(self.questions)
-        else:
-            body.update(max_tokens=self.limit or self.max_out, stream_options={"include_usage": True})
+        else:  # (of the sampling settings, such a server is sent the ones every one of them knows)
+            body.update(max_tokens=self.limit or self.max_out, stream_options={"include_usage": True},
+                        **{k: v for k, v in self.sampling.items() if k in OPENAI})
         headers = {"Content-Type": "application/json"}
         if self.key:
             headers["Authorization"] = "Bearer " + self.key
@@ -1141,25 +1180,43 @@ class Agent:
         """ask the model, without tools, for a short numbered plan -> its steps, or [] when there is nothing to split.
         It is a reply like any other: it says what it is doing and it can be stopped (it used to be a blind spot that
         nothing reached, and with it running there was no leaving sprint). A list of steps needs no long reasoning,
-        so it is asked for without any and with a small budget: seconds, where full effort took a minute or more"""
-        was, kept = self.think, self.limit
+        so it is asked for without any and with a small budget: seconds, where full effort took a minute or more.
+        How many steps is the model's to say: it is shown plans of several sizes, and what was last said in this
+        conversation, so that "now add tests for it" is about the right thing. A word or two ("hi", "continue") is
+        never a job to split, and is not asked about at all. The request is made at a low temperature, whatever
+        yours is: the same message should not get eight steps one time and none the next"""
+        if len(task.split()) < 3:
+            return []
+        was, kept, own = self.think, self.limit, self.sampling
         self.bare, self.cancel, self.think, self.limit = True, False, False, min(self.max_out, 400)
+        self.sampling = {**own, "temperature": min(own.get("temperature", 0.3), 0.3)}
         self.thread, text = threading.get_ident(), ""  # so stop() can hang up on it
         self.status("planning")
-        stream = self.chat([{"role": "system", "content": PLAN}, {"role": "user", "content": task}])
+        shown = [{"role": role, "content": said} for pair in PLAN_SHOWN for role, said in zip(("user", "assistant"), pair)]
+        stream = self.chat([{"role": "system", "content": PLAN}] + shown + self.before() + [{"role": "user", "content": task}])
         try:
             for c in stream:
                 if self.cancel:
                     raise KeyboardInterrupt
                 text += c if isinstance(c, str) else ""
+                if len(re.findall(r"^\s*(?:\d+[.)]|[-*•])\s+.+\n", text, re.M)) > PLAN_MOST:
+                    break  # it has gone round in circles, or cannot stop: enough has been heard
         finally:
             getattr(stream, "close", lambda: None)()
             SOCKETS.pop(self.thread, None)
-            self.bare, self.think, self.limit = False, was, kept
+            self.bare, self.think, self.limit, self.sampling = False, was, kept, own
             self.status("")
-        text = unthink(text)
-        steps = [m.group(1).strip() for m in re.finditer(r"^\s*(?:\d+[.)]|[-*•])\s+(.+)$", text, re.M)]
-        return steps[:6] if len(steps) > 1 else []
+        steps = steps_in(unthink(text))[:PLAN_MOST]
+        return steps if len(steps) > 1 else []
+
+    def before(self, most=400):
+        """the last thing you asked and what the model said to it, in brief -> two messages, or none on a first one"""
+        at = next((n for n in range(len(self.msgs) - 1, 0, -1) if self.msgs[n]["role"] == "user" and self.msgs[n].get("human")), 0)
+        said = next((m for m in reversed(self.msgs[at + 1:]) if m["role"] == "assistant" and unthink(m["content"]).strip()), None)
+        if not (at and said):
+            return []
+        asked = self.msgs[at]["content"].split("\n\n" + STEPWISE)[0]
+        return [{"role": "user", "content": asked.strip()[:most]}, {"role": "assistant", "content": unthink(said["content"]).strip()[:most]}]
 
     def show_plan(self, steps, at):
         self.say("" if self.col0 else "\n")
@@ -1175,7 +1232,7 @@ class Agent:
         for n, step in enumerate(steps):
             self.show_plan(steps, n)
             ask = f"Now do only step {n + 1} of {len(steps)}: {step}"
-            answer = self.run(f"{task}\n\nWe will do this one step at a time. {ask}", chips) if n == 0 else \
+            answer = self.run(f"{task}\n\n{STEPWISE} {ask}", chips) if n == 0 else \
                 self.run(ask, human=False)
             if answer.startswith("stopped:"):
                 return answer
@@ -1347,7 +1404,20 @@ SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "th
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
             "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool,
             "update_check": bool, "ask_timeout": int, "plan_h": int, "questions": bool, "question_timeout": int}
-SHADE = {"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
+# How the model chooses its next word: (kind, least, most, what it does). These go to the model server with every
+# request. One that is not set is not sent, and the model keeps its own default for it
+SAMPLING = {"temperature": (float, 0, 2, "how random; 0 always picks the likeliest word"),
+            "top_p": (float, 0, 1, "only the likeliest words up to this share"),
+            "top_k": (int, 0, 1000, "only this many likeliest words; 0 for all"),
+            "min_p": (float, 0, 1, "drop words under this share of the likeliest"),
+            "repeat_penalty": (float, 0, 2, "how hard repeats are discouraged; 1 is off"),
+            "repeat_last_n": (int, -1, 8192, "how far back that looks; -1 the whole window"),
+            "presence_penalty": (float, -2, 2, "discourage words already used at all"),
+            "frequency_penalty": (float, -2, 2, "discourage words the more they were used"),
+            "seed": (int, 0, 2 ** 31 - 1, "the same seed gives the same reply again")}
+OPENAI = ("temperature", "top_p", "presence_penalty", "frequency_penalty", "seed")  # the ones a /v1 server takes as well
+SETTINGS.update({k: kind for k, (kind, *_) in SAMPLING.items()})
+SHADE ={"system prompt": "blue", "tool definitions": "magenta", "your messages": "cyan", "model replies": "green",
          "tool results": "yellow", "reserved for the reply": "dim", "free": "dim"}
 ANSI = {"": "", "dim": "2", "bold": "1", "blue": "34", "magenta": "35", "cyan": "36", "green": "32", "yellow": "33", "red": "31"}
 
@@ -1469,7 +1539,7 @@ def save_prompt(text):
 
 def save_config(**changes):
     try:
-        merged = {**load_config(), **changes}
+        merged = {k: v for k, v in {**load_config(), **changes}.items() if v is not None}  # None takes a setting out
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
         CONFIG.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
     except OSError:
@@ -1816,8 +1886,32 @@ def cmd_system(agent, arg):
         notes(f"{'yours' if agent.custom else 'the default'} · to change it edit {tilde(prompt_file())} · /systemprompt reset undoes it")
 
 
+def sampled(key, value):
+    """is this a value the sampling setting may have? (the settings file can be edited by hand, and by a model)"""
+    kind, low, high, _ = SAMPLING[key]
+    return isinstance(value, (int, float) if kind is float else int) and not isinstance(value, bool) and low <= value <= high
+
+
+def set_sampling(agent, key, value):
+    """/config temperature 0.7, or /config temperature default to hand it back to the model -> what is wrong, if anything"""
+    kind, low, high, _ = SAMPLING[key]
+    new = None
+    if value.lower() not in ("default", "off", "none"):
+        try:
+            new = kind(value)
+        except ValueError:
+            return f"{key} needs a {'whole ' * (kind is int)}number, or default"
+        if not sampled(key, new):  # (which also turns away nan and inf)
+            return f"{key} cannot be {value}: it runs from {low} to {high}"
+    agent.sampling = {k: v for k, v in {**agent.sampling, key: new}.items() if v is not None}
+    save_config(**{key: new})
+    return ""
+
+
 def set_config(agent, key, value):
     """/config KEY VALUE: check the value, hand it to the running agent and save it -> what is wrong with it, if anything"""
+    if key in SAMPLING:
+        return set_sampling(agent, key, value)
     kind = SETTINGS[key]
     if kind is int and not value.isdecimal():  # (isdigit would let a ² through, which is no number)
         return f"{key} needs a number"
@@ -1849,6 +1943,8 @@ def cmd_config(agent, arg):
            "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout,
            "questions": agent.questions, "question_timeout": agent.question_timeout, "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": kept.get("plan", False)}
     return [[(f"  {k:<17}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
+        [[(f"  {k:<17}", "dim"), (f"{agent.sampling[k]}" if k in agent.sampling else "default", "" if k in agent.sampling else "dim")]
+         for k in SAMPLING] + \
         notes(f"change with /config KEY VALUE · kept in {tilde(CONFIG)}")
 
 
@@ -1930,7 +2026,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
-VERSION = "0.4.16"  # the same as in pyproject.toml
+VERSION = "0.4.17"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
@@ -2218,6 +2314,7 @@ def build_agent(a):
     agent.custom, agent.timeout, agent.allow = load_prompt(), saved.get("timeout", 60), list(saved.get("allow", []))
     agent.ask_timeout = saved.get("ask_timeout", 20)
     agent.questions, agent.question_timeout = bool(saved.get("questions", True)), saved.get("question_timeout", 60)
+    agent.sampling = {k: saved[k] for k in SAMPLING if k in saved and sampled(k, saved[k])}
     return agent
 
 

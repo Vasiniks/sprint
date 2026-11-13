@@ -1689,7 +1689,7 @@ class Screen:
                 at = len(flat(strip))
                 strip += [(f" {name} ", "chosen" if n == p["tab"] else "dim"), (" ", "")]
                 p["tabs_at"].append((at, at + len(name) + 2, n))
-            lines.append(clip(strip, w - 2) + [(" " * max(0, w - 2 - len(flat(strip))) + " │", "frame")])
+            lines.append(clip(strip, w - 2) + [(" │", "frame")])
         if p["field"]:
             field_at = len(lines)
             lines.append(boxed([(p["field"]["label"] + " ", "dim"), (p["field"]["text"], "")], w))
@@ -2110,29 +2110,42 @@ class Screen:
 
         self.pop("Help", rows, pick=pick, field={"label": "›", "text": "", "filter": True})
 
-    def config_popup(self, sel=0):
+    def config_popup(self, sel=0, tab=0):
+        """the settings, a page to a kind: the everyday ones, then (left and right turn the page) how the model
+        chooses its words, each of those the model's own until you give it a number"""
         a = self.agent
         now = {"model": a.model, "url": a.url, "ctx": a.ctx, "steps": a.steps, "mode": a.mode, "think": a.think, "effort": a.effort,
                "sidebar": self.sidebar, "sidebar_w": self.side_w, "history": self.history, "history_w": self.left_w, "motion": self.motion,
                "theme": self.theme, "peek": self.peek, "timeout": a.timeout, "ask_timeout": a.ask_timeout, "questions": a.questions,
                "question_timeout": a.question_timeout, "plan": self.plan}
         rows = [row([(f"{k:<17}", "dim"), ("on" if v is True else "off" if v is False else str(v), "")], k) for k, v in now.items()]
-        self.pop("Settings", rows, pick=lambda k: self.config_pick(k, now[k], list(now).index(k)), sel=sel)
+        fine = [row([(f"{k:<18}", "dim"), (f"{a.sampling.get(k, 'default')!s:<9}", "" if k in a.sampling else "ghost"), (about, "dim")], k)
+                for k, (_, _, _, about) in sprint.SAMPLING.items()]
+        fine += [row([]), row([("sent to the model with every request · default: the model's own", "dim")])]
+        order = [list(now), list(sprint.SAMPLING)]
+        value = lambda k: now[k] if k in now else a.sampling.get(k)
+        p = self.pop("Settings", rows, pick=lambda k: self.config_pick(k, value(k), order[self.popup["tab"]].index(k), self.popup["tab"]))
+        p.update(tabs=[("General", rows), ("Advanced", fine)])
+        self.popup_tab(tab)
+        p["sel"] = sel
 
-    def config_pick(self, key, value, at):
+    def config_pick(self, key, value, at, tab=0):
         cycle = {"mode": MODES, "effort": tuple(sprint.EFFORT), "theme": tuple(THEMES)}.get(key)
         if isinstance(value, bool):
-            self.config_set(key, "off" if value else "on", at)
+            self.config_set(key, "off" if value else "on", at, tab)
         elif cycle:
-            self.config_set(key, cycle[(cycle.index(value) + 1) % len(cycle)], at)
+            self.config_set(key, cycle[(cycle.index(value) + 1) % len(cycle)], at, tab)
         else:  # a name or a number: type the new value
-            self.pop("Settings: " + key, [row([("enter a new value", "dim")])], back=lambda: self.config_popup(at),
-                     field={"label": key + " ›", "text": str(value), "submit": lambda text: self.config_set(key, text, at)})
+            low = sprint.SAMPLING.get(key)
+            about = f"{low[3]} · {low[1]} to {low[2]} · default: the model's own" if low else "enter a new value"
+            self.pop("Settings: " + key, [row([(about, "dim")])], back=lambda: self.config_popup(at, tab),
+                     field={"label": key + " ›", "text": "" if value is None else str(value),
+                            "submit": lambda text: self.config_set(key, text, at, tab)})
 
-    def config_set(self, key, text, at):
+    def config_set(self, key, text, at, tab=0):
         rows = sprint.command(self.agent, f"/config {key} {text}") or [[]]
         self.load_ui()
-        self.config_popup(at)
+        self.config_popup(at, tab)
         if "cannot" in flat(rows[0]) or "needs" in flat(rows[0]):
             self.tell(flat(rows[0]))
 
