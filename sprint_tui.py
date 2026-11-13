@@ -1679,6 +1679,8 @@ class Screen:
     def popup_lines(self, w, tall=20):
         """the popup as a window exactly w wide -> (lines, index of the chosen line, index of the typing line)"""
         p = self.popup
+        if p.get("fit") and p.get("fit_w") != w:  # pages drawn for the room they have: again when that changes
+            self.popup_refit(w)
         rows, can = self.shown()
         p["sel"] = max(0, min(p["sel"], len(can) - 1))
         chosen = can[p["sel"]] if can else None
@@ -1707,6 +1709,8 @@ class Screen:
         room, at = max(1, tall - len(lines) - 1), rows.index(chosen) if chosen else 0
         # a long list starts around the chosen row, then scrolls only as far as that row needs: it holds still under the mouse
         start = max(at - room + 1, min(p.get("top", at - room // 2), at if p["sel"] else 0))
+        if p.get("scroll"):  # a page to read: nothing on it is chosen, and it moves by the line
+            start, p["room"] = p.get("top", 0), room
         start = p["top"] = max(0, min(start, len(rows) - room))
         nth, p["at"] = {id(r): n for n, r in enumerate(can)}, {}  # p["at"]: which line shows which row that can be chosen
         for r in rows[start:start + room]:
@@ -1718,7 +1722,22 @@ class Screen:
         hint = " " + " · ".join(x for x in ("←→ pages" if p.get("tabs") else "", "↑↓ move" if len(can) > 1 else "", "type to filter" if field.get("filter") else "",
                                            "enter choose" if can and p["pick"] else "enter confirm" if field.get("submit") else "",
                                            "esc back" if p["back"] else "esc close") if x) + " "
+        if p.get("hints"):  # the popup's own words for its keys: the fullest of them the foot has room for
+            said, more = p.get("said", ("", 0)), "↑↓ scroll · " * (len(rows) > room)  # (said only of a page that does not all fit)
+            hint = next((f" {more}{h} " for h in p["hints"] if len(more + h) <= w - 8), " esc ")
+            hint = hint.replace("ctrl+s to copy", said[0]) if time.time() < said[1] else hint
         return lines + [box_foot(hint, w)], sel_at, field_at
+
+    def popup_refit(self, w):
+        """draw the popup's pages again, for a window w wide"""
+        p = self.popup
+        p["tabs"], p["fit_w"] = p["fit"](w - 4), w
+        p["rows"] = p["tabs"][p["tab"]][1]
+
+    def popup_scroll(self, by):
+        """move a page that is only read by this many lines, as far as its ends"""
+        p = self.popup
+        p["top"] = max(0, min(p.get("top", 0) + by, len(p["rows"]) - p.get("room", 1)))
 
     def popup_to(self, n):
         """move the choice to the nth row that can be chosen, kept in range, and tell the popup (a theme previews itself)"""
@@ -1740,7 +1759,7 @@ class Screen:
         press, held = state & curses.BUTTON1_PRESSED, p.get("held")
         turn = wheel(state, not exact and last == (x, y))  # the mouse reports a move only from a new place: from the same one it is the wheel
         if turn:
-            return self.popup_to(p["sel"] - turn)
+            return self.popup_scroll(-turn) if p.get("scroll") else self.popup_to(p["sel"] - turn)
         if press and not inside:
             return self.popup_key("\x1b")
         if press and p.get("tabs") and y == py + 1:  # a click on a page's name turns to it
@@ -1767,6 +1786,10 @@ class Screen:
             self.popup_tab(p["tab"] + (1 if k in (curses.KEY_RIGHT, "\t") else -1))
         elif p.get("tabs") and isinstance(k, str) and k.isdigit() and 1 <= int(k) <= len(p["tabs"]):
             self.popup_tab(int(k) - 1)
+        elif k in p.get("keys", {}):  # keys of the popup's own
+            p["keys"][k]()
+        elif p.get("scroll") and k in (curses.KEY_UP, curses.KEY_DOWN, curses.KEY_PPAGE, curses.KEY_NPAGE):
+            self.popup_scroll({curses.KEY_UP: -1, curses.KEY_DOWN: 1, curses.KEY_PPAGE: -8, curses.KEY_NPAGE: 8}[k])
         elif k in (curses.KEY_UP, curses.KEY_DOWN) and can:
             self.popup_to((p["sel"] + (1 if k == curses.KEY_DOWN else -1)) % len(can))
         elif k in (curses.KEY_PPAGE, curses.KEY_NPAGE) and can:
@@ -1869,9 +1892,27 @@ class Screen:
         self.tell(flat(rows[0]) if rows else "")
 
     def usage_popup(self):
-        """/usage, a tab to a page: left and right (or tab, or its number, or a click) turn them, up and down scroll"""
-        tabs = [(name, [row(list(r), n) for n, r in enumerate(rows)]) for name, rows in sprint.usage_pages(self.agent)]
-        self.pop("Usage", tabs[0][1]).update(tabs=tabs, tab=0)
+        """/usage, after Claude Code's stats, a tab to a page: left and right (or tab, or its number, or a click) turn
+        them, up and down scroll, r goes round the date ranges, ctrl+s copies the page on show. The pages are drawn
+        for the width the popup turns out to have"""
+        p = self.pop("Usage", [])
+        fit = lambda inner: [(name, [row(list(r)) for r in rows]) for name, rows in sprint.usage_pages(self.agent, p["span"], inner)]
+        p.update(fit=fit, tab=0, span="all", scroll=True, keys={"r": self.usage_range, "\x13": self.usage_copy},
+                 hints=["←→ tabs · esc to cancel · r to cycle dates · ctrl+s to copy", "esc to cancel · r to cycle dates · ctrl+s to copy",
+                        "r dates · ctrl+s to copy · esc", "r dates · esc", "esc to cancel"])
+        self.popup_refit(74)
+
+    def usage_range(self):
+        """r: the next range of days (all time, the last 7, the last 30), on the same page"""
+        p, spans = self.popup, list(sprint.SPANS)
+        p["span"] = spans[(spans.index(p["span"]) + 1) % len(spans)]
+        self.popup_refit(p["fit_w"])
+
+    def usage_copy(self):
+        """ctrl+s: the page on show goes to the clipboard as text, and the foot says how that went"""
+        p = self.popup
+        ok = sprint.clipboard("\n".join(flat(r["s"]).rstrip() for r in p["rows"]))
+        p["said"] = ("copied!" if ok else "copy failed", time.time() + 3)
 
     def popup_tab(self, n):
         p = self.popup
