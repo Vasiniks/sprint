@@ -432,8 +432,24 @@ def test_agent_nudges_once_when_code_is_shown_but_not_saved(tmp_path, monkeypatc
 
 def test_agent_accepts_a_code_answer_the_second_time():
     chat = scripted("```python\nx = 1\n```", "```python\nx = 1\n```", "never asked")
-    assert agent(chat).run("show me code") == "```python\nx = 1\n```"
+    assert agent(chat).run("write some code") == "```python\nx = 1\n```"
     assert len(chat.seen) == 2
+
+
+def test_code_that_answers_a_question_is_the_answer_and_gets_no_push():
+    """asked the difference between a list and a tuple, the model explained it with an example, was told "that code
+    was only shown: it was not saved", and its answer became "I did not create any code file". Asked to show a
+    function, it was pushed into writing a file nobody wanted. Only a message that asks for something to be made,
+    changed or saved is pushed"""
+    shown = "A list can change, a tuple cannot:\n```python\na = [1]\nb = (1,)\n```"
+    for said in ("what is the difference between a list and a tuple in python?", "show me a javascript function that reverses a string",
+                 "how do I read a file in python?", "give me a shell command that counts lines", "explain what a decorator is"):
+        chat = scripted(shown, "never asked")
+        assert agent(chat).run(said) == shown and len(chat.seen) == 1, said
+    for said in ("make hello.py", "save that as example.py", "add a tuple example to notes.py", "Write a script that prints hi"):
+        chat = scripted(shown, "```write notes.py\na = [1]\n```", "Saved.")
+        agent(chat).run(said)
+        assert "not saved" in chat.seen[1][-1]["content"], said
 
 
 def test_empty_write_saves_the_code_block_shown_just_before_it(tmp_path, monkeypatch):
@@ -707,9 +723,9 @@ def test_fit_counts_and_clips_native_tool_call_arguments():
 
 def test_tool_schemas_count_toward_the_measured_prompt_size():
     a = agent(scripted())
-    chars = len(a.msgs[0]["content"]) + len("go") + len(json.dumps(sprint.TOOLS))
+    chars = len(a.msgs[0]["content"]) + len("make it go") + len(json.dumps(sprint.TOOLS))
     a.chat = scripted(["hi", {"prompt": int(chars / 3.5)}])
-    a.run("go")
+    a.run("make it go")  # (a job: every tool is on offer, the to-do list too)
     assert a.cpt > 3.3  # the server counted the schemas too; that must not look like dense text
     assert a.used() > len(json.dumps(sprint.TOOLS)) / 3.5
 
