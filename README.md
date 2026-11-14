@@ -60,7 +60,7 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 | Prompt (bottom) | The line you type on, between two rules, with the model and context on the upper one. Under it, the mode with its icon (`▰▱▱` ask, `▰▰▱` edits, `▰▰▰` auto: fuller, the more runs without asking) and a reminder that Tab cycles it. |
 | Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. A glint of colour crosses the words every couple of seconds. When a model goes quiet to write a tool call (the server holds a call back until it is whole), the line says `preparing the next step`. In the conversation, whatever is live turns a small wheel of dots: the thought being written, the call being run. |
 
-Tool windows start collapsed to a few lines, and each says how long the call took:
+Tool windows start collapsed to a few lines, and each says how long the call took. A folded diff counts what is not shown as a diff would, lines put in in green and lines taken out in red (`… + 12 lines | - 4 lines`):
 
 ```
 ╭─ ▸ shell  python3 hello.py && seq 1 12 ─────────── done 0.1s ─╮
@@ -263,7 +263,7 @@ Known limits:
 - **The to-do list** is the model's to use, so how often it appears depends on the model. With magi 1.2 2B, greetings, questions and one-file changes never got one; of eleven bigger jobs run from scratch (landing pages, whole websites, a command-line tool with tests), every one did, and one asked for in the middle of a conversation did not. The list is only as true as the model: once it ticked off a menu page and a contact page it had never written, and after its last item it tends to ask whether there is anything else rather than stop.
 - **PDFs** are read roughly unless `pdftotext` is installed. Pictures need a model that can see.
 - **cmux, Ghostty, kitty and other terminals with their own description, on a Mac.** The curses library macOS ships garbles runs of one character (a box's bottom line, the dots of the context bar, the animation's track) when the terminal's description offers a "repeat" code. sprint therefore starts curses with the plain xterm description there; nothing else changes, and commands sprint runs still see the terminal's own.
-- **Windows.** Install Git for Windows: models write bash, and sprint uses Git Bash when it finds it. Without it, commands run in PowerShell, where common ones (`ls`, `cat`) work but bash syntax often does not. The terminal there does not mark pastes, so sprint treats keys that arrive together as one paste. Dragging with the mouse is untested there; a picture or PDF path dropped into the prompt still becomes a chip when you send.
+- **Windows.** Install Git for Windows: models write bash, and sprint uses Git Bash when it finds it. Without it, commands run in PowerShell, where common ones (`ls`, `cat`) work but bash syntax often does not. The terminal there does not mark pastes, so sprint treats keys that arrive together as one paste. Dragging with the mouse is untested there; a picture or PDF path dropped into the prompt still becomes a chip when you send. In the old console window (not Windows Terminal) the prompt's mark is a plain `>`, since its fonts have no `❯`.
 
 ## As a library
 

@@ -1102,7 +1102,17 @@ class Agent:
             rows = [("32", "+ " + x) for x in c.body.splitlines()]
         for style, x in rows[:10]:
             self.say(f"  │ {x[:160]}\n", style)
-        self.say(f"  │ … +{len(rows) - 10} lines\n" if len(rows) > 10 else "", "2")
+        cut = rows[10:]
+        if cut and c.tool in ("edit", "write"):  # a diff says what is folded away as a diff would: put in, taken out
+            self.say("  │ … ", "2")
+            sides = [(style, f"{sign} {n} line{'s' * (n != 1)}") for style, sign in (("32", "+"), ("31", "-"))
+                     for n in [sum(1 for s, _ in cut if s == style)] if n]
+            for i, (style, text) in enumerate(sides):
+                self.say(" | " * bool(i), "2")
+                self.say(text, style)
+            self.say("\n")
+        elif cut:
+            self.say(f"  │ … +{len(cut)} lines\n", "2")
 
     def show_result(self, r):
         lines = r.splitlines()
@@ -2309,7 +2319,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
-VERSION = "0.4.24"  # the same as in pyproject.toml
+VERSION = "0.4.25"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
