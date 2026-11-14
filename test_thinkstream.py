@@ -203,15 +203,16 @@ def test_the_status_line_says_thinking_while_the_reasoning_comes_down():
     assert " answering (" in flat(s.status_row())
 
 
-def test_folded_it_says_it_is_thinking_with_a_count_and_the_newest_words_that_move():
+def test_folded_it_says_it_is_thinking_with_a_count_and_none_of_the_words():
+    """showthink off means the reasoning is not shown: the line says that the model thinks and how much, never what"""
     s = screen()
     s.show_thinking("First I should")
     (_, spans, item), = s.window(s.items[-1], 70)
-    assert flat(spans).rstrip() == "  ┄ thinking  4 tokens · 3 words  First I should" and len(flat(spans)) == 70 and item is s.items[-1]
-    assert spans[:3] == [("  ┄ ", "frame"), ("thinking", "dim"), ("  4 tokens · 3 words ", "dim")] and spans[3] == (" First I should", "thought")
+    assert flat(spans).rstrip() == f"  {tui.SPIN[0]} thinking  4 tokens · 3 words" and len(flat(spans)) == 70 and item is s.items[-1]
+    assert spans[2:5] == [(" ", ""), ("thinking", "dim"), ("  4 tokens · 3 words ", "dim")] and "thought" not in [role for _, role in spans]
     s.show_thinking("First I should read the file.\nThen change the word.")
     (_, spans, _), = s.window(s.items[-1], 90)
-    assert flat(spans).rstrip() == "  ┄ thinking  14 tokens · 10 words  First I should read the file. Then change the word."
+    assert flat(spans).rstrip() == f"  {tui.SPIN[0]} thinking  14 tokens · 10 words"
     s.show_thought("First I should read the file.\nThen change the word.")
     (_, spans, _), = s.window(s.items[-1], 70)
     assert flat(spans).rstrip() == "  ┄ thought  14 tokens · 10 words"  # over: the line it always settled into
@@ -228,16 +229,13 @@ def test_a_thought_is_sized_in_tokens_by_the_agents_own_measure_and_in_words():
     assert "1 tokens" not in flat(s.window(s.items[-1], 70)[0][1]) and "1 token · 1 word " in flat(s.window(s.items[-1], 70)[0][1])
 
 
-def test_a_long_thought_folded_shows_its_last_words_on_one_line_of_the_right_width():
+def test_a_long_thought_folded_is_one_line_of_the_right_width_with_no_word_of_it():
     s = screen()
     s.show_thinking(" ".join(f"word{n}" for n in range(200)))
     for w in (20, 40, 70, 120):
         (_, spans, _), = s.window(s.items[-1], w)
-        assert len(flat(spans)) == w and flat(spans).startswith("  ┄ thinking  425 t")
-    assert "425 tokens · 200 words" in flat(s.window(s.items[-1], 70)[0][1])
-    line = flat(s.window(s.items[-1], 70)[0][1])
-    assert line.rstrip().endswith("word198 word199") and "word0 " not in line and "… word" in line
-    assert all(piece.startswith("word") for piece in line.split("… ")[1].split())  # cut between words, not through one
+        assert len(flat(spans)) == w and flat(spans).startswith(f"  {tui.SPIN[0]} thinking  425 t") and "word1" not in flat(spans)
+    assert flat(s.window(s.items[-1], 70)[0][1]).rstrip().endswith("425 tokens · 200 words")
 
 
 def test_with_showthink_on_the_frame_holds_the_reasoning_as_it_grows():
@@ -245,11 +243,11 @@ def test_with_showthink_on_the_frame_holds_the_reasoning_as_it_grows():
     s.showthink = True
     s.show_thinking("First I should")
     text = [flat(spans) for _, spans, _ in s.window(s.items[-1], 50)]
-    assert text[0].startswith("┌┄ thinking  4 tokens · 3 words ┄") and text[1].startswith("┆ First I should ") and text[2].startswith("└┄")
+    assert text[0].startswith(f"┌┄ {tui.SPIN[0]} thinking  4 tokens · 3 words ┄") and text[1].startswith("┆ First I should ") and text[2].startswith("└┄")
     assert all(len(t) == 50 for t in text)
     s.show_thinking("First I should read the file.\nThen change the word.")
     text = [flat(spans) for _, spans, _ in s.window(s.items[-1], 50)]
-    assert len(text) == 4 and text[0].startswith("┌┄ thinking  14 tokens · 10 words ┄") and text[2].startswith("┆ Then change the word. ")
+    assert len(text) == 4 and text[0].startswith(f"┌┄ {tui.SPIN[0]} thinking  14 tokens · 10 words ┄") and text[2].startswith("┆ Then change the word. ")
     s.show_thought("First I should read the file.\nThen change the word.")
     text = [flat(spans) for _, spans, _ in s.window(s.items[-1], 50)]
     assert len(text) == 4 and text[0].startswith("┌┄ thought  14 tokens · 10 words ┄") and text[2].startswith("┆ Then change the word. ")
@@ -261,7 +259,7 @@ def test_a_thought_opened_by_hand_grows_in_its_frame_too():
     s.items[-1]["open"] = True
     s.show_thinking("Check the tests first.")
     text = [flat(spans) for _, spans, _ in s.window(s.items[-1], 50)]
-    assert text[0].startswith("┌┄ thinking  6 tokens · 4 words ┄") and text[1].startswith("┆ Check the tests first. ")
+    assert text[0].startswith(f"┌┄ {tui.SPIN[0]} thinking  6 tokens · 4 words ┄") and text[1].startswith("┆ Check the tests first. ")
 
 
 def test_the_redraw_cache_notices_a_thought_growing_and_ending():
@@ -272,10 +270,11 @@ def test_the_redraw_cache_notices_a_thought_growing_and_ending():
         first = shown(s)
         s.show_thinking("alpha bravo")
         second = shown(s)
-        assert "alpha" in first and "bravo" not in first and "bravo" in second and "2 words" in second
+        assert "1 word " in first and "2 words" not in first and "2 words" in second
+        assert ("alpha" in first and "bravo" not in first and "bravo" in second) if showthink else "alpha" not in first + second
         s.show_thinking("alpha bravo charlie")  # as many words as characters differ: the count alone would not tell them apart
         s.show_thinking("alpha bravo charlie delta")
-        assert "delta" in shown(s) and "thinking" in shown(s)
+        assert "4 words" in shown(s) and ("delta" in shown(s)) == showthink and "thinking" in shown(s)
         s.show_thought("alpha bravo charlie delta")
         assert "thought  7 tokens · 4 words" in shown(s) and "thinking" not in shown(s)
 
@@ -302,9 +301,9 @@ def test_a_turn_shows_the_thought_growing_then_settles_it_before_the_answer():
     step()
     thought = s.items[-1]
     assert thought["call"].tool == "think" and thought["state"] == "running" and thought["result"] == "weigh it up"
-    assert "thinking  3 tokens · 3 words  weigh it up" in shown(s) and s.got == len("weigh it up")
+    assert "thinking  3 tokens · 3 words" in shown(s) and "weigh" not in shown(s) and s.got == len("weigh it up")
     step()
-    assert s.items[-1] is thought and "thinking  6 tokens · 5 words  weigh it up then decide" in shown(s)
+    assert s.items[-1] is thought and "thinking  6 tokens · 5 words" in shown(s) and "decide" not in shown(s)
     step(), step()
     finish(s)
     assert [i["t"] for i in s.items][-2:] == ["tool", "text"] and s.items[-2] is thought
