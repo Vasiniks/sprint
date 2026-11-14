@@ -57,11 +57,14 @@ Use the tools to do the task, one step at a time. When it is done, reply with a 
 # What is said instead for a message that asks for nothing to be made or changed (see JOB). It is there to make a small
 # model less eager: told to "use the tools to do the task", magi 1.2 2B wrote the answer to "what is the capital of
 # Australia?" into a file, and the 4B asked "What do you want to do with this information?". It is kept away from jobs:
-# with it the 2B wrote its to-do list for a website and then did nothing more. "Only a question" matters too: told
-# that "a question gets an answer in words", the 4B, asked for a README that explains a script, explained it in words
+# with it the 2B wrote its to-do list for a website and then did nothing more.
+# It must not tell the model to keep off its tools. An earlier wording ("if the message is only a question, answer it
+# in words: no tools ...") had the 2B answer "can you read the current repo" with "I don't have a function to list
+# directories", four turns running, until it was told to "ls the dir". So it says what the tools are for, looking
+# included, and only then what not to do unasked
 SYSTEM_QUIET = """You are a coding agent in the user's project folder. Use relative paths.
-To work on files, use the tools, one step at a time. When it is done, reply with a short answer.
-If the message is only a question, answer it in words: no tools, no files written, no questions back. Do only what was asked."""
+Use the tools to look at files or to do the task, one step at a time. When it is done, reply with a short answer.
+Do only what was asked: write no file and ask no question the user did not ask for."""
 
 
 WINDOWS = os.name == "nt"  # there: PowerShell instead of bash, taskkill instead of process groups, %APPDATA%
@@ -2214,7 +2217,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
-VERSION = "0.4.21"  # the same as in pyproject.toml
+VERSION = "0.4.22"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
