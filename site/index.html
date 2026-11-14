@@ -443,12 +443,13 @@ hello world</div></div>
     <div class="rr" role="row"><span role="rowheader">Read a file</span><i role="cell">runs</i><i role="cell">runs</i><i role="cell">runs</i></div>
     <div class="rr" role="row"><span role="rowheader">Write or edit a file in this folder</span><u role="cell">asks</u><i role="cell">runs</i><i role="cell">runs</i></div>
     <div class="rr" role="row"><span role="rowheader">Write or edit a file outside it</span><u role="cell">asks</u><u role="cell">asks</u><i role="cell">runs</i></div>
-    <div class="rr" role="row"><span role="rowheader">Run a command, fetch a page</span><u role="cell">asks</u><u role="cell">asks</u><i role="cell">runs</i></div>
+    <div class="rr" role="row"><span role="rowheader">Run a command, fetch a page, search the web</span><u role="cell">asks</u><u role="cell">asks</u><i role="cell">runs</i></div>
     <div class="rr" role="row"><span role="rowheader">Delete this folder, or anything outside it</span><u role="cell">asks</u><u role="cell">asks</u><u role="cell">asks</u></div>
     <div class="rr" role="row"><span role="rowheader">Change sprint's own settings</span><u role="cell">asks</u><u role="cell">asks</u><u role="cell">asks</u></div>
   </div>
   <p class="note">An approval you leave for 20 seconds is set aside, not run. The model carries on with the rest, and the call waits for you under <code>/permissions</code>.</p>
   <p class="note">The model can ask you things too, when only you can answer: you type the answer in the prompt, or pick one of the choices it offers. It waits a minute, then decides for itself and says what it chose.</p>
+  <p class="note">It can search the web by itself when the answer is not something it can know. What it looks up goes to a search service, so outside <b>auto</b> each search is shown to you first; <code>/config websearch off</code> takes the tool away.</p>
 </section>
 
 <section id="commands">
