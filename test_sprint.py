@@ -517,15 +517,26 @@ def test_agent_reset_forgets_everything_but_the_system_prompt():
 
 def test_for_a_message_that_is_no_job_a_model_that_calls_tools_is_told_to_keep_to_what_was_asked():
     """small models are eager: asked the capital of Australia, magi 1.2 2B wrote the answer into a file, and the 4B
-    asked "What do you want to do with this information?". With these lines the 2B answered 21 of 28 plain questions
-    with no tool at all, where it had answered 11 so, and the 4B 27 where it had answered 22"""
+    asked "What do you want to do with this information?". With this line the 2B answered 20 of 28 plain questions
+    with no tool at all, where it had answered 11 so, and the 4B 25 where it had answered 22"""
     for said in ("what is the capital of Australia?", "hi there", "why is the sky blue?", "the heading should be blue"):
         chat = scripted("Canberra.")
         agent(chat).run(said)
         told = chat.seen[0][0]["content"]
-        assert "To work on files, use the tools, one step at a time" in told, said
-        assert "If the message is only a question, answer it in words: no tools, no files written, no questions back" in told
-        assert "Do only what was asked" in told and "Use the tools to do the task" not in told
+        assert "Do only what was asked: write no file and ask no question the user did not ask for" in told, said
+        assert "Use the tools to do the task" not in told
+
+
+def test_it_is_never_told_to_keep_off_its_tools():
+    """the wording before this one said a question is answered "in words: no tools". Asked "can you read the current
+    repo", the 2B then said "I don't have a function to list directories", and said it again for "what the directory
+    has", "use shell" and "yes you can". A question about the project is answered by looking"""
+    for said in ("can you read the current repo", "yes, can you tell me what the directory has", "use shell", "what files are here?"):
+        chat = scripted("Looking.")
+        agent(chat).run(said)
+        told = chat.seen[0][0]["content"]
+        assert "no tools" not in told and "in words" not in told, said
+        assert "Use the tools to look at files or to do the task" in told
 
 
 def test_a_job_is_asked_for_in_the_words_it_always_was():
