@@ -189,15 +189,26 @@ PALETTE = {16 + 36 * r + 6 * g + b: tuple((0, 95, 135, 175, 215, 255)[v] for v i
 PALETTE.update({232 + n: (8 + 10 * n,) * 3 for n in range(24)})  # the terminal's 256 colours, less the 16 a user may have restyled
 
 
-def near(colour, seen={}):
+def near(colour, steady=False, seen={}):
     """the closest of the terminal's 256 colours to an exact one such as "#181e29". Closest in colour more than in
-    brightness: a dark green should stay green, not turn into the grey that happens to be as dark"""
-    if colour not in seen:
+    brightness: a dark green should stay green, not turn into the grey that happens to be as dark. steady: only
+    among those whose number bold text leaves alone on the Windows curses (see BRIGHTENS)"""
+    if (colour, steady) not in seen:
         want = tuple(int(colour[i:i + 2], 16) for i in (1, 3, 5))
         tint = lambda c: [v - sum(c) / 3 for v in c]  # how far each channel stands from the colour's own grey
         apart = lambda a, b: sum((x - y) ** 2 for x, y in zip(a, b))
-        seen[colour] = min(PALETTE, key=lambda n: apart(PALETTE[n], want) + 2 * apart(tint(PALETTE[n]), tint(want)))
-    return seen[colour]
+        seen[colour, steady] = min((n for n in PALETTE if n & 8 or not steady),
+                                   key=lambda n: apart(PALETTE[n], want) + 2 * apart(tint(PALETTE[n]), tint(want)))
+    return seen[colour, steady]
+
+
+# The Windows curses (PDCurses) differs from every other in two ways, both seen on a real machine. It makes bold text
+# "bright" by adding 8 to the colour's number, whatever the number: the sprint theme's cyan, 39, came out as 47, a
+# green, wherever it was bold (the word "ask" by the prompt). So text there only takes colours whose number has that
+# 8 in it already. And it numbers the eight basic colours blue-green-red: they are asked for by name, never by number
+BRIGHTENS = sprint.WINDOWS
+BASIC = tuple(getattr(curses, "COLOR_" + name, n)
+              for n, name in enumerate(("BLACK", "RED", "GREEN", "YELLOW", "BLUE", "MAGENTA", "CYAN", "WHITE")))
 
 
 # A terminal keeps a margin round its grid of characters, in its own background colour, which nothing drawn can reach.
@@ -419,7 +430,16 @@ DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "edi
          "websearch": "searching", "think": "thinking"}  # a tool at work, or the reasoning coming down
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
-MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
+
+
+def prompt_mark(windows, env):
+    """what leads the prompt and your messages: the heavy angle, wherever the terminal can draw it. On Windows that is
+    Windows Terminal, an editor's terminal, or one reached over ssh; the old console window's fonts have no such
+    character and it finds none elsewhere, so there it is a plain >"""
+    return "❯" if not windows or any(env.get(k) for k in ("WT_SESSION", "TERM_PROGRAM", "TERM")) else ">"
+
+
+MARK = prompt_mark(sprint.WINDOWS, os.environ)
 
 
 def cell_glyphs(env):
@@ -605,8 +625,11 @@ def boxed(spans, w):
 
 
 def box_foot(hint, w):
-    """the bottom edge of a box w wide, with a hint set into it"""
-    return [("╰─", "frame"), (hint, "dim"), ("─" * (w - 3 - len(hint)) + "╯", "frame")]
+    """the bottom edge of a box w wide, with a hint set into it: plain words, or spans in colours of their own;
+    one too long for the box is cut to it"""
+    hint = [(hint, "dim")] if isinstance(hint, str) else hint
+    hint = hint if len(flat(hint)) <= max(0, w - 3) else clip(hint, max(0, w - 3))
+    return [("╰─", "frame")] + hint + [("─" * (w - 3 - len(flat(hint))) + "╯", "frame")]
 
 
 def took(it):
@@ -770,9 +793,12 @@ class Screen:
             if want == self.backdrop_want:
                 return  # nothing newer was asked for meanwhile
 
-    def ink(self, colour):
-        """the terminal's number for a theme's colour: an exact one's own slot, or the nearest of the 256"""
-        return colour if isinstance(colour, int) else SLOT[colour] if self.exact else near(colour)
+    def ink(self, colour, text=False):
+        """the terminal's number for a theme's colour: an exact one's own slot, or the nearest of the 256 (for text
+        on Windows, the nearest that bold leaves alone); a basic colour's number here"""
+        if isinstance(colour, int):
+            return BASIC[colour] if 0 <= colour < 8 else colour
+        return SLOT[colour] if self.exact else near(colour, text and BRIGHTENS)
 
     def paint(self):
         """(re)define the colour pairs for the current theme: 1-7 its hues on its background, 8 its plain text, 9 ghost
@@ -788,7 +814,7 @@ class Screen:
             rich = self.rich = curses.COLORS >= 256
             if rich and ROUTED and speaks_256():
                 self.exact = True  # the slots leave as exact colours on their way to the terminal
-            elif rich and can_exact():
+            elif rich and can_exact() and not BRIGHTENS:  # (bold would move a slot's number as it does any other)
                 try:
                     for c, slot in SLOT.items():
                         curses.init_color(slot, *(int(c[i:i + 2], 16) * 1000 // 255 for i in (1, 3, 5)))
@@ -796,25 +822,25 @@ class Screen:
                 except curses.error:
                     pass  # it said it could and cannot: the nearest colours, then
             t, ink = THEMES[self.theme], self.ink
-            bg, fg, panel = (ink(t.get("bg", -1)), ink(t.get("fg", -1)), ink(t.get("panel", 236))) if rich else (-1, -1, -1)
+            bg, fg, panel = (ink(t.get("bg", -1)), ink(t.get("fg", -1), True), ink(t.get("panel", 236))) if rich else (-1, -1, -1)
             bg = -1 if rich and self.borrowed(t.get("bg")) else bg
             for i in range(8):
-                colour = ink(t.get(i, i)) if rich or self.theme == "mono" else i
+                colour = ink(t.get(i, i), True) if rich or self.theme == "mono" else ink(i)
                 if i:
                     curses.init_pair(i, colour, bg)
                 curses.init_pair(10 + i, colour if i else fg, panel)
             if not rich:
                 return
             curses.init_pair(8, fg, bg)
-            curses.init_pair(9, ink(t.get("ghost", 244)), bg)
+            curses.init_pair(9, ink(t.get("ghost", 244)), bg)  # (greyed-out text is never bold)
             curses.init_pair(19, ink(t.get("ghost", 244)), panel)
             for i in range(8):
-                curses.init_pair(230 + i, ink(t.get(i, i)) if i else fg, ink(t.get("band", 238)))
+                curses.init_pair(230 + i, ink(t.get(i, i), True) if i else fg, ink(t.get("band", 238)))
             self.base = 8 if "bg" in t else 0
             shown = t.get("bg")
             for n, other in enumerate(THEMES.values()):
                 for i in range(7):
-                    curses.init_pair(20 + 7 * n + i, ink(other.get(i, i) if i else other.get("fg", -1)), ink(other.get("bg", -1)))
+                    curses.init_pair(20 + 7 * n + i, ink(other.get(i, i) if i else other.get("fg", -1), True), ink(other.get("bg", -1)))
         except curses.error:
             pass  # no screen yet
         finally:
@@ -2528,6 +2554,12 @@ class Screen:
         gap = w - len(flat(head + mid + tail))
         top = head + mid + [(" " + "─" * (gap - 1), "frame")] + tail
         hint = f" … +{hidden} lines · ctrl+o " if hidden else " ctrl+o to collapse " if full and len(body) > self.peek and not asks else ""
+        # a diff says what is folded away as a diff would: lines put in, in green, and lines taken out, in red
+        cut = body[self.peek:] if hidden and c.tool in ("edit", "write") else []
+        sides = [(f"{sign} {n} line{'s' * (n != 1)}", role) for sign, role in (("+", "add"), ("-", "del"))
+                 for n in [sum(1 for b in cut if b[0][1] == role)] if n]
+        if sides:
+            hint = [(" … ", "dim"), sides[0]] + [x for side in sides[1:] for x in ((" | ", "dim"), side)] + [(" · ctrl+o ", "dim")]
         return [("", top, it)] + [("", boxed(r, w), it) for r in rows] + [("", box_foot(hint, w), it)]
 
     def todo_mark(self, state):
