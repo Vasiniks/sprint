@@ -42,12 +42,12 @@ def test_then_the_session_as_labelled_rows(tmp_path, monkeypatch):
     assert list(told) == ["model", "thinking", "showthink", "effort", "plan", "speed", "tokens", "tools", "time"]
     assert tui.short(s.agent.model)[:10] in told["model"]
     assert not any(tui.MODE_ICON[m] in r for r in rows for m in tui.MODES)  # the mode is by the prompt already: not here too
-    assert told["thinking"].split()[1] == "off" and told["effort"].split()[1] == s.agent.effort
-    assert told["showthink"].split()[1] == "off" and told["plan"].split()[1] == "on"  # (the to-do list is on unless switched off)
+    assert "[ ] off" in told["thinking"] and told["effort"].split()[1] == s.agent.effort  # a switch is a checkbox, then what it stands at
+    assert "[ ] off" in told["showthink"] and "[✓] on" in told["plan"]  # (the to-do list is on unless switched off)
     s.showthink, s.plan = True, False
     again = {r.split()[0]: r for r in head(s)[at + 1:]}
-    assert again["showthink"].split()[1] == "on" and again["plan"].split()[1] == "off"
-    assert dict(s.side_head(28, 50)[at + 3])["on"] == "ok"  # on is green, off is quiet
+    assert "[✓] on" in again["showthink"] and "[ ] off" in again["plan"]
+    assert dict(s.side_head(28, 50)[at + 3])["[✓]"] == "ok"  # on is green, off is quiet
     s.showthink, s.plan = False, True
     assert "61 tok/s" in told["speed"] and "5.5s" in told["speed"]
     assert "↑" in told["tokens"] and "↓" in told["tokens"]
@@ -55,7 +55,7 @@ def test_then_the_session_as_labelled_rows(tmp_path, monkeypatch):
     labels = {r.index(r.split()[1]) for r in rows[at + 1:]}
     assert len(labels) == 1  # the values line up
     s.agent.think = True
-    assert head(s)[at + 2].split()[1] == "on"
+    assert "[✓] on" in head(s)[at + 2]
 
 
 def test_the_fuller_the_window_the_louder_the_figure(tmp_path, monkeypatch):

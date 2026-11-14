@@ -21,7 +21,7 @@ SKIP = {"node_modules", "__pycache__", "venv", "dist", "build", "target"}  # fol
 PEEK = 6   # body lines a collapsed tool window shows
 ROOM = 44  # columns the conversation always keeps; a panel that would squeeze it further is hidden
 SIDE = 32  # the sidebar's width until you drag it
-COMMANDS = [("/clear", "clear the conversation and start fresh"), ("/new", "the same as /clear"),
+COMMANDS = [("/clear", "clear the conversation and start fresh"),
             ("/model", "switch model"), ("/mode", "ask · edits · auto"),
             ("/think", "let the model reason first, on or off"), ("/showthink", "show the model's reasoning in full, or just that it thought"),
             ("/effort", "low · medium · high"),
@@ -61,6 +61,8 @@ HELP = [("In a message", [("@path", "attach that file; tab completes the name"),
                    ("drag over text", "copy it"),
                    ("click a tool window", "open or close just that one"),
                    ("click a message", "jump to it; so does a line under Activity"),
+                   ("click a listed command", "take it, as Enter would; the one under the mouse is the chosen one"),
+                   ("click a switch", "thinking, showthink or plan, top right: flip it"),
                    ("drag a panel's edge", "resize the panel")])]
 ARGS = {"/model": "[name]", "/mode": "[name]", "/effort": "[level]", "/config": "[key value]", "/sidebar": "[width]",
         "/history": "[width]", "/race": "[model message]", "/directory": "[path]", "/copy": "[code|all]", "/export": "[file]"}
@@ -122,6 +124,20 @@ def dash(t=None):
     hue = HUES[int(lap) % 3]
     fade = (hue + ".bold", hue, hue + ".dim", hue + ".dim")  # the head, then a tail that fades behind it
     return [(CELLS[0], fade[head - x]) if 0 <= head - x < 4 else (CELLS[1], "ghost") for x in range(RUN)]
+
+
+EFFORT_BEAT = (2.4, 1.2, 0.6)  # seconds a glint takes to cross its part of the effort bar: low, medium, high
+
+
+def effort_tracks(t, cells):
+    """the effort bar's tracks at time t, one to a level -> for each, which of its cells a glint lights. One small
+    glint a track (a head and a cell of tail), crossing the faster the higher the effort; it runs off the right
+    end before it sets off again. t None: held still, a third of the way along"""
+    out = []
+    for beat in EFFORT_BEAT:
+        head = cells // 3 if t is None else int((t % beat) / beat * (cells + 2))
+        out.append([head - 1 <= i <= head for i in range(cells)])
+    return out
 
 
 def glint(text, t=None):
@@ -672,7 +688,9 @@ class Screen:
         self.shift = {"left": 0, "side": 0}  # how far each side panel's list is scrolled back from its newest entry
         self.grid, self.areas = [], {}  # every character on the screen, and its parts (left, right, top, bottom): a drag copies from one
         self.tree = (0.0, "", [])  # when the folder was last listed for @ completion, where, and what was there
-        self.hover, self.last = False, None  # is every move of the mouse reported (only under a popup)? Where it last was
+        self.hover, self.last = False, None  # is every move of the mouse reported? Where it last was, under a popup
+        self.sgr, self.over = False, None  # has the terminal reported the mouse in full yet? Where the mouse is, outside a popup
+        self.switches, self.opt_x = {}, (0, 0)  # the session rows that are switches; the columns the list over the prompt spans
         self.flash = (None, 0.0)  # the item last jumped to and when, so it can light up and fade
         self.caret, self.nl = (1, 7), False  # where the cursor sits in the bar; does Enter arrive as "\r", freeing "\n"?
         self.ask_hits, self.ask_lit = {}, []  # the bar's rows that are choices of the model's question -> which; the highlighted ones
@@ -928,7 +946,9 @@ class Screen:
         cells = sprint.context_cells(a, inner * 2)
         rows = [[("Context", "dim"), (f"{pct}%".rjust(inner - 7), loud)], cells[:inner], cells[inner:],
                 clip([(f"{kilo(int(used))} of {kilo(ctx)} tokens", "dim")], inner)]
-        switch = lambda on: ("on", "ok") if on else ("off", "dim")
+        # a switch is a checkbox you can click, then what it stands at (for thinking, on a middling screen, how hard)
+        switch = lambda on, said="": [("[✓]" if on else "[ ]", "ok" if on else "dim"), (" " + (said or ("on" if on else "off")), "ok" if on else "dim")]
+        self.switches = {}  # which row of this head flips what when clicked
         if h < 32:  # a short screen: two lines, the speed and the model with what is switched on (the mode is by the prompt)
             flags = [(name + "  ", "") for name, on in (("think", a.think), ("plan", self.plan)) if on]  # first: a long name must not push them off
             return rows + [clip([(self.speed_text(), "dim")], inner), clip(flags + [(short(a.model), "dim")], inner)]
@@ -943,15 +963,17 @@ class Screen:
         tally = a.tally
         calls = sum(tally["tools"].values())
         told = [("model", [(short(a.model), "")]),
-                ("thinking", [switch(a.think)]), ("showthink", [switch(self.showthink)]), ("effort", [(a.effort, "")]),
-                ("plan", [switch(self.plan)]),
+                ("thinking", switch(a.think)), ("showthink", switch(self.showthink)), ("effort", [(a.effort, "")]),
+                ("plan", switch(self.plan)),
                 ("speed", [(f"{a.rate:.0f} tok/s", ""), (f" · {a.took:.1f}s last", "dim")] if a.rate else [("no reply yet", "dim")]),
                 ("tokens", [(f"↑ {sprint.human(tally['sent'])} ↓ {sprint.human(tally['written'])}", "")]),
                 ("tools", [(f"{calls} call{'s' * (calls != 1)}", "")] + ([(f" · {tally['failed']} failed", "err")] if tally["failed"] else [])),
                 ("time", [(sprint.clock(tally["secs"]), ""), (" answering", "dim")])]
         if h < 44:  # the middle size: one line for thinking and effort, and no session clock
-            told = told[:1] + [("thinking", [(a.effort, "") if a.think else ("off", "dim")]), told[2]] + told[4:8]
+            told = told[:1] + [("thinking", switch(a.think, a.effort if a.think else "")), told[2]] + told[4:8]
         rows += [[], [("Session", "dim"), (sprint.clock(time.time() - a.started).rjust(inner - 7), "dim")]]
+        flips = {"thinking": "/think", "showthink": "/showthink", "plan": "/plan"}
+        self.switches = {len(rows) + n: flips[label] for n, (label, _) in enumerate(told) if label in flips}
         return rows + [clip([(f"{label:<10}", "dim")] + value, inner) for label, value in told]
 
     def speed_text(self):
@@ -979,7 +1001,11 @@ class Screen:
         wave = not self.items and self.motion
         return bool(self.busy() or self.pending or self.asking or self.drag or self.select or self.note_text() or wave or self.queue or self.repaint
                     or (self.job and self.job.is_alive()) or self.esc is not None or self.pasting is not None
-                    or self.glow(self.flash[0]))
+                    or self.glow(self.flash[0]) or self.bar_moving())
+
+    def bar_moving(self):
+        """is the effort bar open, with its glints running?"""
+        return bool(self.motion and self.popup and self.popup.get("bar"))
 
     def busy(self):
         return bool(self.worker and self.worker.is_alive())
@@ -1020,7 +1046,7 @@ class Screen:
         a, arg = self.agent, arg.strip()
         if cmd in ("/exit", "/quit", "/bye"):
             self.quit = True
-        elif cmd in ("/new", "/clear"):
+        elif cmd == "/clear":
             self.queue = []
             if not self.busy():
                 a.reset()
@@ -1157,8 +1183,9 @@ class Screen:
         pool = {"/mode": [(m, ABOUT[m]) for m in MODES], "/permissions": [(m, ABOUT[m]) for m in MODES],
                 "/effort": [(e, f"replies up to window/{n} tokens, {k} steps") for e, (n, k) in sprint.EFFORT.items()],
                 "/config": [(k, "") for k in sprint.SETTINGS]}.get(cmd)
-        pool = [(m, "") for m in self.installed()] if cmd == "/model" else pool or []
-        return [(o, d) for o, d in pool if o.startswith(arg) and o != arg]
+        if cmd == "/model":  # names complete once one is begun; with none begun, Enter opens the window, which says far more
+            pool = [(m, "") for m in self.installed()] if arg else []
+        return [(o, d) for o, d in pool or [] if o.startswith(arg) and o != arg]
 
     def state_of(self, cmd, choice=None):
         """what a command stands at now, for the far right of its row and of the prompt: on or off for a switch, the
@@ -1290,10 +1317,12 @@ class Screen:
                 return self.reply_to(q, self.buf.strip()) if self.buf.strip() else None
             if opts:
                 self.complete(opts)
-            line = self.buf.strip()  # a completion that wants more typing (it ends in a space) is not sent yet
+            # a completion that wants more is not sent yet: a file's name put into a message, or a command that ends in
+            # a space with choices still on offer (/mode). A command with nothing more to choose here (/model) runs
+            line = self.buf.strip()
             if not line and self.queue and self.busy():  # nothing typed, messages waiting: stop, so they start now
                 self.interrupt()
-            elif line and not (opts and self.buf.endswith(" ")):
+            elif line and not (opts and self.buf.endswith(" ") and (self.options() or not self.buf.startswith("/"))):
                 self.past.append(line)
                 self.buf, self.cur, self.at, self.scroll, self.shift = "", 0, len(self.past), 0, {"left": 0, "side": 0}
                 if (self.busy() or self.queue) and not line.startswith("/"):  # the agent is working: it waits its turn
@@ -1486,6 +1515,7 @@ class Screen:
 
     def sgr_mouse(self, button, x, y, down):
         """a mouse event the terminal reported in full: 64 and 65 are the wheel, 32 more is a move, else which button"""
+        self.sgr = True  # this terminal reports in full: its wheel never has to be guessed from a bare move
         if not self.mouse_on:
             return
         if button & 64:
@@ -1538,6 +1568,15 @@ class Screen:
                 self.drag = "plan"
             else:
                 self.select = {"a": (y, x), "b": (y, x), "area": self.area_at(x, y)}
+        elif state & MOVED:  # the mouse moved with no button down: what it is over lights up
+            self.over = (x, y)
+            if self.over_option(x, y) is not None:
+                self.pick = self.over_option(x, y)
+
+    def over_option(self, x, y):
+        """which row of the list over the prompt this point is on -> its place in the list, or None"""
+        n = self.hits.get(("opt", y))
+        return n if n is not None and self.opt_x[0] <= x < self.opt_x[1] else None
 
     def panel_at(self, x):
         """which column of the screen this is in: the message list ("left"), the right-hand panel ("side"), or between them"""
@@ -1560,7 +1599,12 @@ class Screen:
         q, row = self.asking, self.hits.get(("ask", y))
         if q and row is not None and self.area_at(x, y) == "prompt":  # a row of the model's question: a choice is taken,
             return self.reply_to(q, q["options"][row]) if row < len(q["options"]) else q.update(at=row)  # your own row gone to
+        if self.over_option(x, y) is not None:  # a row of the list over the prompt: it is taken, as Enter on it would
+            self.pick = self.over_option(x, y)
+            return self.enter_key("\r", self.options())
         where = self.panel_at(x)
+        if where == "side" and ("switch", y) in self.hits:  # a switch at the top of the panel: flipped
+            return self.run_command(self.hits[("switch", y)])
         item = self.hits.get((where, y))
         if item and where == "main" and item["t"] == "tool":
             item["open"] = not item["open"]
@@ -1674,11 +1718,15 @@ class Screen:
 
     def popup_size(self, h, w):
         """how wide and how tall the open popup may be on a screen this size: the text editor takes most of it"""
+        if self.popup.get("bar"):  # the effort bar is a small window of its own
+            return max(40, min(62, w - 6)), h - 4
         return (max(40, min(120, w - 4)) if self.popup["edit"] else max(40, min(92, w - 6))), h - 4
 
     def popup_lines(self, w, tall=20):
         """the popup as a window exactly w wide -> (lines, index of the chosen line, index of the typing line)"""
         p = self.popup
+        if p.get("bar"):  # the effort window: one bar, drawn afresh every frame for its glints
+            return self.bar_lines(p, w), None, None
         if p.get("fit") and p.get("fit_w") != w:  # pages drawn for the room they have: again when that changes
             self.popup_refit(w)
         rows, can = self.shown()
@@ -1755,6 +1803,8 @@ class Screen:
             return
         py, px, pw, ph = p["box"]
         inside = py <= y < py + ph and px <= x < px + pw
+        if p.get("bar"):
+            return self.bar_pointer(p, x, y, state, inside)
         at = p.get("at", {}).get(y - py) if inside else None
         press, held = state & curses.BUTTON1_PRESSED, p.get("held")
         turn = wheel(state, not exact and last == (x, y))  # the mouse reports a move only from a new place: from the same one it is the wheel
@@ -1774,6 +1824,8 @@ class Screen:
         p = self.popup
         if k == curses.KEY_MOUSE:
             return self.mouse()
+        if p.get("bar"):
+            return self.bar_key(p, k)
         if p["edit"]:
             return self.edit_key(p["edit"], k)
         _, can = self.shown()
@@ -2135,10 +2187,58 @@ class Screen:
                        row([("switch to ", "dim"), (short(results[1]["model"]), "bold")], results[1]["model"])]
 
     def effort_popup(self):
-        a, levels = self.agent, list(sprint.EFFORT)
-        rows = [row([("● " if e == a.effort else "  ", a.mode), (f"{e:<8}", "bold" if e == a.effort else ""),
-                     (f"replies up to {a.ctx // n:,} tokens, {k} steps per message", "dim")], e) for e, (n, k) in sprint.EFFORT.items()]
-        self.pop("Effort", rows, pick=lambda e: self.choose("/effort " + e), sel=levels.index(a.effort))
+        """/effort: a small window with one bar, a part to a level. A glint crosses each part, faster the higher the
+        effort. Left and right (or the mouse) move along it, enter sets it"""
+        levels = list(sprint.EFFORT)
+        self.pop("Effort", []).update(bar={"levels": levels, "at": levels.index(self.agent.effort), "t0": time.time(), "cells": []})
+
+    def bar_lines(self, p, w):
+        """the effort window, exactly w wide: the levels' names side by side, a track under each with its glint,
+        and under those what the level the bar is on means"""
+        a, b = self.agent, p["bar"]
+        inner, gap = w - 4, 2
+        seg = (inner - gap * (len(b["levels"]) - 1)) // len(b["levels"])
+        lit = effort_tracks(time.time() - b["t0"] if self.motion else None, seg)
+        names, tracks, b["cells"] = [], [], []
+        for n, level in enumerate(b["levels"]):
+            on, pad = n == b["at"], [(" " * gap, "")] * bool(n)
+            b["cells"].append((2 + n * (seg + gap), 2 + n * (seg + gap) + seg, 2))  # its columns in the window, and its first row
+            names += pad + [((("● " if level == a.effort else "") + level).center(seg), "chosen" if on else "dim")]
+            tracks += pad + [(CELLS[0], HUES[n % 3] + ".bold") if cell else (CELLS[1], "dim" if on else "ghost") for cell in lit[n]]
+        share, steps = sprint.EFFORT[b["levels"][b["at"]]]
+        about = [(f"replies up to {a.ctx // share:,} tokens, {steps} steps per message", "dim")]
+        top = [("╭─ ", "frame"), (p["title"], "bold"), (" ", "")]
+        return [top + [("─" * (w - len(flat(top)) - 1) + "╮", "frame")], boxed([], w), boxed(names, w), boxed(tracks, w),
+                boxed([], w), boxed(about, w), box_foot(" ←→ choose · enter set · esc close ", w)]
+
+    def bar_key(self, p, k):
+        b = p["bar"]
+        if k in ("\x1b", "\x03"):
+            self.popup = None
+        elif k in (curses.KEY_LEFT, curses.KEY_UP, curses.KEY_RIGHT, curses.KEY_DOWN):  # the bar has ends
+            b["at"] = max(0, min(len(b["levels"]) - 1, b["at"] + (1 if k in (curses.KEY_RIGHT, curses.KEY_DOWN) else -1)))
+        elif k in ("\t", curses.KEY_BTAB):  # tab goes round
+            b["at"] = (b["at"] + (1 if k == "\t" else -1)) % len(b["levels"])
+        elif isinstance(k, str) and k.isdigit() and 1 <= int(k) <= len(b["levels"]):
+            b["at"] = int(k) - 1
+        elif k in ENTER:
+            self.choose("/effort " + b["levels"][b["at"]])
+
+    def bar_pointer(self, p, x, y, state, inside):
+        """the mouse over the effort window: the part it is over becomes the chosen one, a click sets it, the wheel
+        moves along the bar, a press outside closes"""
+        b, (py, px, _, _) = p["bar"], p["box"]
+        press, held = state & curses.BUTTON1_PRESSED, p.get("held")
+        if press and not inside:
+            return self.bar_key(p, "\x1b")
+        if state & (curses.BUTTON4_PRESSED | DOWN):
+            return self.bar_key(p, curses.KEY_LEFT if state & curses.BUTTON4_PRESSED else curses.KEY_RIGHT)
+        at = next((n for n, (left, right, row) in enumerate(b["cells"]) if px + left <= x < px + right and py + row <= y <= py + row + 1), None)
+        p["held"] = at if press or (held == at and not state & curses.BUTTON1_RELEASED) else None
+        if at is not None:
+            b["at"] = at
+            if state & curses.BUTTON1_CLICKED or (state & curses.BUTTON1_RELEASED and held == at):
+                self.bar_key(p, "\r")
 
     def context_popup(self):
         self.pop("Context", [row(list(r)) for r in sprint.context_rows(self.agent)])
@@ -2669,6 +2769,10 @@ class Screen:
         top_rows = self.side_head(inner, h)
         for i, spans in enumerate(top_rows):
             self.put(scr, 1 + i, x, spans, width=inner)
+            if i in self.switches:  # a switch: a click on its row flips it, and it lights up under the mouse
+                self.hits[("switch", 1 + i)] = self.switches[i]
+                if self.over and self.over[1] == 1 + i and x - 1 <= self.over[0] <= w - 2:
+                    self.mark(scr, 1 + i, x, inner, curses.A_REVERSE)
         act = self.act = len(top_rows) + 2  # the row "Activity" stands on: under the head, wherever that ends
         plan = list(a.todos) if self.plan else []  # the model's to-do list, while it has one; /plan off puts it away too
         half = max(act + 3, min(h - 4, h - self.plan_h if self.plan_h else max(h // 2, act + 6)))  # the bottom half, unless you dragged its edge
@@ -2727,8 +2831,10 @@ class Screen:
         start = max(0, min(chosen - 3, len(every) - 8))
         opts = every[start:start + 8]
         asked = self.buf.partition(" ")[0] if " " in self.buf else None  # the command whose choices these are, if they are
+        self.opt_x = (bx, bx + bw)
         for i, (name, about) in enumerate(opts):
             on = start + i == chosen
+            self.hits[("opt", top - len(opts) + i)] = start + i  # for the mouse: pointing at a row chooses it, a click takes it
             state = self.state_of(asked, name) if asked else self.state_of(name)  # what it stands at now, at the far right
             room = bw - (len(state[0]) + 2 if state else 0)
             self.put(scr, top - len(opts) + i, bx, [(f"     {name:<24}", "bold" if on else ""), (about, "dim")], width=room)
@@ -2738,8 +2844,10 @@ class Screen:
                 self.mark(scr, top - len(opts) + i, bx + 3, bw - 3, curses.A_REVERSE)
 
     def track_hover(self):
-        """only under a popup does the terminal report every move of the mouse, so that the popup's rows can light up"""
-        hover = bool(self.popup and self.mouse_on and not self.popup["edit"])
+        """ask the terminal to report every move of the mouse, so that what it is over can light up: under a popup, and
+        everywhere once the terminal has shown that it reports in full. (One that does not has its wheel guessed from
+        bare moves, see pointer, and reporting every move would break that guess)"""
+        hover = bool(self.mouse_on and not (self.popup and self.popup["edit"]) and (self.popup or self.sgr))
         if VT and hover != self.hover:
             self.hover = hover
             sys.stdout.write("\033[?1003h" if hover else "\033[?1003l" + "\033[?1002h" * self.mouse_on)  # one mode at a time
@@ -2815,7 +2923,7 @@ class Screen:
             if fresh or now or was:  # one more frame after things settle, then leave the screen alone
                 self.draw(scr)
             quick = self.busy() or self.pending or self.drag or self.select or self.esc is not None or self.pasting is not None
-            quick = quick or (self.motion and not self.items)  # the logo's glint is too fast for the slower beat
+            quick = quick or (self.motion and not self.items) or self.bar_moving()  # the logo's glint, and the effort bar's, are too fast for the slower beat
             scr.timeout(80 if quick else 160 if now else 1000)
             was = now
             try:
