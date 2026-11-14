@@ -39,6 +39,15 @@ code { font: inherit; }
 .pace i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 14vw; background: var(--tint); transform: translateX(calc(var(--p, 0) * 86vw)); }
 .pace i:nth-child(1) { --tint: var(--y); } .pace i:nth-child(2) { --tint: var(--c); } .pace i:nth-child(3) { --tint: var(--m); }
 
+/* the wind: while you scroll, thin streaks cross the page behind the text, against the way the runners go, faster
+   the faster you scroll; they fade when you stop. Behind everything: the black panels cover them */
+.wind { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; opacity: var(--gust, 0); }
+.wind i { position: absolute; left: 0; top: var(--top); width: var(--len); height: var(--thick, 2px); background: var(--tint, #dcdcdc); transform: translateX(calc(var(--at, 0) * 1px)); will-change: transform; }
+.wind i:nth-child(1) { --top: 9%; --len: 24vw; } .wind i:nth-child(2) { --top: 21%; --len: 12vw; --tint: var(--c); --thick: 3px; }
+.wind i:nth-child(3) { --top: 34%; --len: 30vw; } .wind i:nth-child(4) { --top: 47%; --len: 16vw; --tint: var(--y); --thick: 3px; }
+.wind i:nth-child(5) { --top: 58%; --len: 22vw; } .wind i:nth-child(6) { --top: 71%; --len: 10vw; --tint: var(--m); --thick: 3px; }
+.wind i:nth-child(7) { --top: 83%; --len: 28vw; } .wind i:nth-child(8) { --top: 93%; --len: 14vw; }
+
 /* hero: a black band the full width of the window */
 .hero { background: var(--ink); color: #fff; padding: 19px var(--gutter) 0; overflow: hidden; }
 .top { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
@@ -62,7 +71,7 @@ code { font: inherit; }
 .track i:nth-child(3) { --tint: var(--m); --at: 17vw; --t: 3.1s; }
 
 main { padding: 0 var(--gutter); }
-section { padding-top: clamp(72px, 13vh, 144px); }
+section { padding-top: clamp(52px, 9vh, 104px); }
 section > h2 + p { margin-top: 14px; }
 /* a heading arrives the way the logo does: at a run from the left, three lines of colour trailing, drawn in as it stops */
 h2 { position: relative; }
@@ -162,7 +171,7 @@ h2::before { content: ""; position: absolute; right: calc(100% + 14px); top: .22
 .fig .cap { display: block; color: var(--grey); }
 .fig .cap + .bar + .cap { margin-top: 12px; }
 .key { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 12px; color: var(--grey); }
-.key i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; }
+.key i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; } .key .k { background: var(--ink); }
 .calls { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; align-items: center; margin: 0; }
 .calls dt, .calls dd { margin: 0; }
 .tag { padding: 1px 8px; } .tag.warn { background: var(--y); } .tag.stop { background: var(--ink); color: #fff; }
@@ -171,19 +180,32 @@ h2::before { content: ""; position: absolute; right: calc(100% + 14px); top: .22
 .askline b:first-of-type { padding: 0 6px; margin: 0 -6px; }
 /* on a wide window the three points are a run: the heading holds still and they pass under it from right to left, a
    pixel across for every pixel you scroll. (.wide is set by the script when the window is wide and tall enough) */
-.wide { height: calc(100vh + var(--travel, 0px)); }
-.wide .pin { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; justify-content: center; overflow: hidden;
-  margin: 0 calc(var(--gutter) * -1); padding: 19px var(--gutter) 0; }
-.wide .points { display: flex; gap: clamp(56px, 7vw, 130px); width: max-content; margin-top: clamp(40px, 9vh, 96px); transform: translateX(calc(var(--x, 0) * -1px)); will-change: transform; }
+.ground { display: none; }
+.run.wide { height: calc(100vh + var(--travel, 0px)); }
+/* held, it is the track: black from edge to edge, the heading over it, the points passing, and under them three lanes
+   with a runner in each that gains ground as you scroll and reaches the chequered line as the last point arrives */
+.run.wide .pin { position: sticky; top: 0; height: 100vh; overflow: hidden; background: var(--ink); color: #fff;
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); margin: 0 calc(var(--gutter) * -1); padding: clamp(56px, 10vh, 112px) var(--gutter) 0; }
+.run.wide .points { display: flex; gap: clamp(56px, 7vw, 130px); width: max-content; margin: 0; align-self: center; transform: translateX(calc(var(--x, 0) * -1px)); will-change: transform; }
 /* a point is a little over half the window wide, so the next one always shows at the right edge: there is more that way */
-.wide .point { width: min(56vw, 860px); display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: clamp(28px, 3.4vw, 64px); align-items: center; }
-.wide .fig { min-height: 0; margin: 0; font-size: 16px; }
-.wide .bar { height: 38px; } .wide .askline { padding: 22px; font-size: 17px; }
-.wide .point h3 { font-size: clamp(1.7rem, 2.7vw, 2.6rem); line-height: 1.1; }
-.wide .point p { font-size: 17px; margin-top: 16px; }
-.js .wide .point:not(.go) { opacity: .28; }  /* a point still on its way in is there to be seen, faintly */
-.wide .point { transition: opacity .35s; }
-.js .wide .point:not(.go) .calls > * { opacity: 1; }
+.run.wide .point { width: min(62vw, 1000px); display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 6fr); gap: clamp(28px, 3.6vw, 72px); align-items: center; }
+.run.wide .fig { min-height: 0; margin: 0; font-size: clamp(15px, 1.25vw, 18px); }
+.run.wide .fig .cap, .run.wide .key { color: var(--dim); }
+.run.wide .bar { height: clamp(34px, 5vh, 48px); background: #242424; } .run.wide .bar .k, .run.wide .key .k { background: #fff; }
+.run.wide .calls { gap: 12px 18px; } .run.wide .tag.stop { background: #fff; color: var(--ink); }
+.run.wide .askline { padding: 24px; font-size: clamp(15px, 1.25vw, 18px); box-shadow: inset 0 0 0 1px var(--line); }
+.run.wide .point h3 { font-size: clamp(1.8rem, 2.9vw, 2.9rem); line-height: 1.06; }
+.run.wide .point p { font-size: clamp(16px, 1.3vw, 19px); margin-top: 18px; color: #d6d6d6; }
+.js .run.wide .point:not(.go) { opacity: .3; }  /* a point still on its way in is there to be seen, faintly */
+.run.wide .point { transition: opacity .35s; }
+.js .run.wide .point:not(.go) .calls > * { opacity: 1; }
+.run.wide .ground { display: grid; gap: clamp(8px, 1.4vh, 14px); position: relative; margin: 0 calc(var(--gutter) * -1); padding: clamp(28px, 6vh, 64px) 0 clamp(36px, 8vh, 84px); }
+.ground i { display: block; height: clamp(5px, .8vh, 8px); background: #1f1f1f; position: relative; }
+.ground i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 18vw; background: var(--tint); transform: translateX(calc(var(--r, 0) * (100vw - 18vw - 34px))); }
+.ground i:nth-child(1) { --tint: var(--y); } .ground i:nth-child(2) { --tint: var(--c); } .ground i:nth-child(3) { --tint: var(--m); }
+/* the line they run to: chequered, the way the logo is shaded */
+.ground b { position: absolute; right: 0; top: clamp(20px, 4.4vh, 50px); bottom: clamp(28px, 6.4vh, 70px); width: 34px;
+  background: conic-gradient(#fff 25%, #000 0 50%, #fff 0 75%, #000 0) 0 0 / 17px 17px; }
 
 /* what each mode runs: a row to a kind of action, a column to a mode */
 .rules { margin-top: 32px; max-width: 880px; border-top: 4px solid var(--ink); }
@@ -207,7 +229,7 @@ h2::before { content: ""; position: absolute; right: calc(100% + 14px); top: .22
 .steps code { background: var(--faint); padding: 2px 6px; overflow-wrap: anywhere; }
 .steps + p { margin-top: 36px; }
 
-footer { margin: clamp(72px, 13vh, 144px) var(--gutter) 0; padding: 28px 0 48px; display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; border-top: 4px solid var(--ink); }
+footer { margin: clamp(52px, 9vh, 104px) var(--gutter) 0; padding: 28px 0 48px; display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; border-top: 4px solid var(--ink); }
 footer span { color: var(--grey); margin-left: auto; }
 
 @media (max-width: 1000px) {
@@ -266,6 +288,7 @@ footer span { color: var(--grey); margin-left: auto; }
 </head>
 <body>
 <div class="pace" id="pace" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="wind" id="wind" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
 <header class="hero" id="top">
   <div class="top">
@@ -378,7 +401,7 @@ hello world</div></div>
         <div class="bar"><i class="k"></i><i class="c"></i><i class="y"></i></div>
         <span class="cap">after folding</span>
         <div class="bar fold"><i class="k"></i><i class="m"></i><i class="c"></i><i class="y"></i></div>
-        <div class="key"><span><i style="background:var(--ink)"></i>prompt</span><span><i style="background:var(--m)"></i>summary</span><span><i style="background:var(--c)"></i>conversation</span><span><i style="background:var(--y)"></i>kept for the reply</span></div>
+        <div class="key"><span><i class="k"></i>prompt</span><span><i style="background:var(--m)"></i>summary</span><span><i style="background:var(--c)"></i>conversation</span><span><i style="background:var(--y)"></i>kept for the reply</span></div>
       </div>
       <div>
         <h3>They lose track of long conversations</h3>
@@ -408,6 +431,7 @@ hello world</div></div>
       </div>
     </div>
   </div>
+  <div class="ground" id="ground" aria-hidden="true"><i></i><i></i><i></i><b></b></div>
   </div></div>
 </section>
 
@@ -589,18 +613,40 @@ hello world</div></div>
   $('again').addEventListener('click', play);
 
   // the pace: how far down the page you are, as three runners. Yellow is ahead of you and magenta behind, and they finish level
-  const pace = $('pace').children, runway = $('run'), points = $('points');
+  const pace = $('pace').children, runway = $('run'), points = $('points'), lanes = $('ground').children;
   let travel = 0, queued = false;
   const stride = () => {
     queued = false;
     const p = Math.min(1, Math.max(0, scrollY / Math.max(1, document.documentElement.scrollHeight - innerHeight)));
     [.72, 1, 1.45].forEach((power, n) => pace[n].style.setProperty('--p', Math.pow(p, power).toFixed(4)));
     if (travel) {  // the run: a pixel sideways for every pixel scrolled while the heading is held
-      const top = runway.getBoundingClientRect().top;
-      points.style.setProperty('--x', Math.min(travel, Math.max(0, -top)).toFixed(1));
+      const top = runway.getBoundingClientRect().top, x = Math.min(travel, Math.max(0, -top));
+      points.style.setProperty('--x', x.toFixed(1));
+      // and the runners under it: they set off as the track comes up the window, and reach the line with the last point
+      const along = Math.min(1, Math.max(0, (innerHeight * .6 - top) / (travel + innerHeight * .6)));
+      [.62, .86, 1.2].forEach((power, n) => lanes[n].style.setProperty('--r', Math.pow(along, power).toFixed(4)));
     }
   };
-  const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(stride); } };
+  // the wind: streaks that cross the page while it scrolls, as fast as it scrolls, and die away when it stops
+  const wind = $('wind'), streaks = [...wind.children].map((el, n) => ({ el, at: (n * 37 % 100) / 100 * innerWidth, pace: .55 + (n * 29 % 50) / 60 }));
+  let speed = 0, lastY = scrollY, blowing = false;
+  const blow = () => {
+    speed *= .9;
+    wind.style.setProperty('--gust', Math.min(.9, Math.abs(speed) / 45).toFixed(3));
+    for (const s of streaks) {
+      const span = innerWidth + s.el.offsetWidth;
+      s.at = ((s.at - speed * s.pace) % span + span) % span;  // against the scroll: down the page is a run to the right
+      s.el.style.setProperty('--at', (s.at - s.el.offsetWidth).toFixed(1));
+    }
+    blowing = Math.abs(speed) > .3;
+    if (blowing) requestAnimationFrame(blow); else wind.style.setProperty('--gust', 0);
+  };
+  const onScroll = () => {
+    speed += (scrollY - lastY) * .35; lastY = scrollY;
+    speed = Math.max(-90, Math.min(90, speed));
+    if (!blowing) { blowing = true; requestAnimationFrame(blow); }
+    if (!queued) { queued = true; requestAnimationFrame(stride); }
+  };
   // the three points run sideways only where there is room for it: a wide window, tall enough to hold a heading and a point
   const measure = () => {
     const wide = innerWidth >= 1000 && innerHeight >= 600;
