@@ -416,7 +416,7 @@ SEQS = {"[200~": "paste", "v": "image", "V": "image", "\r": "newline", "\n": "ne
         "[27;5;13~": "newline", "[13;5u": "newline"}  # and ctrl+enter, which the same terminals report the same way
 MODIFIED = re.compile(r"\[\d+(;\d*)*[~u]?")  # any other key a terminal reports with its modifiers, whole or still arriving
 DOING = {"shell": "running", "read": "reading", "write": "writing", "edit": "editing", "fetch": "fetching",
-         "think": "thinking"}  # a tool at work, or the reasoning coming down
+         "websearch": "searching", "think": "thinking"}  # a tool at work, or the reasoning coming down
 ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as one key of its own
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 MARK = "❯" if VT else ">"  # what leads the prompt and your messages; Windows console fonts lack the heavy angle
@@ -1699,7 +1699,7 @@ class Screen:
             what = c.body.split("\n")[0] if c.tool in ("shell", "ask") else c.arg
             if c.tool == "todo":  # how far along the list was then, and what was in hand
                 what = todo_brief(sprint.todo_items(c.body))
-            out.append((it, [(mark[0] + " ", mark[1]), (c.tool + " ", "bold"), (what, "" if c.tool in ("shell", "ask", "todo") else "path"), (extra, "dim")]))
+            out.append((it, [(mark[0] + " ", mark[1]), (c.tool + " ", "bold"), (what, "" if c.tool in ("shell", "ask", "todo", "websearch") else "path"), (extra, "dim")]))
         return out
 
     # --- popups: one window for everything a command brings up
@@ -2086,10 +2086,11 @@ class Screen:
 
     def mode_popup(self, title="Mode"):
         a = self.agent
-        free = {"read": True, "write": a.mode != "ask", "edit": a.mode != "ask", "shell": a.mode == "auto", "fetch": a.mode == "auto"}
+        free = {"read": True, "write": a.mode != "ask", "edit": a.mode != "ask", "shell": a.mode == "auto", "fetch": a.mode == "auto",
+                "websearch": a.mode == "auto"}
         rows = [row([("● " if m == a.mode else "  ", m), (MODE_ICON[m] + " ", m), (f"{m:<7}", m), (ABOUT[m], "")], m) for m in MODES]
         rows += [row(""), row([(f"in {a.mode} mode", "dim")])]
-        rows += [row([(f"  {tool:<7}", ""), ("runs without asking", "green") if ok else ("asks first", "yellow")]) for tool, ok in free.items()]
+        rows += [row([(f"  {tool:<11}", ""), ("runs without asking", "green") if ok else ("asks first", "yellow")]) for tool, ok in free.items()]
         if title == "Permissions":  # the calls that never ask, whatever the mode: enter removes one
             rows += [row(""), row([("always allowed" if a.allow else "nothing is always allowed yet", "dim")])]
             rows += [row([("  " + rule, ""), ("   enter removes", "dim")], ("rule", n)) for n, rule in enumerate(a.allow)]
@@ -2278,7 +2279,7 @@ class Screen:
         now = {"model": a.model, "url": a.url, "ctx": a.ctx, "steps": a.steps, "mode": a.mode, "think": a.think, "effort": a.effort,
                "sidebar": self.sidebar, "sidebar_w": self.side_w, "history": self.history, "history_w": self.left_w, "motion": self.motion,
                "theme": self.theme, "peek": self.peek, "timeout": a.timeout, "ask_timeout": a.ask_timeout, "questions": a.questions,
-               "question_timeout": a.question_timeout, "plan": self.plan}
+               "question_timeout": a.question_timeout, "websearch": a.websearch, "plan": self.plan}
         rows = [row([(f"{k:<17}", "dim"), ("on" if v is True else "off" if v is False else str(v), "")], k) for k, v in now.items()]
         fine = [row([(f"{k:<18}", "dim"), (f"{a.sampling.get(k, 'default')!s:<9}", "" if k in a.sampling else "ghost"), (about, "dim")], k)
                 for k, (_, _, _, about) in sprint.SAMPLING.items()]
@@ -2502,7 +2503,7 @@ class Screen:
         elif c.tool == "write":
             body = [[("+ " + x, "add")] for x in c.body.splitlines()]
         if it["result"] is not None and not asks:
-            role = "err" if it["state"] in ("failed", "denied") else "" if c.tool in ("shell", "read", "fetch") else "dim"
+            role = "err" if it["state"] in ("failed", "denied") else "" if c.tool in ("shell", "read", "fetch", "websearch") else "dim"
             body += [[(x.replace("\t", "    "), role)] for x in it["result"].splitlines()]
         hidden = 0 if full else max(0, len(body) - self.peek)
         rows = [r for b in body for r in wrap(b, inner)] if full else body[:self.peek]
@@ -2522,7 +2523,7 @@ class Screen:
             flag = "  replaces file" if it["old"] else "  new file"
         flag = flag if room > 24 else ""
         target = ("" if asks else c.body.split("\n")[0] if c.tool == "shell" else c.arg)[:max(0, room - len(flag))]
-        mid = [("  " + target if target else "", "url" if c.tool == "fetch" else "" if c.tool == "shell" else "path"),
+        mid = [("  " + target if target else "", "url" if c.tool == "fetch" else "" if c.tool in ("shell", "websearch") else "path"),
                (flag, "warn" if it["old"] else "dim")]
         gap = w - len(flat(head + mid + tail))
         top = head + mid + [(" " + "─" * (gap - 1), "frame")] + tail

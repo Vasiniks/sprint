@@ -117,7 +117,7 @@ Drag over text to copy it: in the conversation, in the prompt, or in either side
 
 The mode you leave in is the mode you come back to (starting with `-y` or `--mode` is for that run only).
 
-When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One of the three is highlighted; left and right move it and Enter takes it. "Always" allows just that command or file from then on (a fetch allows the whole site). `/permissions` lists those rules, removes them, and adds patterns such as `shell git status*`.
+When a call needs approval, the prompt asks: `y` once, `a` always, `n` no. One of the three is highlighted; left and right move it and Enter takes it. "Always" allows just that command or file from then on (a fetch allows the whole site, a web search every search). `/permissions` lists those rules, removes them, and adds patterns such as `shell git status*`.
 
 **Deleting beyond the folder's contents always asks.** Files and folders inside the folder sprint is working in are the model's to tidy, under the mode's ordinary rules. But a command that would delete that folder itself (or everything in it, or a folder that holds it), or anything outside it, is put to you in every mode, `auto` included, and so is a deletion sprint cannot read (a `cd` first, a variable, `find -delete`, `git clean`, a one-line script). Such a call can be allowed once but never for ever; no allow rule covers it. If a command does remove the working folder, sprint steps up to the nearest folder that still exists and tells the model.
 
@@ -149,6 +149,16 @@ The model has a sixth tool, `ask`: a question for you, when only you can answer 
 - It works with thinking on or off, and with a to-do list going. A folded conversation keeps your answers.
 - `/config questions off` takes the tool away, and with it the line about it in the prompt. Models set against each other with `/race` are never offered it.
 - In plain mode the question is printed and the next line you type is the answer; a number picks a choice.
+
+## Searching the web
+
+`fetch` reads a page whose address the model already has. `websearch` finds the address: the model sends a few words and gets back the first five results, each a title, a link and a line or two of the page, about four hundred tokens in all. It can then `fetch` the one it wants.
+
+- It is the model's to use. Asked for the newest version of Python, or who won last season, magi 1.2 2B and 4B searched by themselves; asked what 17 times 23 is, neither did.
+- **What you ask about leaves your machine.** The model runs on your computer, but a search goes to a search service: [Exa](https://exa.ai), through the free endpoint opencode uses, which needs no account. If Exa does not answer, DuckDuckGo's plain results page is read instead (it turns automated requests away after a few in a row, so it is a stand-in and no more).
+- In `ask` and `edits` mode every search is put to you first, with the words it would send; "always" frees them all. In `auto` it searches without asking.
+- `/config websearch off` takes the tool away.
+- With an Exa key of your own in `EXA_API_KEY`, it is sent along, which lifts the free endpoint's limits.
 
 ## Commands
 
@@ -186,7 +196,7 @@ Everything sprint keeps lives in `~/.config/sprint/` (`%APPDATA%\sprint` on Wind
 
 | file | |
 |---|---|
-| `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, how long an approval and a question of the model's wait, whether it may ask, panel sizes, allow list, recent folders, and any of the advanced ones you set (temperature and the rest) |
+| `config.json` | settings: model, url, context size, steps, mode, effort, thinking, theme, timeout, how long an approval and a question of the model's wait, whether it may ask and whether it may search the web, panel sizes, allow list, recent folders, and any of the advanced ones you set (temperature and the rest) |
 | `system.md` | your own system prompt, if you wrote one |
 | `sprint.log` | messages, tool calls and errors, so there is something to read when a run goes wrong |
 | `usage.json` | one tally per day of tokens, replies, time, tool calls, sessions (how many, and the longest) and messages by the hour; what `/usage` adds up |
@@ -205,7 +215,7 @@ Command-line options override the environment, which overrides saved settings.
 
 ## How it copes with small models
 
-**Tool calls.** On Ollama the seven tools (`shell`, `read`, `write`, `edit`, `fetch`, `ask`, `todowrite`) are offered as native tool schemas. Models without tool support fall back automatically to fenced blocks (` ```shell `, ` ```write path `), which need no JSON escaping.
+**Tool calls.** On Ollama the eight tools (`shell`, `read`, `write`, `edit`, `fetch`, `websearch`, `ask`, `todowrite`) are offered as native tool schemas. Models without tool support fall back automatically to fenced blocks (` ```shell `, ` ```write path `), which need no JSON escaping.
 
 **A short prompt that names the files.** The system prompt lists the folder's contents. Without that, a 0.8B model often claims it cannot see a file instead of reading it.
 
@@ -213,7 +223,7 @@ Command-line options override the environment, which overrides saved settings.
 
 **Context.**
 - An eighth of the window is always kept free for the reply; a reply may use the free room up to half the window.
-- Tool results are capped: head and tail are kept, `read` pages through long files, `fetch` strips pages to text.
+- Tool results are capped: head and tail are kept, `read` pages through long files, `fetch` strips pages to text, `websearch` lists five results in a few lines each.
 - When the conversation outgrows the window, the older part is folded into a short summary of what you asked and what was done. File changes outlast things that were only looked at.
 - If a reply itself runs out of room, sprint compacts, then lets a plain answer continue or gives a half-written tool call another go.
 - Token counts are corrected from what the server reports, only ever toward the safe side.

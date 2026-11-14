@@ -30,6 +30,7 @@ from pathlib import Path
 
 ASK_BLOCK = "```ask\na question, when only the user can answer it\n```\n"  # left out of the prompt with /config questions off
 TODO_BLOCK = "```todo\n[x] a step that is done\n[>] the step in hand\n[ ] a step to do (a list only for a big job)\n```\n"  # and with /plan off
+WEB_BLOCK = "```websearch what to look up\n```\n"  # and with /config websearch off
 SYSTEM = """You are a coding agent in the user's project folder. Use relative paths.
 To act, reply with ONE tool block, then stop and wait for the result:
 
@@ -48,7 +49,7 @@ new lines
 ```
 ```fetch https://example.com
 ```
-""" + ASK_BLOCK + TODO_BLOCK + """
+""" + WEB_BLOCK + ASK_BLOCK + TODO_BLOCK + """
 Any other code block is NOT saved or run.
 When the task is done, reply with a short answer and no tool block."""
 
@@ -113,14 +114,16 @@ TODO_TOOL = {"type": "function", "function": {
                 "status": {"type": "string", "enum": list(STATES)}}}}}}}}
 
 
-def tools(questions=True, planning=True):
-    """what a model that calls tools natively is offered; without the ask tool where questions are switched off, and
-    without the to-do list where that is"""
+def tools(questions=True, planning=True, search=True):
+    """what a model that calls tools natively is offered; without the ask tool where questions are switched off,
+    without the to-do list where that is, and without the web search where that is"""
     return [_tool("shell", f"Run a {'bash' if bash_path() else 'PowerShell'} command", "command"),
             _tool("read", "Read a file (from_line starts part-way into a long one), or list a folder", "path", "from_line?"),
             _tool("write", "Create or overwrite a file", "path", "content"),
             _tool("edit", "Replace exact text in a file", "path", "old", "new"),
             _tool("fetch", "Get a web page as text", "url")] + \
+        [_tool("websearch", "Search the web. Use this for current information beyond your knowledge cutoff. "  # opencode's wording
+                            f"The current year is {time.localtime().tm_year}.", "query")] * search + \
         [_tool("ask", "Ask the user a question, when only they can answer it (options: choices to offer)", "question", "options?")] * questions + \
         [TODO_TOOL] * planning
 
@@ -131,6 +134,7 @@ REFUSAL = re.compile(r"(do not|don't|cannot|can't|can not|unable to)( directly)?
                      r"(provide|share|paste|copy)[^.]{0,40}(content|file|path|location)", re.I)
 ALIAS = {"shell": "shell", "bash": "shell", "sh": "shell", "zsh": "shell", "tool": "shell", "read": "read",
          "write": "write", "edit": "edit", "fetch": "fetch", "webfetch": "fetch",
+         "websearch": "websearch", "web_search": "websearch", "search_web": "websearch",  # (a bare "search" may mean the files)
          "ask": "ask", "question": "ask", "ask_user": "ask", "askuser": "ask",
          "todo": "todo", "todos": "todo", "todowrite": "todo", "todo_write": "todo", "todolist": "todo"}
 Call = collections.namedtuple("Call", "tool arg body end start")
@@ -168,7 +172,7 @@ urllib.request.install_opener(urllib.request.build_opener(_Handler))
 def _call(tool, arg, body, end, start):
     if tool in ("shell", "ask", "todo"):
         arg, body = "", "\n".join(x for x in (arg, body.strip()) if x)
-    elif tool in ("read", "fetch"):
+    elif tool in ("read", "fetch", "websearch"):
         arg, body = (arg or body).strip().split("\n")[0].strip(), ""
     elif not arg:  # write/edit with the path on the first body line
         arg, _, body = body.partition("\n")
@@ -191,7 +195,8 @@ def from_args(name, a, end, start):
     if tool == "todo":
         body = todo_lines(next((a[k] for k in ("todos", "items", "tasks", "list", "todo") if a.get(k)), []))
     where =get("from_line", "start", "line", "offset") if tool == "read" else ""
-    return _call(tool, get("path", "file", "url") + (" " + where if where.isdecimal() else ""), body, end, start)
+    what = get("query", "q", "search", "text") if tool == "websearch" else get("path", "file", "url")
+    return _call(tool, what + (" " + where if where.isdecimal() else ""), body, end, start)
 
 
 def choice_lines(given):
@@ -650,7 +655,86 @@ def fetch(url, cap=4000):
     return text[:cap] + (f"\n[{len(text) - cap} more chars cut]" if len(text) > cap else "")
 
 
-IMAGES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+# The web search is opencode's: the same free endpoint of Exa's, asked the same way, with EXA_API_KEY sent along when
+# you have one (it lifts the limits). What comes back there is some three thousand characters a result; here it is
+# cut to what an 8K context can take. When Exa does not answer, DuckDuckGo's plain page is read instead.
+SEARCH_URL, SEARCH_BACKUP = "https://mcp.exa.ai/mcp", "https://html.duckduckgo.com/html/?q="
+SEARCH_TOP, SEARCH_WORDS = 5, 240  # results listed, and the characters of each one's words
+NO_RESULTS = "No search results found. Please try a different query."
+AGENT = {"User-Agent": "Mozilla/5.0 (compatible; sprint)"}
+
+
+def brief(text, room):
+    """text on one line, cut between words where it is longer than there is room for"""
+    text = " ".join(text.split())
+    return text if len(text) <= room else text[:room].rsplit(" ", 1)[0] + "…"
+
+
+def exa_search(query, top=SEARCH_TOP):
+    """ask Exa -> [(title, url, words)]. Its answer is one text, a block a result: Title, URL, then Highlights or Text"""
+    key = os.environ.get("EXA_API_KEY")
+    call = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "web_search_exa", "arguments": {"query": query, "numResults": top}}}
+    req = urllib.request.Request(SEARCH_URL + ("?exaApiKey=" + urllib.parse.quote(key) if key else ""), json.dumps(call).encode(),
+                                 dict(AGENT, **{"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}))
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read(2_000_000).decode("utf-8", "replace")
+    sent = [line[5:] for line in raw.splitlines() if line.startswith("data:")]  # it answers as a stream of one event, or plainly
+    got = json.loads(sent[-1] if sent else raw)
+    result = got.get("result") if isinstance(got, dict) else None
+    if not isinstance(result, dict) or result.get("isError"):
+        raise ValueError("the search service did not answer the question")
+    found = []
+    for block in "".join(str(part.get("text", "")) for part in result.get("content") or []).split("\n\n---\n\n"):
+        url, title = re.search(r"^URL:\s*(\S+)", block, re.M), re.search(r"^Title:\s*(.+)$", block, re.M)
+        words = re.search(r"^(?:Highlights|Text):\s*(.*)\Z", block, re.M | re.S)
+        if url:
+            found.append((title[1].strip() if title and title[1].strip() != "N/A" else "", url[1],
+                          re.sub(r"(?m)^#+\s*", "", words[1]) if words else ""))  # (the words are markdown: no heading marks)
+    return found
+
+
+def ddg_search(query):
+    """read DuckDuckGo's plain results page -> [(title, url, words)], without its advertisements"""
+    req = urllib.request.Request(SEARCH_BACKUP + urllib.parse.quote_plus(query), headers=AGENT)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        page = r.read(2_000_000).decode("utf-8", "replace")
+    plain = lambda s: html.unescape(re.sub(r"(?s)<[^>]+>", "", s))
+    found = []
+    for m in re.finditer(r'(?s)<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>(.*?)(?=<a[^>]*class="result__a"|\Z)', page):
+        link = html.unescape(m[1])
+        real = urllib.parse.parse_qs(urllib.parse.urlparse(link).query).get("uddg")  # its links go through a redirect of its own
+        link = real[0] if real else "https:" + link if link.startswith("//") else link
+        words = re.search(r'(?s)class="result__snippet"[^>]*>(.*?)</a>', m[3])
+        if not urllib.parse.urlparse(link).netloc.endswith("duckduckgo.com"):  # (an advertisement points back at it)
+            found.append((plain(m[2]), link, plain(words[1]) if words else ""))
+    if not found and "anomaly-modal" in page:  # asked a few times in a row, it sends a puzzle for a person instead
+        raise ValueError("DuckDuckGo asks for a person to solve a puzzle first")
+    return found
+
+
+def websearch(query):
+    """search the web -> the first few results, numbered: a title, a link, and a few of the page's words"""
+    query = " ".join(query.split())
+    if not query:
+        raise ValueError("nothing to search for")
+    found, wrong, answered = [], None, 0
+    for ask in (exa_search, ddg_search):
+        try:
+            found = ask(query)
+            answered += 1
+        except (OSError, ValueError) as e:
+            wrong = wrong or e
+        if found:
+            break
+    if not found and not answered:
+        raise wrong
+    rows = [f"{n}. {brief(title, 100) or urllib.parse.urlparse(url).netloc}\n   {url}" + f"\n   {brief(words, SEARCH_WORDS)}" * bool(words.strip())
+            for n, (title, url, words) in enumerate(found[:SEARCH_TOP], 1)]
+    return "\n".join(rows + ["To read one of these pages, fetch its URL."]) if rows else NO_RESULTS
+
+
+IMAGES =(".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 
 def kind_of(path):
@@ -773,6 +857,7 @@ class Agent:
         self.ask_timeout = 20                    # seconds a question waits for you before the call is set aside (0: for ever)
         self.parked, self.passes = [], []        # calls set aside unanswered; (tool, target) you have since allowed, once
         self.questions, self.question_timeout = True, 60  # may the model ask you things? seconds its question waits (0: for ever)
+        self.websearch = True  # may the model search the web? What it looks up goes to a search service
         self.planning = PLANNING                 # may it keep a to-do list for a big job? (/plan)
         self.job = True                          # does the message in hand ask for something to be made or changed?
         self.allow = []                          # calls that never ask: "shell git status*", "write notes/*", ...
@@ -892,6 +977,7 @@ class Agent:
         if self.custom:  # your own prompt; a model without tool calls still needs the block format spelled out
             base = self.custom if self.tools else self.custom + "\n" + SYSTEM.split("\n", 1)[1]
         base = base if self.questions else base.replace(ASK_BLOCK, "")
+        base = base if self.websearch else base.replace(WEB_BLOCK, "")
         base = base if self.lists else base.replace(TODO_BLOCK, "")
         base += LISTS if self.lists and self.tools else ""
         shell_note = f"\nThis is Windows: shell commands run in {'Git Bash' if bash_path() else 'PowerShell'}." if WINDOWS else ""
@@ -902,7 +988,7 @@ class Agent:
 
     def extra(self):
         """prompt chars the server adds on top of the messages: the tool schemas"""
-        return len(json.dumps(tools(self.questions, self.lists))) if self.tools else 0
+        return len(json.dumps(tools(self.questions, self.lists, self.websearch))) if self.tools else 0
 
     @property
     def lists(self):
@@ -1032,7 +1118,7 @@ class Agent:
             body.update(options={"num_ctx": self.ctx, "num_predict": self.limit or self.max_out, **self.sampling},
                         think=self.effort if self.think else False, keep_alive="30m")
             if self.tools:
-                body["tools"] = tools(self.questions, self.lists)
+                body["tools"] = tools(self.questions, self.lists, self.websearch)
         else:  # (of the sampling settings, such a server is sent the ones every one of them knows)
             body.update(max_tokens=self.limit or self.max_out, stream_options={"include_usage": True},
                         **{k: v for k, v in self.sampling.items() if k in OPENAI})
@@ -1188,7 +1274,9 @@ class Agent:
         return any(rule.partition(" ")[0] == c.tool and fnmatch.fnmatchcase(self.target(c), rule.partition(" ")[2]) for rule in self.allow)
 
     def rule_for(self, c):
-        """the allow rule "always" adds: this exact command or file, or for a fetch the whole site"""
+        """the allow rule "always" adds: this exact command or file, for a fetch the whole site, for a search every search"""
+        if c.tool == "websearch":  # (opencode's way: asked once, not once a question)
+            return "websearch *"
         if c.tool == "fetch":
             u = urllib.parse.urlparse(self.target(c))
             return f"fetch {u.scheme}://{u.netloc}/*"
@@ -1225,6 +1313,8 @@ class Agent:
             return self.consult(c)
         if c.tool == "todo":  # nor is its own list
             return self.listed(c)
+        if c.tool == "websearch" and not self.websearch:  # a model that calls it all the same, from habit
+            return "error: web search is switched off here. Answer from what you know, and say that you could not look it up."
         self.worked = True
         key, risky = (c.tool, self.target(c)), guarded(c)  # deleting this folder or beyond it, or changing sprint's own files
         edits = self.mode == "edits" and c.tool in ("write", "edit") and inside(c.arg)  # edits mode frees this folder's files, no others
@@ -1256,6 +1346,8 @@ class Agent:
                 return read(c.arg, self.cap)
             if c.tool == "fetch":
                 return fetch(c.arg, self.cap)
+            if c.tool == "websearch":
+                return websearch(c.arg)
             result = (write if c.tool == "write" else edit)(c.arg, c.body)
             if not result.startswith("error") and c.arg not in self.touched:
                 self.touched.append(c.arg)
@@ -1460,7 +1552,7 @@ CONFIG = config_dir() / "config.json"
 SETTINGS = {"model": str, "url": str, "ctx": int, "steps": int, "mode": str, "think": bool, "effort": str,
             "sidebar": bool, "sidebar_w": int, "history": bool, "history_w": int, "motion": bool,
             "timeout": int, "theme": str, "peek": int, "allow": list, "plan": bool, "recent": list, "showthink": bool,
-            "update_check": bool, "ask_timeout": int, "plan_h": int, "questions": bool, "question_timeout": int}
+            "update_check": bool, "ask_timeout": int, "plan_h": int, "questions": bool, "question_timeout": int, "websearch": bool}
 # How the model chooses its next word: (kind, least, most, what it does). These go to the model server with every
 # request. One that is not set is not sent, and the model keeps its own default for it
 SAMPLING = {"temperature": (float, 0, 2, "how random; 0 always picks the likeliest word"),
@@ -1938,7 +2030,7 @@ def change_allowed(agent, arg):
     """/permissions allow TOOL PATTERN adds a rule to the allow list; /permissions forget N takes the Nth one off it"""
     verb, _, rest = arg.partition(" ")
     tool, _, pattern = rest.partition(" ")
-    if verb == "allow" and tool in ("shell", "write", "edit", "fetch") and pattern.strip():
+    if verb == "allow" and tool in ("shell", "write", "edit", "fetch", "websearch") and pattern.strip():
         agent.allow.append(rest.strip())
     elif verb == "forget" and rest.strip().isdecimal() and 0 < int(rest) <= len(agent.allow):
         del agent.allow[int(rest) - 1]
@@ -1957,9 +2049,9 @@ def cmd_permissions(agent, arg):
     if arg:
         return notes(f"{agent.mode}: {ABOUT[agent.mode]}")
     free = {"read": True, "write": agent.mode != "ask", "edit": agent.mode != "ask",
-            "shell": agent.mode == "auto", "fetch": agent.mode == "auto"}
+            "shell": agent.mode == "auto", "fetch": agent.mode == "auto", "websearch": agent.mode == "auto"}
     return notes(f"mode {agent.mode}: {ABOUT[agent.mode]}") + \
-        [[(f"  {tool:<7}", ""), ("runs without asking", "green") if ok else ("asks first", "yellow")] for tool, ok in free.items()] + \
+        [[(f"  {tool:<11}", ""), ("runs without asking", "green") if ok else ("asks first", "yellow")] for tool, ok in free.items()] + \
         notes("always allowed:" if agent.allow else "nothing is always allowed yet") + \
         [[(f"  {n}  ", "dim"), (rule, "")] for n, rule in enumerate(agent.allow, 1)] + \
         notes("change with /permissions ask | edits | auto · allow TOOL PATTERN · forget N")
@@ -2108,7 +2200,7 @@ def set_config(agent, key, value):
         return f"{key} cannot be {value}"
     if key == "effort":
         agent.set_effort(new)
-    elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout", "questions", "question_timeout"):
+    elif key in ("model", "url", "ctx", "steps", "mode", "think", "timeout", "ask_timeout", "questions", "question_timeout", "websearch"):
         setattr(agent, key, new)
     elif key == "plan":
         agent.planning = new
@@ -2131,7 +2223,7 @@ def cmd_config(agent, arg):
            "think": agent.think, "effort": agent.effort, "sidebar": kept.get("sidebar", True),
            "sidebar_w": kept.get("sidebar_w", 32), "history": kept.get("history", True), "history_w": kept.get("history_w", 26),
            "motion": kept.get("motion", True), "timeout": agent.timeout, "ask_timeout": agent.ask_timeout,
-           "questions": agent.questions, "question_timeout": agent.question_timeout, "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": agent.planning}
+           "questions": agent.questions, "question_timeout": agent.question_timeout, "websearch": agent.websearch, "theme": kept.get("theme", "sprint"), "peek": kept.get("peek", 6), "plan": agent.planning}
     return [[(f"  {k:<17}", "dim"), (str(v).lower() if isinstance(v, bool) else str(v), "")] for k, v in now.items()] + \
         [[(f"  {k:<17}", "dim"), (f"{agent.sampling[k]}" if k in agent.sampling else "default", "" if k in agent.sampling else "dim")]
          for k in SAMPLING] + \
@@ -2217,7 +2309,7 @@ def help_rows():
 
 
 DEFAULT_MODEL = "hf.co/GEHIRNS/magi-1.2-2B"  # what a first run opens with, and offers to pull (826 MB); after that, the one used last
-VERSION = "0.4.23"  # the same as in pyproject.toml
+VERSION = "0.4.24"  # the same as in pyproject.toml
 REPO = "Vasiniks/sprint"
 # sprint help: the words sprint takes on the command line, in sections
 USAGE = [("Start", [("sprint", "open sprint in this folder"), ('sprint "fix the typo"', "open it with a first message")]),
@@ -2505,6 +2597,7 @@ def build_agent(a):
     agent.custom, agent.timeout, agent.allow = load_prompt(), saved.get("timeout", 60), list(saved.get("allow", []))
     agent.ask_timeout = saved.get("ask_timeout", 20)
     agent.questions, agent.question_timeout = bool(saved.get("questions", True)), saved.get("question_timeout", 60)
+    agent.websearch = bool(saved.get("websearch", True))
     agent.sampling = {k: saved[k] for k in SAMPLING if k in saved and sampled(k, saved[k])}
     agent.planning = bool(saved.get("plan", PLANNING))
     return agent
