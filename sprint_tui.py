@@ -126,6 +126,15 @@ def dash(t=None):
     return [(CELLS[0], fade[head - x]) if 0 <= head - x < 4 else (CELLS[1], "ghost") for x in range(RUN)]
 
 
+SPIN, SPIN_BEAT = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", 0.08  # the wheel beside whatever is live: six-dot cells going round, and seconds a cell
+
+
+def spin(t):
+    """the wheel's cell at time t. Rows are built with its first cell under the role "spin"; put draws the one the
+    clock has reached, so a row that only turns its wheel is never built again"""
+    return SPIN[int(t / SPIN_BEAT) % len(SPIN)]
+
+
 EFFORT_BEAT = (2.4, 1.2, 0.6)  # seconds a glint takes to cross its part of the effort bar: low, medium, high
 
 
@@ -2456,11 +2465,10 @@ class Screen:
             said = it["result"] or ""
             live = it["state"] == "running" and not self.quiet()  # live: still being written, and growing on the screen
             name = [("thinking" if live else "thought", "dim"), (f"  {sprint.size(said, self.agent.cpt)} ", "dim")]
-            if not full:  # folded: one line saying it thought, or is thinking and its newest words; click it, or /showthink for all
-                last, room = " ".join(said.split()), max(0, w - len(flat(name)) - 7)
-                last = last if len(last) <= room else "… " + last[len(last) - room:].split(" ", 1)[-1]  # cut between words
-                return [("", clip([("  ┄ ", "frame")] + name + [(" " + last, "thought")] * live, w), it)]
-            top = [("┌┄ ", "frame")] + name
+            wheel = [(SPIN[0], "spin"), (" ", "")] * bool(live and self.motion)  # it turns while the reasoning comes down
+            if not full:  # folded: one line saying it thought, or is thinking, and how much; never what (click it, or /showthink)
+                return [("", clip(([("  ", "frame")] + wheel if wheel else [("  ┄ ", "frame")]) + name, w), it)]
+            top = [("┌┄ ", "frame")] + wheel + name
             rows = [r for x in said.splitlines() for r in wrap([(x.replace("\t", "    "), "thought")], inner)]  # wrapped, never cut
             return [("", top + [("┄" * (w - len(flat(top)) - 1) + "┐", "frame")], it)] + \
                    [("", [("┆ ", "frame")] + clip(r, inner) + [(" ┆", "frame")], it) for r in rows] + \
@@ -2504,7 +2512,8 @@ class Screen:
         srole = {"done": "ok", "failed": "err", "denied": "err", "waiting": self.agent.mode, "asking": self.agent.mode,
                  "skipped": "dim"}.get(it["state"], "warn")
         head = [("╭─ " + ("▾ " if full else "▸ "), "frame"), (c.tool, "bold")]
-        tail = [(f" {state} ", srole)] + ([(took(it) + " ", "dim")] if took(it) else []) + [("─╮", "frame")]
+        wheel = [(" ", ""), (SPIN[0], "spin")] * bool(it["state"] == "running" and self.motion)  # it turns while the call runs
+        tail = wheel + [(f" {state} ", srole)] + ([(took(it) + " ", "dim")] if took(it) else []) + [("─╮", "frame")]
         room = w - len(flat(head)) - len(flat(tail)) - 3
         flag = ""
         if c.tool == "edit":
@@ -2543,7 +2552,7 @@ class Screen:
         newest = next((i for i in reversed(self.items) if i["t"] == "tool" and i["call"].tool == "todo"), None)
         for it in self.items:
             key = (w, len(it.get("text", "")), it.get("open"), it.get("state"), self.agent.mode, self.peek,
-                   self.showthink, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""),  # a thought grows,
+                   self.showthink, self.motion, took(it) if it["t"] == "tool" else "", it.get("cost"), len(it.get("result") or ""),  # a thought grows,
                    it.get("state") == "running" and self.quiet(),  # and is over once the model has gone quiet to write its call
                    bool((self.asking or {}).get("cut")),  # a question too long for the bar stands here as well
                    (it is newest, self.aside and self.plan))  # a to-do list folds once a newer one is there, or the panel shows it
@@ -2597,6 +2606,8 @@ class Screen:
         if width is not None:
             spans = clip(spans, width)
         for text, role in spans:
+            if role == "spin":  # the wheel: the cell the clock has reached, in the colour of the mode
+                text, role = spin(time.time()), self.agent.mode
             if 0 <= y < h and x < w and text:
                 try:
                     scr.addstr(y, x, text[:w - x], self.attr(role, panel))
