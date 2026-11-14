@@ -230,11 +230,11 @@ def test_model_names_complete_after_slash_model():
     assert s.agent.model == "smollm2:135m"
 
 
-def test_new_clears_the_conversation():
+def test_clear_clears_the_conversation():
     s = screen("hi")
     s.submit("hello")
     finish(s)
-    s.submit("/new")
+    s.submit("/clear")
     assert s.items == [] and len(s.agent.msgs) == 1
 
 

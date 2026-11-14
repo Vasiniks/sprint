@@ -56,7 +56,7 @@ Once a day sprint looks at this repository for a newer version and, if there is 
 |---|---|
 | Messages (left) | Your messages in order, each with what it took. Click one to jump to it; what you jump to lights up for a moment. The wheel over the list scrolls it, and the heading says which are on show (`4-12 of 31`). |
 | Conversation (middle) | Your messages on a bright band with a bar down the side in the mode's colour, the model's replies, and one window per tool call. Under each answer, what the message cost: tokens up and down, and the time. |
-| Sidebar (right) | At the top, the context window in small with how full it is; on a tall screen also a legend of what fills it, and the session in labelled rows (model, thinking, showthink, effort, plan, speed, tokens, tool calls, time; the mode is by the prompt). Then a log of every tool call and how it ended, which the wheel scrolls like the message list. In plan mode its bottom half is the model's to-do list, while it has one: how far along it is, and each item ticked, in hand, still to do or dropped; drag the line above it to give it more or less room. |
+| Sidebar (right) | At the top, the context window in small with how full it is; on a tall screen also a legend of what fills it, and the session in labelled rows (model, thinking, showthink, effort, plan, speed, tokens, tool calls, time; the mode is by the prompt). Thinking, showthink and plan are checkboxes: the one under the mouse lights up, and a click flips it. Then a log of every tool call and how it ended, which the wheel scrolls like the message list. In plan mode its bottom half is the model's to-do list, while it has one: how far along it is, and each item ticked, in hand, still to do or dropped; drag the line above it to give it more or less room. |
 | Prompt (bottom) | The line you type on, between two rules, with the model and context on the upper one. Under it, the mode with its icon (`▰▱▱` ask, `▰▰▱` edits, `▰▰▰` auto: fuller, the more runs without asking) and a reminder that Tab cycles it. |
 | Status (above the prompt) | While a turn runs: a sprint along a slanted track, then what is happening, for how long, tokens going up or coming down, and the effort, as in `answering (12s \| ↓ 340 tokens \| medium effort)`. A glint of colour crosses the words every couple of seconds. When a model goes quiet to write a tool call (the server holds a call back until it is whole), the line says `preparing the next step`. |
 
@@ -152,16 +152,16 @@ The model has a sixth tool, `ask`: a question for you, when only you can answer 
 
 ## Commands
 
-Anything a command brings up opens in the same popup, over a greyed-out screen: arrows or the mouse move, Enter or a click chooses, Esc or a click outside closes. A command given its value (`/mode auto`, `/effort high`) applies it and says so in the footer.
+Type `/` and the commands list over the prompt: the arrows or the mouse move through it, and Enter or a click takes one. Anything a command brings up opens in the same popup, over a greyed-out screen: arrows or the mouse move, Enter or a click chooses, Esc or a click outside closes. A command given its value (`/mode auto`, `/effort high`) applies it and says so in the footer.
 
 | command | |
 |---|---|
-| `/model [name]` | Pick an installed model, pull one by name, or search Hugging Face and pick a quantization. |
+| `/model [name]` | Pick an installed model, pull one by name, or search Hugging Face and pick a quantization. `/model` alone, or with only a space after it, opens that window; a name begun after it completes in place. |
 | `/race [model message]` | Send one message to two models and compare answers, time and speed. They may read files but change nothing. |
 | `/mode`, `/permissions` | Change the mode; manage the always-allowed list. |
 | `/think` | Let the model reason before answering. Its reasoning shows as it is written: a line that counts the words and shows the newest ones. |
 | `/showthink` | Show that reasoning in full, growing as it arrives, in a dashed frame of its own so it never looks like an action. Otherwise it is one line; click one to open it. |
-| `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). |
+| `/effort low\|medium\|high` | How much room a reply always has, and how many steps a message may take (8, 16 or 32). Without a level it opens a small window with one bar, a part to each level: a glint crosses each part, faster the higher the effort. Left and right or the mouse move along it; Enter or a click sets it. |
 | `/plan` | Whether the model may keep a to-do list, the way [opencode](https://github.com/anomalyco/opencode)'s agents do. On unless you switch it off. Nothing is planned up front and most messages get no list at all: for a message that asks for something to be made or changed, the model has one more tool, `todowrite`, and reaches for it when the job is big (several files or parts). A plain question is not offered it. It sends the list with a state for each item (to do, in hand, done, dropped) and sends it again as it gets on. The list shows in the bottom half of the sidebar, and each update is one line in the conversation (click it for the list as it stood then; with the sidebar hidden the newest stands whole). Bringing the list up to date costs a message none of its steps. A finished list is put away when you send the next message; one with work left stays. `/plan` off takes the tool away. |
 | `/context` | What is filling the context window, as a coloured grid. |
 | `/usage` | Laid out after Claude Code's stats, in three pages; left and right (or Tab, a page's number, or a click on its name) turn them. **Overview**: the days as a heat map, a column to a week, darker the busier; under it the favourite model, total tokens, sessions, the longest session, active days, the current and longest streak, the most active day, the peak hour and tool calls, then what the tokens written amount to in pages of a book. **Models**: tokens per day as a line to a model on one chart, then every model with its share and its tokens in and out. **Session**: what only sprint knows about the one in hand: its counts, the tokens taken apart (per reply, the share that was reasoning, how much goes up for each token written), and what is in the window now. `r` goes round the date ranges (all time, the last 7 days, the last 30), `ctrl+s` copies the page on show, and up, down and the wheel scroll a page that does not fit. Sessions, their length and the hour of each message are counted from 0.4.18 on: a day from before counts as one session, and what was never recorded shows as a dash. |
@@ -178,7 +178,7 @@ Anything a command brings up opens in the same popup, over a greyed-out screen: 
 | `/log` | The last things that happened, and where the full log is. |
 | `/help` | Every key and command, in sections, a thing to a line. Type to narrow the list; Enter on a command puts it in the prompt. |
 | `/update` | Get the newest sprint without leaving it (what `sprint update` does). It tells you which version a restart will bring, or that you already have the newest. |
-| `/clear` (or `/new`), `/exit` | Start fresh, quit. |
+| `/clear`, `/exit` | Start fresh, quit. |
 
 ## Settings and files
 
