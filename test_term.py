@@ -84,12 +84,21 @@ def test_the_swap_lasts_only_while_curses_starts_so_commands_still_see_the_real_
 def test_ghostty_and_cmux_get_the_square_cells_their_own_font_has(monkeypatch):
     """their built-in font (JetBrains Mono) lacks the slanted cells: borrowed from another font they came out wider than
     a cell and ran into each other along the animation's track"""
-    monkeypatch.setattr(tui, "VT", True)
-    assert tui.cell_glyphs({"TERM": "xterm-256color", "TERM_PROGRAM": "Apple_Terminal"}) == "▰▱"
-    assert tui.cell_glyphs({"TERM": "xterm-ghostty"}) == "■□"
-    assert tui.cell_glyphs({"TERM": "xterm-256color", "TERM_PROGRAM": "ghostty"}) == "■□"
-    assert tui.cell_glyphs({"TERM": "xterm-256color", "CMUX_WORKSPACE_ID": "1"}) == "■□"  # cmux, whatever it calls the terminal
-    assert tui.cell_glyphs({"TERM": "xterm-256color", "GHOSTTY_RESOURCES_DIR": "/x"}) == "■□"
-    monkeypatch.setattr(tui, "VT", False)
-    assert tui.cell_glyphs({"TERM": "xterm-256color"}) == "■□"  # Windows, as before
+    assert tui.cell_glyphs(False, {"TERM": "xterm-256color", "TERM_PROGRAM": "Apple_Terminal"}) == "▰▱"
+    assert tui.cell_glyphs(False, {"TERM": "xterm-ghostty"}) == "■□"
+    assert tui.cell_glyphs(False, {"TERM": "xterm-256color", "TERM_PROGRAM": "ghostty"}) == "■□"
+    assert tui.cell_glyphs(False, {"TERM": "xterm-256color", "CMUX_WORKSPACE_ID": "1"}) == "■□"  # cmux, whatever it calls the terminal
+    assert tui.cell_glyphs(False, {"TERM": "xterm-256color", "GHOSTTY_RESOURCES_DIR": "/x"}) == "■□"
     assert tui.MODE_ICON["edits"] == tui.CELLS[0] * 2 + tui.CELLS[1]
+
+
+def test_windows_gets_the_slanted_cells_wherever_it_gets_the_heavy_angle():
+    """Windows Terminal, an editor's terminal and one reached over ssh find the slanted cells in another font, as they
+    do the prompt's mark; the old console window finds neither"""
+    assert tui.cell_glyphs(True, {"WT_SESSION": "abc"}) == "▰▱"  # Windows Terminal
+    assert tui.cell_glyphs(True, {"TERM_PROGRAM": "vscode"}) == "▰▱" and tui.cell_glyphs(True, {"TERM": "xterm-256color"}) == "▰▱"
+    assert tui.cell_glyphs(True, {}) == "■□"  # the old console window
+    assert tui.cell_glyphs(True, {"WT_SESSION": "abc", "GHOSTTY_RESOURCES_DIR": "/x"}) == "■□"  # ghostty's font, reached from Windows
+    assert tui.CELLS == tui.cell_glyphs(tui.sprint.WINDOWS, tui.os.environ)
+    for windows, env in ((True, {}), (True, {"WT_SESSION": "abc"}), (False, {})):  # one answer for both: the mark and the cells
+        assert (tui.prompt_mark(windows, env) == "❯") == (tui.cell_glyphs(windows, env) == "▰▱")
