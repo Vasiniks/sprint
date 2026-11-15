@@ -706,7 +706,7 @@ def test_a_keyboard_that_cannot_be_asked_is_asked_once_and_then_left_alone(monke
 
 
 def test_the_prompt_mark_is_a_heavy_angle_where_the_font_has_one():
-    assert tui.MARK == ("❯" if tui.VT else ">")
+    assert tui.MARK == tui.prompt_mark(tui.sprint.WINDOWS, tui.os.environ)
     s = screen(mode="ask")
     assert s.input_rows(60)[0][1][0] == (tui.MARK, "ask")
 

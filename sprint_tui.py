@@ -432,25 +432,30 @@ ALT_V = 0x1b6 if sprint.WINDOWS else -1  # the Windows curses reports alt+v as o
 VT = not sprint.WINDOWS  # terminal escape codes for drag reporting and marked pastes; the Windows curses does without
 
 
+def old_console(windows, env):
+    """whether this is the old Windows console window, whose fonts have few symbols and which borrows none from
+    another font. Windows Terminal, an editor's terminal and one reached over ssh each say who they are"""
+    return bool(windows and not any(env.get(k) for k in ("WT_SESSION", "TERM_PROGRAM", "TERM")))
+
+
 def prompt_mark(windows, env):
-    """what leads the prompt and your messages: the heavy angle, wherever the terminal can draw it. On Windows that is
-    Windows Terminal, an editor's terminal, or one reached over ssh; the old console window's fonts have no such
-    character and it finds none elsewhere, so there it is a plain >"""
-    return "❯" if not windows or any(env.get(k) for k in ("WT_SESSION", "TERM_PROGRAM", "TERM")) else ">"
+    """what leads the prompt and your messages: the heavy angle, wherever the terminal can draw it. The old Windows
+    console window cannot, so there it is a plain >"""
+    return ">" if old_console(windows, env) else "❯"
 
 
 MARK = prompt_mark(sprint.WINDOWS, os.environ)
 
 
-def cell_glyphs(env):
-    """a filled and an empty cell, for the working animation and the mode icons: slanted where the font has them.
-    Windows console fonts do not; nor does the font Ghostty and cmux come with, and there the ones borrowed from
-    another font are wider than a cell and run into each other"""
+def cell_glyphs(windows, env):
+    """a filled and an empty cell, for the working animation and the mode icons: slanted where the terminal can draw
+    them. The old Windows console window cannot; nor does the font Ghostty and cmux come with have them, and there
+    the ones borrowed from another font are wider than a cell and run into each other"""
     ghostty = "ghostty" in env.get("TERM", "") or env.get("TERM_PROGRAM") == "ghostty" or any(k.startswith(("CMUX_", "GHOSTTY_")) for k in env)
-    return "▰▱" if VT and not ghostty else "■□"
+    return "■□" if ghostty or old_console(windows, env) else "▰▱"
 
 
-CELLS = cell_glyphs(os.environ)
+CELLS = cell_glyphs(sprint.WINDOWS, os.environ)
 MODE_ICON = {"ask": CELLS[0] + CELLS[1] * 2, "edits": CELLS[0] * 2 + CELLS[1], "auto": CELLS[0] * 3}  # fuller, the more runs unasked
 
 CODE = re.compile(
